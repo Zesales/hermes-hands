@@ -2,13 +2,13 @@
 # hermes-hands installer (Linux / WSL). Produces one self-contained file at
 #   ~/.local/bin/hermes-hands
 #
-#   curl -fsSL https://raw.githubusercontent.com/CHANGE-ME/hermes-hands/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.sh | sh
 #
 # Prefers a released single-file binary; falls back to cloning + building.
 # Re-run any time to update. Windows: use WSL (PowerShell installer is later).
 set -eu
 
-REPO="${HERMES_HANDS_REPO:-CHANGE-ME/hermes-hands}"
+REPO="${HERMES_HANDS_REPO:-Zesales/hermes-hands}"
 BIN="${HERMES_HANDS_BIN:-$HOME/.local/bin}"
 SRC="${HERMES_HANDS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/hermes-hands-src}"
 TARGET="$BIN/hermes-hands"

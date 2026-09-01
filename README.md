@@ -37,7 +37,7 @@ present). No model, no language runtime, no package manager. Windows: use WSL �
 PowerShell installer is a later feature.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<you>/hermes-hands/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.sh | sh
 hermes-hands setup      # asks for your Hermes API URL + key, writes config
 ```
 
@@ -91,10 +91,17 @@ model gets a clean diff and needn't fight shell quoting.
 
 ## Sessions
 
-Each turn threads via the Runs API (`previous_response_id`, then `session_id`,
-then a local transcript recap if the server drops continuity). State lives in
-`$XDG_STATE_HOME/hermes-hands/sessions/`. `-c` continues the latest session for the
-current directory; `--session <id>` picks one; `sessions` lists them.
+The conversation is threaded **server-side**: every `POST /v1/runs` carries a
+stable `session_id` (Hermes loads that session's transcript as context), plus an
+`X-Hermes-Session-Key` that's constant per repo (long-term memory handle) and an
+`X-Hermes-Session-Id` header. If Hermes hands back a different `session_id`, the
+CLI adopts it. If the server ever rejects the id, the CLI retries fresh and
+falls back to a local transcript recap for that turn.
+
+The `/v1` API has no endpoint to *list* sessions, so a thin local index lives in
+`$XDG_STATE_HOME/hermes-hands/sessions/` purely to make `-c` (continue this
+repo's latest), `--session <id>`, and `sessions` work offline. Titles are also
+mirrored into Hermes via a best-effort `PATCH /api/sessions/{id}`.
 
 ## Config
 
@@ -111,9 +118,10 @@ current directory; `--session <id>` picks one; `sessions` lists them.
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
 | `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result |
 
-The per-run `instructions` block sent to Hermes is `share/instructions.md` (or
-`~/.config/hermes-hands/instructions.md` if you want repo-specific rules). It is
-scoped to `hermes-hands` runs only — your phone and web UI never see it.
+The per-run `instructions` block sent to Hermes is baked into the binary (source:
+`share/instructions.md`). Drop a `~/.config/hermes-hands/instructions.md` to
+override it with repo-specific rules. Either way it's scoped to `hermes-hands`
+runs only — your phone and web UI never see it.
 
 ## Security model
 
