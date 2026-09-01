@@ -36,7 +36,12 @@ class H(BaseHTTPRequestHandler):
             if not r:
                 return self._s(404, {"error": "unknown run"})
             return self._s(200, {"run_id": m.group(1), "status": "completed",
-                                 "session_id": "sess-1", "output": r["output"]})
+                                 "session_id": r.get("session_id", ""), "output": r["output"]})
+        self._s(404, {"error": "nf"})
+
+    def do_PATCH(self):        # /api/sessions/{id}  -> best-effort title mirror
+        if re.match(r"^/(?:p/[^/]+/)?api/sessions/[^/]+$", self.path):
+            return self._s(200, {"ok": True})
         self._s(404, {"error": "nf"})
 
     def do_POST(self):
@@ -47,6 +52,8 @@ class H(BaseHTTPRequestHandler):
         inp0 = body.get("input") or ""
         seen_results = '"results"' in inp0
         got_fixup = '"error"' in inp0 and '"results"' not in inp0
+        # echo the caller's session_id back (like Hermes surfacing it in run status)
+        posted_sid = body.get("session_id") or self.headers.get("X-Hermes-Session-Id") or ""
         _n["i"] += 1
         rid = f"run_{_n['i']}"
 
@@ -82,7 +89,7 @@ class H(BaseHTTPRequestHandler):
         else:
             out = json.dumps({"calls": [], "final": "?"})
 
-        RUNS[rid] = {"output": out}
+        RUNS[rid] = {"output": out, "session_id": posted_sid}
         self._s(200, {"run_id": rid, "status": "started"})
 
 

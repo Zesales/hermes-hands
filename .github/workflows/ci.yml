@@ -13,6 +13,8 @@ jobs:
       - name: install shellcheck + jq
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends shellcheck jq
       - name: shellcheck
-        run: shellcheck -x bin/hermes-hands lib/*.sh test/run_tests.sh
+        run: shellcheck -x bin/hermes-hands lib/*.sh test/run_tests.sh install.sh build.sh
       - name: offline tests
         run: ./test/run_tests.sh
+      - name: single-file build
+        run: ./build.sh && ./dist/hermes-hands --version && bash -n ./dist/hermes-hands
