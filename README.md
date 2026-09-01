@@ -61,16 +61,21 @@ hermes-code check                 # preflight the connection
 
 REPL commands: `/exit` `/check` `/new` `/sessions`.
 
-Hermes drives these tools, all executed in the directory you launched from:
+Hermes drives these tools, all in the directory you launched from:
 
 | tool | args | approval |
 |---|---|---|
+| `shell` | `{cmd, timeout?}` | **each command** (unless `--yolo`) |
 | `read_file` | `{path}` | — (confined to the repo root) |
-| `list_dir` | `{path}` | — |
-| `grep` | `{pattern, path?}` | — |
-| `run` | `{cmd, timeout?}` | **each command** (unless `--yolo`) |
 | `write_file` | `{path, content}` | **with a diff** |
 | `edit_file` | `{path, old, new}` | **with a diff** (`old` must match once) |
+
+`shell` is a **persistent login bash** rooted at your repo — `cd`, exported
+vars, and shell functions/aliases from your `~/.bashrc` survive between calls in
+a session, so Hermes operates it like a real terminal (`ls`, `rg`, `git`,
+`make`, build/test) rather than a fixed toolbox. No tty: interactive programs
+won't work. `read_file`/`write_file`/`edit_file` are structured helpers so the
+model gets a clean diff and needn't fight shell quoting.
 
 ## Sessions
 
@@ -104,11 +109,12 @@ scoped to `hermes-code` runs only — your phone and web UI never see it.
 - **Approval by default** for `run`, `write_file`, `edit_file` — you see the
   command or diff and confirm (`y`/`n`/`a`ll/`q`uit). `--yolo` or
   `HERMES_CODE_APPROVE=auto` turns it off.
-- **Denylist** for `run`: ssh/scp/rsync, sudo/doas, `rm -rf /`, fork bombs,
+- **Denylist** for `shell`: ssh/scp/rsync, sudo/doas, `rm -rf /`, fork bombs,
   pipe-to-shell downloads — plus your `HERMES_CODE_DENY` globs.
-- **Repo jail** for the read-only tools: `read_file`/`list_dir`/`grep` refuse
-  paths that resolve outside the directory you launched from. (`run` is a shell;
-  it relies on the denylist + approval.)
+- **Repo jail** for the structured file tools: `read_file`/`write_file`/`edit_file`
+  refuse paths that resolve outside the directory you launched from. `shell` is a
+  real shell (it can `cd` anywhere) — it relies on the denylist + per-command
+  approval, not a path jail.
 - **Secret scrubbing.** Tool output is passed through a redactor (bearer tokens,
   `api_key=`/`password=`, AWS keys, `sk-…`, `ghp_…`, PEM headers) before it goes
   back to the gateway.

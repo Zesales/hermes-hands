@@ -76,6 +76,7 @@ done
 
 hc_load_config
 HC_REPO_ROOT="$(pwd -P)"; export HC_REPO_ROOT
+trap 'hc_shell_stop 2>/dev/null || true' EXIT
 
 run_turn() {   # $1 = message ; prints the answer
   local sfile; sfile="$(hc_session_resolve "$SMODE" "$HC_REPO_ROOT")"
