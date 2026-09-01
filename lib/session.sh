@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # session.sh - local session state. A "session" pairs a stable local id with the
 # Hermes session_id / last run id so a conversation threads across turns and
-# across invocations. State lives under $XDG_STATE_HOME/hermes-code/.
+# across invocations. State lives under $XDG_STATE_HOME/hermes-hands/.
 
-HC_STATE_DIR="${HERMES_CODE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/hermes-code}"
+HC_STATE_DIR="${HERMES_HANDS_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/hermes-hands}"
 HC_SESS_DIR="$HC_STATE_DIR/sessions"
 
 hc_session_init_store() { mkdir -p "$HC_SESS_DIR/by-cwd"; }

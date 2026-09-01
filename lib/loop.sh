@@ -6,7 +6,7 @@
 #
 # Requires: api.sh, dispatch.sh, util.sh sourced. HC_REPO_ROOT set.
 
-HC_LOOP_MAX_ROUNDS="${HERMES_CODE_MAX_ROUNDS:-8}"
+HC_LOOP_MAX_ROUNDS="${HERMES_HANDS_MAX_ROUNDS:-8}"
 
 # pull the first '{' .. last '}' out of a possibly-fenced, possibly-prose string
 _hc_extract_obj() {

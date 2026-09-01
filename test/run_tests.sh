@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Offline tests: hermes-code against test/mock_hermes.py. No network, no model.
+# Offline tests: hermes-hands against test/mock_hermes.py. No network, no model.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/bin/hermes-code"
+BIN="$ROOT/bin/hermes-hands"
 MOCK="$ROOT/test/mock_hermes.py"
 PASS=0; FAIL=0
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
-export HERMES_CODE_ALLOW_HTTP=1 HERMES_API_KEY=testkey HERMES_CODE_APPROVE=auto
+export HERMES_HANDS_ALLOW_HTTP=1 HERMES_API_KEY=testkey HERMES_HANDS_APPROVE=auto
 export HERMES_API_POLL_INTERVAL=1 HERMES_API_RETRIES=1
-export HERMES_CODE_STATE="$WORK/state" XDG_CONFIG_HOME="$WORK/cfg"
+export HERMES_HANDS_STATE="$WORK/state" XDG_CONFIG_HOME="$WORK/cfg"
 mkdir -p "$WORK/repo"; printf 'ai-stack readme\nHermes deploy via deploy.mk\n' > "$WORK/repo/README.md"
 ( cd "$WORK/repo" && git init -q && git add -A && git commit -qm init 2>/dev/null ) || true
 
@@ -60,7 +60,7 @@ stop_mock
 # session continuity: -c reuses the id; two invocations, one file, turns=2
 P=8976
 start_mock plain $P
-( export HERMES_CODE_STATE="$WORK/sstate"
+( export HERMES_HANDS_STATE="$WORK/sstate"
   cd "$WORK/repo" && HERMES_API_URL="http://127.0.0.1:$P" "$BIN" --new "one" >/dev/null 2>&1
   cd "$WORK/repo" && HERMES_API_URL="http://127.0.0.1:$P" "$BIN" -c   "two" >/dev/null 2>&1 )
 files="$(ls "$WORK"/sstate/sessions/*.json 2>/dev/null | wc -l | tr -d ' ')"
