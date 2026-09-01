@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# api.sh - one Hermes turn over the Runs API. Sourced by loop.sh / hermes-code.
+# api.sh - one Hermes turn over the Runs API. Sourced by loop.sh / hermes-hands.
 #
 # hc_api_check                    -> preflight (GET /v1/capabilities); prints "API OK: ..."
 # hc_api_ask "<message>" [sfile]  -> POST /v1/runs, poll, and set:
@@ -72,7 +72,7 @@ hc_api_ask() {   # $1 = message, $2 = session file (optional)
 
   # instructions + continuity ids, resolved once, in this scope
   local instr="" prev="" sess=""
-  local ifile="${HERMES_CODE_INSTRUCTIONS:-${XDG_CONFIG_HOME:-$HOME/.config}/hermes-code/instructions.md}"
+  local ifile="${HERMES_HANDS_INSTRUCTIONS:-${XDG_CONFIG_HOME:-$HOME/.config}/hermes-hands/instructions.md}"
   [[ -r "$ifile" ]] || ifile="$HC_ROOT/share/instructions.md"
   [[ -r "$ifile" ]] && instr="$(cat "$ifile")"
   if [[ -n "$sfile" && -r "$sfile" ]]; then
