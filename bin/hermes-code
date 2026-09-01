@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hermes-code - terminal chat with a central Hermes brain over its Runs API.
-# Hermes holds the plan/memory; it drives local tool calls (read_file / run /
-# grep / write_file / edit_file) to see and act on the repo you are standing in.
+# Hermes holds the plan/memory; it drives a persistent local shell plus
+# read_file / write_file / edit_file to see and act on the repo you're in.
 #
 #   hermes-code                    interactive REPL, rooted at $PWD
 #   hermes-code "message"          one-shot
