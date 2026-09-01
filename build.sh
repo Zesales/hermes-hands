@@ -9,11 +9,15 @@ out="${1:-dist/hermes-hands}"
 mkdir -p -- "$(dirname -- "$out")"
 ver="$(tr -d '[:space:]' < VERSION)"
 sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# shellcheck disable=SC1091
+[ -r project.env ] && . ./project.env
+slug="${REPO_SLUG:-$(git remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
+slug="${slug:-your/hermes-hands}"
 libs="lib/util.sh lib/ui.sh lib/session.sh lib/api.sh lib/dispatch.sh lib/loop.sh"
 
 {
   printf '#!/usr/bin/env bash\n'
-  printf '# hermes-hands %s (%s) - single-file build. github.com/CHANGE-ME/hermes-hands\n' "$ver" "$sha"
+  printf '# hermes-hands %s (%s) - single-file build. https://github.com/%s\n' "$ver" "$sha" "$slug"
   printf 'set -euo pipefail\n'
   printf 'HH_VERSION=%q; HH_BUILD_SHA=%q; HH_BUNDLED=1; HH_ROOT=\n' "$ver" "$sha"
   # instructions.md is markdown (backticks, $, quotes) - carry it as base64 so no
