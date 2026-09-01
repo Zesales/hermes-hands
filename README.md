@@ -32,7 +32,7 @@ not change.**
 
 ## Install
 
-Linux / WSL. Requires `bash`, `curl`, `jq`, `git` (`rg`, `glow`/`bat` are used if
+Linux / WSL. Runtime needs only `bash`, `curl`, `jq` (`rg`, `glow`/`bat` used if
 present). No model, no language runtime, no package manager. Windows: use WSL — a
 PowerShell installer is a later feature.
 
@@ -41,8 +41,11 @@ curl -fsSL https://raw.githubusercontent.com/<you>/hermes-hands/main/install.sh 
 hermes-hands setup      # asks for your Hermes API URL + key, writes config
 ```
 
-Or from a checkout: `make install` (symlinks `bin/hermes-hands` into
-`~/.local/bin`). Re-run `install.sh` any time to update.
+The installer drops **one self-contained file** at `~/.local/bin/hermes-hands`
+(a release binary, or built from source with `git`+`jq`). Re-run it to update.
+From a checkout: `make install` (build + copy the single file) or `make
+dev-install` (symlink `bin/hermes-hands`, for hacking on it). `make build`
+produces `dist/hermes-hands` on its own.
 
 `setup` writes `~/.config/hermes-hands/{config,secrets}` (secrets `chmod 600`)
 and offers to source them from `~/.bashrc`. The key is your gateway's

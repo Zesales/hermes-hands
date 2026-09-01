@@ -67,6 +67,11 @@ files="$(ls "$WORK"/sstate/sessions/*.json 2>/dev/null | wc -l | tr -d ' ')"
 turns="$(jq -s 'map(.turns) | max' "$WORK"/sstate/sessions/*.json 2>/dev/null)"
 check "session: one file for the dir across -c" "1" "$files"
 check "session: turns accumulated across invocations" "2" "$turns"
+sf="$(ls "$WORK"/sstate/sessions/*.json 2>/dev/null | head -1)"
+hsid="$(jq -r '.hermes_session_id' "$sf" 2>/dev/null)"
+hkey="$(jq -r '.hermes_session_key' "$sf" 2>/dev/null)"
+check "session: client session_id minted + kept" "hh-" "$hsid"
+check "session: per-repo session_key minted"    "hermes-hands:" "$hkey"
 stop_mock
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
