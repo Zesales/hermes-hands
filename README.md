@@ -32,25 +32,32 @@ not change.**
 
 ## Install
 
-Requires `bash`, `curl`, `jq` (and `git` / `rg` for the obvious tools). No model,
-no runtime, no package manager.
+Linux / WSL. Requires `bash`, `curl`, `jq`, `git` (`rg`, `glow`/`bat` are used if
+present). No model, no language runtime, no package manager. Windows: use WSL — a
+PowerShell installer is a later feature.
 
 ```sh
-git clone https://github.com/<you>/hermes-hands-cli
-ln -s "$PWD/hermes-hands-cli/bin/hermes-hands" ~/.local/bin/hermes-hands
-hermes-hands setup            # asks for your Hermes API URL + key, writes config
+curl -fsSL https://raw.githubusercontent.com/<you>/hermes-hands/main/install.sh | sh
+hermes-hands setup      # asks for your Hermes API URL + key, writes config
 ```
 
-`setup` writes `~/.config/hermes-hands/{config,secrets}` (secrets `chmod 600`) and
-offers to source them from `~/.bashrc`. The key is your gateway's
-`API_SERVER_KEY`; the URL should be `https://…` (the token authenticates every
-call).
+Or from a checkout: `make install` (symlinks `bin/hermes-hands` into
+`~/.local/bin`). Re-run `install.sh` any time to update.
+
+`setup` writes `~/.config/hermes-hands/{config,secrets}` (secrets `chmod 600`)
+and offers to source them from `~/.bashrc`. The key is your gateway's
+`API_SERVER_KEY`; the URL must be `https://…`. `hermes-hands --version` prints the
+version.
 
 ## Use
 
+The primary mode is the **REPL** — coding is multi-turn (look, ask, look again,
+change, verify) and each turn threads into the same Hermes session. The one-shot
+forms are for quick questions and scripting.
+
 ```sh
 hermes-hands                       # REPL, rooted at the current directory
-hermes-hands "why is CI failing?"  # one-shot
+hermes-hands "why is CI failing?"  # one-shot, plain output
 hermes-hands -c "and now fix it"   # continue this directory's latest session
 hermes-hands --new "…"             # force a fresh session
 hermes-hands --session <id> "…"    # a specific session
@@ -59,7 +66,9 @@ hermes-hands sessions              # list local sessions
 hermes-hands check                 # preflight the connection
 ```
 
-REPL commands: `/exit` `/check` `/new` `/sessions`.
+REPL commands: `/help` `/new` `/sessions` `/check` `/exit`. Tool calls are shown
+as they run (`⟩ shell npm test… → exit 0`); the final answer renders through
+`glow`/`bat` if installed.
 
 Hermes drives these tools, all in the directory you launched from:
 
