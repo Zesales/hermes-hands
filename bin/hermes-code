@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# hermes-code - terminal chat with a central Hermes brain over its Runs API.
+# Hermes holds the plan/memory; it drives local tool calls (read_file / run /
+# grep / write_file / edit_file) to see and act on the repo you are standing in.
+#
+#   hermes-code                    interactive REPL, rooted at $PWD
+#   hermes-code "message"          one-shot
+#   echo msg | hermes-code -       one-shot from stdin
+#   hermes-code -c "message"       continue the latest session for this directory
+#   hermes-code --session <id> …   use a specific session
+#   hermes-code --new "message"    force a fresh session
+#   hermes-code --yolo …           skip approval prompts (run/write auto-approved)
+#   hermes-code check              preflight the API connection
+#   hermes-code sessions           list local sessions
+#   hermes-code setup              interactive first-run config
+set -euo pipefail
+
+# --- locate the checkout so share/ and lib/ resolve even via a symlink ---
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _t="$(readlink "$_self")"; case "$_t" in /*) _self="$_t" ;; *) _self="$(dirname "$_self")/$_t" ;; esac
+done
+HC_ROOT="$(cd "$(dirname "$_self")/.." && pwd)"
+export HC_ROOT
+
+. "$HC_ROOT/lib/util.sh"
+. "$HC_ROOT/lib/session.sh"
+. "$HC_ROOT/lib/api.sh"
+. "$HC_ROOT/lib/dispatch.sh"
+. "$HC_ROOT/lib/loop.sh"
+
+usage() { sed -n '2,20{s/^# \{0,1\}//;s/^#$//;p;}' "$_self"; }
+
+hc_setup() {
+  local dir="${XDG_CONFIG_HOME:-$HOME/.config}/hermes-code"
+  mkdir -p "$dir"; chmod 700 "$dir"
+  local url key
+  read -r -p "Hermes API base URL (https://…): " url
+  read -r -s -p "Hermes API_SERVER_KEY: " key; echo
+  printf '# hermes-code config\n# HERMES_API_PROFILE=coder   # optional /p/<profile>/ prefix\n# HERMES_CODE_APPROVE=ask    # ask | auto | never\n' > "$dir/config"
+  { printf '# hermes-code secrets - chmod 600, do not commit\n'
+    printf 'export HERMES_API_URL=%q\n' "$url"
+    printf 'export HERMES_API_KEY=%q\n' "$key"; } > "$dir/secrets"
+  chmod 600 "$dir/secrets"
+  echo "wrote $dir/config and $dir/secrets"
+  hc_load_config
+  "$_self" check || true
+  local line="[ -f \"\$HOME/.config/hermes-code/secrets\" ] && . \"\$HOME/.config/hermes-code/secrets\""
+  if ! grep -qF "hermes-code/secrets" "$HOME/.bashrc" 2>/dev/null; then
+    read -r -p "Add the secrets-sourcing line to ~/.bashrc? [y/N] " a
+    [[ "$a" == [yY] ]] && printf '\n# hermes-code\n%s\n' "$line" >> "$HOME/.bashrc" && echo "added."
+  fi
+}
+
+# --- arg parse ---
+SMODE=new           # new | continue | <id>
+ONESHOT=""
+STDIN=0
+while (( $# )); do
+  case "$1" in
+    -h|--help)         usage; exit 0 ;;
+    check|--check)      hc_load_config; hc_api_check; exit $? ;;
+    sessions|--list)    hc_session_list; exit 0 ;;
+    setup)             hc_setup; exit 0 ;;
+    -c|--continue)      SMODE=continue ;;
+    --new)             SMODE=new ;;
+    --session)         shift; SMODE="${1:?--session needs an id}" ;;
+    --yolo)            export HERMES_CODE_APPROVE=auto ;;
+    -)                 STDIN=1 ;;
+    --)                shift; ONESHOT="$*"; break ;;
+    -*)                hc_die "unknown option: $1" ;;
+    *)                 ONESHOT="${ONESHOT:+$ONESHOT }$1" ;;
+  esac
+  shift || true
+done
+
+hc_load_config
+HC_REPO_ROOT="$(pwd -P)"; export HC_REPO_ROOT
+
+run_turn() {   # $1 = message ; prints the answer
+  local sfile; sfile="$(hc_session_resolve "$SMODE" "$HC_REPO_ROOT")"
+  SMODE="$(basename "$sfile" .json)"   # subsequent turns in a REPL reuse this session
+  if hc_loop_run "$1" "$sfile"; then
+    hc_session_set_title "$sfile" "$1"
+    printf '%s\n' "$HC_LOOP_ANSWER"
+  else
+    printf '%s\n' "$HC_LOOP_ANSWER"; return 1
+  fi
+}
+
+if (( STDIN )); then
+  run_turn "$(cat)"; exit $?
+fi
+if [[ -n "$ONESHOT" ]]; then
+  run_turn "$ONESHOT"; exit $?
+fi
+
+# --- REPL ---
+hc_api_check >/dev/null || hc_die "API preflight failed - run: hermes-code check"
+printf 'hermes-code \342\200\224 %s\n' "$HC_REPO_ROOT" >&2
+printf 'session: %s   (/exit quit  /check test  /new fresh session)\n\n' "${SMODE}" >&2
+while IFS= read -r -e -p 'you > ' line || { printf '\n'; break; }; do
+  case "$line" in
+    ""|" ")         continue ;;
+    /exit|/quit|/q) break ;;
+    /check)         hc_api_check || true; printf '\n'; continue ;;
+    /new)           SMODE=new; printf 'new session\n\n'; continue ;;
+    /sessions)      hc_session_list; printf '\n'; continue ;;
+  esac
+  history -s "$line" 2>/dev/null || true
+  ans="$(run_turn "$line" || true)"
+  printf '\nhermes > %s\n\n' "$ans"
+done
