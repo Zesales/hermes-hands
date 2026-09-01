@@ -45,6 +45,12 @@ out="$(cd "$WORK/repo" && HERMES_API_URL="http://127.0.0.1:$P" "$BIN" --new "hi"
 check "badjson: recovered after resend" "recovered and answered" "$out"
 stop_mock
 
+P=8977
+start_mock shellstate $P
+out="$(cd "$WORK/repo" && HERMES_API_URL="http://127.0.0.1:$P" "$BIN" --new "cd around" 2>/dev/null)"
+check "shell: cwd persists across calls in a turn" "cwd_persisted=True" "$out"
+stop_mock
+
 P=8975
 start_mock plain $P
 out="$(cd "$WORK/repo" && HERMES_API_URL="http://127.0.0.1:$P" "$BIN" check 2>&1)"
