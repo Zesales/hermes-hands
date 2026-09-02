@@ -411,7 +411,10 @@ func runREPL(smode string) int {
 			fmt.Fprintln(os.Stderr)
 			continue
 		}
-		if err != nil { // io.EOF (Ctrl-D) or a read error
+		if err != nil { // io.EOF (Ctrl-D), or an unexpected liner error
+			if err != io.EOF {
+				fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+			}
 			fmt.Println()
 			break
 		}
