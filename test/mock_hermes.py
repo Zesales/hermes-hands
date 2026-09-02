@@ -63,12 +63,22 @@ class H(BaseHTTPRequestHandler):
             if not seen_results:
                 out = json.dumps({"calls": [
                     {"tool": "read_file", "args": {"path": "README.md"}},
-                    {"tool": "run", "args": {"cmd": "git rev-parse --abbrev-ref HEAD"}},
+                    {"tool": "shell", "args": {"cmd": "git rev-parse --abbrev-ref HEAD"}},
                 ], "final": None})
             else:
                 inp = body.get("input", "")
                 ok = ('"exit_code": 0' in inp or '"exit_code":0' in inp)
                 out = json.dumps({"calls": [], "final": f"done. saw_results={ok}."})
+
+        elif MODE == "shellstate":
+            if not seen_results:
+                out = json.dumps({"calls": [
+                    {"tool": "shell", "args": {"cmd": "mkdir -p sub && cd sub"}},
+                    {"tool": "shell", "args": {"cmd": "pwd"}},
+                ], "final": None})
+            else:
+                inp = body.get("input", "")
+                out = json.dumps({"calls": [], "final": f"cwd_persisted={'/sub' in inp}"})
         else:
             out = json.dumps({"calls": [], "final": "?"})
 
