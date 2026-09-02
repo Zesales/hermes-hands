@@ -60,6 +60,35 @@ type AskResult struct {
 	RunID     string
 	SessionID string // .session_id from run status ("" if none)
 	Threaded  bool   // false after a session-id drop
+	Tokens    int    // best-effort token count from the run's .usage (0 if absent)
+}
+
+// usageTokens pulls a best-effort token count out of a run status body's
+// `usage` object. Hermes does not yet expose real context-window usage
+// (NousResearch/hermes-agent#15618); this is the cumulative billing count:
+// total_tokens if present, else input+output / prompt+completion.
+func usageTokens(body []byte) int {
+	var top struct {
+		Usage map[string]json.RawMessage `json:"usage"`
+	}
+	if json.Unmarshal(body, &top) != nil || top.Usage == nil {
+		return 0
+	}
+	num := func(keys ...string) int {
+		for _, k := range keys {
+			if raw, ok := top.Usage[k]; ok {
+				var n float64
+				if json.Unmarshal(raw, &n) == nil {
+					return int(n)
+				}
+			}
+		}
+		return 0
+	}
+	if t := num("total_tokens", "total", "context_tokens"); t > 0 {
+		return t
+	}
+	return num("input_tokens", "prompt_tokens") + num("output_tokens", "completion_tokens")
 }
 
 // NewHTTPClient builds a client with curl-equivalent timeouts: a per-dial
