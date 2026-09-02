@@ -299,6 +299,10 @@ func physicalCwd() string {
 // --- one-shot / stdin turn (bash run_turn: answer -> stdout, frames -> stderr) ---
 
 func runTurn(smode, msg string) int {
+	if cfg := loadCfgOrExit(); notConfigured(cfg) {
+		reportNotConfigured(cfg)
+		return 1
+	}
 	a, err := newApp()
 	if err != nil {
 		fmt.Printf("BLOCKED: %v\n", err)
@@ -333,34 +337,25 @@ func notConfigured(cfg *config.Config) bool {
 	return config.LooksUnset(cfg.APIURL) || config.LooksUnset(cfg.APIKey)
 }
 
-// ensureConfigured makes the REPL a first-run entry point: if there is no
-// config yet and stdin is a terminal, walk the user through `setup` in place
-// rather than sending them off to another command. Returns (exitCode, proceed).
-func ensureConfigured() (int, bool) {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
-		return 1, false
+// reportNotConfigured names which required settings are missing and how to set
+// them, then the caller exits. The bash version just refused; this says what is
+// missing instead of pointing at a file.
+func reportNotConfigured(cfg *config.Config) {
+	fmt.Println("BLOCKED: hermes-hands is not configured.")
+	if config.LooksUnset(cfg.APIURL) {
+		fmt.Fprintln(os.Stderr, "  HERMES_API_URL is not set")
 	}
-	if !notConfigured(cfg) {
-		return 0, true
+	if config.LooksUnset(cfg.APIKey) {
+		fmt.Fprintln(os.Stderr, "  HERMES_API_KEY is not set")
 	}
-	if !stdinTTY() {
-		fmt.Println("BLOCKED: not configured yet - run: hermes-hands setup")
-		return 1, false
-	}
-	fmt.Fprintln(os.Stderr, "hermes-hands isn't set up yet — let's do that now.")
-	fmt.Fprintln(os.Stderr)
-	if code := doSetup(bufio.NewReader(os.Stdin), xdgConfigHome()+"/hermes-hands", false); code != 0 {
-		return code, false
-	}
-	fmt.Fprintln(os.Stderr)
-	return 0, true
+	fmt.Fprintln(os.Stderr, "Run `hermes-hands setup`, or export the vars / put them in ~/.config/hermes-hands/secrets.")
 }
 
 func runREPL(smode string) int {
-	if code, ok := ensureConfigured(); !ok {
-		return code
+	cfg := loadCfgOrExit()
+	if notConfigured(cfg) {
+		reportNotConfigured(cfg)
+		return 1
 	}
 
 	a, err := newApp()
@@ -565,6 +560,10 @@ func doSetup(in *bufio.Reader, dir string, plaintext bool) int {
 
 	url := promptLine(in, "Hermes API base URL (https://…): ")
 	key := promptSecret(in, "Hermes API_SERVER_KEY: ")
+	if url == "" || key == "" {
+		fmt.Fprintln(os.Stderr, "hermes-hands: setup needs both a URL and a key — nothing written.")
+		return 1
+	}
 
 	if err := os.WriteFile(dir+"/config", []byte(setupConfigBody), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
