@@ -55,6 +55,14 @@ func Load() (*Config, error) {
 			merged[k] = v
 		}
 	}
+	// A placeholder URL/key (from the shipped example, or a stale ~/.bashrc line
+	// exporting the old placeholder `secrets`) counts as unset: blank it so the
+	// secrets-store fallback runs and `setup` isn't a dead end.
+	for _, k := range []string{"HERMES_API_URL", "HERMES_API_KEY"} {
+		if LooksUnset(merged[k]) {
+			merged[k] = ""
+		}
+	}
 	if merged["HERMES_API_URL"] == "" || merged["HERMES_API_KEY"] == "" {
 		if err := applyFallbackSecrets(merged, xdgConfigHome(proc)+"/hermes-hands", secPath); err != nil {
 			return nil, err
