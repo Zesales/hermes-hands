@@ -113,6 +113,16 @@ func TestColorCodesWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestWorkingShowsCancelHint(t *testing.T) {
+	for _, color := range []bool{false, true} {
+		var b strings.Builder
+		newUI(&b, color, true).Working()
+		if !strings.Contains(b.String(), "⋯ working") || !strings.Contains(b.String(), "Ctrl+C to cancel") {
+			t.Errorf("Working(color=%v) = %q", color, b.String())
+		}
+	}
+}
+
 func TestSessionPromptHasNoControlRunes(t *testing.T) {
 	// liner.Prompt rejects any prompt containing a control rune with
 	// ErrInvalidPrompt, which silently kills the REPL on a colour terminal.
