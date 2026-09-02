@@ -2,7 +2,7 @@
 
 **Terminal coding with a remote [Hermes](https://github.com/NousResearch/hermes-agent)
 brain.** Your Hermes gateway holds the plan, the memory and the persona; a small
-bash CLI on your machine lets it read files and run commands in the repo you're
+CLI on your machine lets it read files and run commands in the repo you're
 standing in — over Hermes' own HTTP API, outbound only, nothing listening on your
 box.
 
@@ -32,18 +32,21 @@ not change.**
 
 ## Install
 
-Linux / WSL. Runtime needs only `bash`, `curl`, `jq` (`rg`, `glow`/`bat` used if
-present). No model, no language runtime, no package manager. Windows: use WSL — a
-PowerShell installer is a later feature.
+Linux / macOS / WSL. **One static binary, no runtime dependencies** — no `bash`,
+`curl` or `jq` needed to run it, no language runtime, no package manager. (`git`
+is used only for `git status` context on a failed command; `glow`/`bat`/`fmt` and
+`diff` are used for prettier output/diffs when present.) Windows: use WSL.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.sh | sh
 hermes-hands setup      # asks for your Hermes API URL + key, writes config
 ```
 
-That drops **one self-contained file** at `~/.local/bin/hermes-hands` — plain
-bash you can `less`, so you can see exactly what it will run. Re-run the same
-`curl … | sh` any time to update.
+That drops **one self-contained binary** at `~/.local/bin/hermes-hands`. Unlike
+the old bash script you can't `less` it, so releases ship SHA-256 checksums —
+verify them, or build from source (below). Re-run the same `curl … | sh` any time
+to update; it prefers a released platform binary and only builds from source (Go
+required) when none is available.
 
 `setup` writes `~/.config/hermes-hands/{config,secrets}` (secrets `chmod 600`)
 and offers to source them from `~/.bashrc`. The key is your gateway's
@@ -58,18 +61,20 @@ forms are for quick questions and scripting.
 
 ```sh
 hermes-hands                       # REPL, rooted at the current directory
-hermes-hands "why is CI failing?"  # one-shot, plain output
+hermes-hands "why is CI failing?"  # one-shot, plain output on stdout
 hermes-hands -c "and now fix it"   # continue this directory's latest session
 hermes-hands --new "…"             # force a fresh session
 hermes-hands --session <id> "…"    # a specific session
 hermes-hands --yolo "…"            # skip approval prompts
+… | hermes-hands -                 # read the message from stdin
 hermes-hands sessions              # list local sessions
 hermes-hands check                 # preflight the connection
 ```
 
-REPL commands: `/help` `/new` `/sessions` `/check` `/exit`. Tool calls are shown
-as they run (`⟩ shell npm test… → exit 0`); the final answer renders through
-`glow`/`bat` if installed.
+REPL commands: `/help` `/new` `/sessions` `/check` `/exit` (`Ctrl-D` also exits;
+`Ctrl-C` cancels the current turn and returns to the prompt). Tool calls are
+shown as they run (`⟩ shell npm test… → exit 0`); the final answer renders
+through `glow`/`bat`/`fmt` if installed.
 
 Hermes drives these tools, all in the directory you launched from:
 
@@ -85,7 +90,10 @@ vars, and shell functions/aliases from your `~/.bashrc` survive between calls in
 a session, so Hermes operates it like a real terminal (`ls`, `rg`, `git`,
 `make`, build/test) rather than a fixed toolbox. No tty: interactive programs
 won't work. `read_file`/`write_file`/`edit_file` are structured helpers so the
-model gets a clean diff and needn't fight shell quoting.
+model gets a clean diff and needn't fight shell quoting. `edit_file` replaces one
+**literal** occurrence of `old` (no regex, no `&` metacharacters — a deliberate
+change from the old bash version). `write_file`/`edit_file` need the target's
+parent directory to already exist.
 
 ## Sessions
 
@@ -93,8 +101,8 @@ The conversation is threaded **server-side**: every `POST /v1/runs` carries a
 stable `session_id` (Hermes loads that session's transcript as context), plus an
 `X-Hermes-Session-Key` that's constant per repo (long-term memory handle) and an
 `X-Hermes-Session-Id` header. If Hermes hands back a different `session_id`, the
-CLI adopts it. If the server ever rejects the id, the CLI retries fresh and
-falls back to a local transcript recap for that turn.
+CLI adopts it. If the server ever rejects the id, the CLI retries fresh (keeping
+the headers) and falls back to a local transcript recap for that turn.
 
 The `/v1` API has no endpoint to *list* sessions, so a thin local index lives in
 `$XDG_STATE_HOME/hermes-hands/sessions/` purely to make `-c` (continue this
@@ -103,7 +111,24 @@ mirrored into Hermes via a best-effort `PATCH /api/sessions/{id}`.
 
 ## Config
 
-`~/.config/hermes-hands/config` (`KEY=value`, sourced; env wins):
+`~/.config/hermes-hands/config` — `KEY=value` / `export KEY=value`, values
+optionally `"…"`, `'…'` or `$'…'`-quoted. Anything else on a line is ignored (the
+old bash version `source`d the file; the Go port deliberately parses only
+assignments).
+
+**Secrets.** The URL + key are resolved in this order: the `HERMES_API_URL` /
+`HERMES_API_KEY` environment variables always win; then, only while one is still
+unset, the secrets store. `setup` (default) writes a machine-bound
+`secrets.enc` + a 0600 `keyseed` — AES-256-GCM, key derived per-machine
+(HKDF over the keyseed, `/etc/machine-id` and your uid), so a copied
+`secrets.enc` alone is useless. It needs nothing in your shell env. If it can't
+be decrypted here (wrong machine, tampered, missing `keyseed`) the CLI says so
+and exits — re-run `hermes-hands setup`. This is **at-rest protection only**: it
+does not stop a program running as you (or an approved `shell`) from reading the
+key — the approval gate + denylist are the real boundary. `setup --plaintext`
+keeps the old 0600 `secrets` file (`export HERMES_API_URL=…` / `…KEY=…`) plus the
+`~/.bashrc` offer, for people who inject via env or a secrets manager; that file
+is the fallback when no `secrets.enc` exists. See [`docs/secrets.md`](docs/secrets.md).
 
 | key | default | meaning |
 |---|---|---|
@@ -111,10 +136,11 @@ mirrored into Hermes via a best-effort `PATCH /api/sessions/{id}`.
 | `HERMES_API_KEY` | — | `API_SERVER_KEY` (put this in `secrets`, `chmod 600`) |
 | `HERMES_API_PROFILE` | — | route to `/p/<profile>/` (needs that profile's own key) |
 | `HERMES_HANDS_APPROVE` | `ask` | `ask` \| `auto` \| `never` |
-| `HERMES_HANDS_DENY` | — | extra denied `run` commands, `\|`-separated shell globs |
+| `HERMES_HANDS_DENY` | — | extra denied `shell` commands, `\|`-separated shell globs |
 | `HERMES_HANDS_MAX_ROUNDS` | `8` | delegation rounds per turn |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
-| `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result |
+| `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`shell` keeps 2×) |
+| `HERMES_API_*` | — | `CONNECT_TIMEOUT` 5, `MAX_TIME` 30, `POLL_INTERVAL` 2, `RETRIES` 3, `RUN_TIMEOUT` 600 |
 
 The per-run `instructions` block sent to Hermes is baked into the binary (source:
 `share/instructions.md`). Drop a `~/.config/hermes-hands/instructions.md` to
@@ -124,20 +150,26 @@ runs only — your phone and web UI never see it.
 ## Security model
 
 - **Outbound only.** The CLI dials your gateway. Nothing listens on your machine.
-- **Approval by default** for `run`, `write_file`, `edit_file` — you see the
+- **Approval by default** for `shell`, `write_file`, `edit_file` — you see the
   command or diff and confirm (`y`/`n`/`a`ll/`q`uit). `--yolo` or
   `HERMES_HANDS_APPROVE=auto` turns it off.
-- **Denylist** for `shell`: ssh/scp/rsync, sudo/doas, `rm -rf /`, fork bombs,
-  pipe-to-shell downloads — plus your `HERMES_HANDS_DENY` globs.
+- **Denylist** for `shell`: ssh/scp/sftp/rsync, sudo/doas, `rm -rf /…`, fork
+  bombs, `curl|wget … | sh` — plus your `HERMES_HANDS_DENY` globs.
 - **Repo jail** for the structured file tools: `read_file`/`write_file`/`edit_file`
-  refuse paths that resolve outside the directory you launched from. `shell` is a
-  real shell (it can `cd` anywhere) — it relies on the denylist + per-command
-  approval, not a path jail.
+  refuse paths that resolve (symlinks included) outside the directory you
+  launched from. `shell` is a real shell (it can `cd` anywhere) — it relies on
+  the denylist + per-command approval, not a path jail.
 - **Secret scrubbing.** Tool output is passed through a redactor (bearer tokens,
   `api_key=`/`password=`, AWS keys, `sk-…`, `ghp_…`, PEM headers) before it goes
   back to the gateway.
+- **Secrets at rest.** The default `secrets.enc` is AES-256-GCM, machine-bound
+  (see Config). No passphrase — deliberately: it protects a stolen/backed-up
+  copy of the file, not a live read by something already running as you. The
+  approval gate + denylist are the boundary that matters.
 - **TLS enforced.** A non-`https://` `HERMES_API_URL` is refused (loopback needs
   an explicit `HERMES_HANDS_ALLOW_HTTP=1`, for tests).
+- **WSL:** `/etc/machine-id` is stable across WSL restarts but is regenerated if
+  you re-register the distro — re-run `hermes-hands setup` after that.
 
 ## Honest limitations
 
@@ -147,26 +179,37 @@ runs only — your phone and web UI never see it.
   `instructions.md`.
 - The delegation transcript accumulates in the Hermes session. Long sessions lean
   on Hermes' compaction; start a `/new` session for a new task.
-- No streaming of the final answer yet (the loop polls run status).
+- No streaming of the final answer yet (the loop polls run status). The transport
+  is isolated behind one client so an SSE reader drops in when split-runtime
+  lands.
+- `shell` is POSIX-only; on Windows use WSL.
 
 ## Development
 
 ```sh
 git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
-make dev-install     # symlink bin/hermes-hands onto your PATH (runs from the checkout)
-make test            # offline suite against test/mock_hermes.py - no network, no model
-make lint            # shellcheck
+make dev-install     # go build + copy dist/hermes-hands onto your PATH
+make test            # go test ./... — offline, no network, no model
+make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
 ```
 
-Source layout: `bin/hermes-hands` (entry) + `lib/*.sh` (util, ui, session, api,
-dispatch, loop) + `share/instructions.md`. `build.sh` bundles all of it into the
-single `dist/hermes-hands` (libs inlined, instructions base64'd) — that's what a
-release ships and what `install.sh` fetches. CI runs shellcheck, the offline
-suite, and the bundle build on every push.
+Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
+`github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
+and CI never touch the network. Layout: `main.go` (CLI + REPL + setup) +
+`internal/{config,redact,ttyio,prompt,ui,api,session,shell,dispatch,loop}` +
+`share/instructions.md` (embedded via `//go:embed`). CI runs gofmt, `go vet`,
+`go test`, and a windows/darwin cross-compile smoke on every push.
 
-**Releasing:** bump `VERSION`, tag `vX.Y.Z`, `make build`, upload `dist/hermes-hands`
-as a release asset named `hermes-hands`. `install.sh` prefers that asset and only
-clones + builds from source when no release exists.
+`test/mock_hermes.py` is a manual-only stand-in for the Runs API — the Go suite
+has its own in-process mock (`internal/hermesmock`) and needs no `python3`.
+
+## Releasing
+
+Bump `VERSION`, tag `vX.Y.Z`, then `make release` — it cross-compiles
+`dist/hermes-hands_<os>_<arch>` for `{linux,darwin}×{amd64,arm64}` and
+`windows/amd64`. Upload those (plus SHA-256 sums) as release assets;
+`install.sh` fetches `hermes-hands_<os>_<arch>` and only builds from source
+when no matching asset exists.
 
 ## License
 
