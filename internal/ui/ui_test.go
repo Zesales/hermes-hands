@@ -112,3 +112,16 @@ func TestColorCodesWhenEnabled(t *testing.T) {
 		t.Errorf("Working with colour = %q, want dim + accent codes", b.String())
 	}
 }
+
+func TestYouPromptHasNoControlRunes(t *testing.T) {
+	// liner.Prompt rejects any prompt containing a control rune with
+	// ErrInvalidPrompt, which silently kills the REPL on a colour terminal.
+	for _, color := range []bool{false, true} {
+		p := newUI(io.Discard, color, true).YouPrompt()
+		for _, r := range p {
+			if r == 0x1b || (r < 0x20 && r != '\t') {
+				t.Fatalf("YouPrompt(color=%v) = %q contains control rune %U", color, p, r)
+			}
+		}
+	}
+}
