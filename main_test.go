@@ -149,52 +149,25 @@ func TestNotConfigured(t *testing.T) {
 	}
 }
 
-// blankConfigEnv points config.Load at an empty dir and clears the URL/key so
-// the process looks brand-new.
-func blankConfigEnv(t *testing.T) {
-	t.Helper()
-	for _, k := range []string{
-		"HERMES_API_URL", "HERMES_API_KEY", "HERMES_HANDS_CONFIG", "HERMES_HANDS_SECRETS",
-	} {
-		t.Setenv(k, "")
-	}
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-}
-
-func TestEnsureConfiguredNonTTYBlocks(t *testing.T) {
-	blankConfigEnv(t)
+func TestDoSetupRejectsEmpty(t *testing.T) {
 	stdinTTY = func() bool { return false }
 	defer func() { stdinTTY = func() bool { return true } }()
 
-	code, ok := ensureConfigured()
-	if ok || code != 1 {
-		t.Errorf("ensureConfigured() with no config, non-TTY = (%d, %v), want (1, false)", code, ok)
-	}
-}
-
-func TestEnsureConfiguredProceedsWhenSet(t *testing.T) {
-	blankConfigEnv(t)
-	dir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "hermes-hands")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	mustWriteFile(t, filepath.Join(dir, "secrets"),
-		"export HERMES_API_URL=\"https://h.example.net\"\nexport HERMES_API_KEY='sk-real'\n")
-
-	code, ok := ensureConfigured()
-	if !ok || code != 0 {
-		t.Errorf("ensureConfigured() with a real secrets file = (%d, %v), want (0, true)", code, ok)
-	}
-}
-
-func mustWriteFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
+	for _, in := range []string{
+		"\n\n",                      // empty URL, empty key
+		"https://h.example.net\n\n", // URL, empty key
+		"\nsk-real\n",               // empty URL, key
+	} {
+		dir := filepath.Join(t.TempDir(), "hermes-hands")
+		code := doSetup(bufio.NewReader(strings.NewReader(in)), dir, false)
+		if code != 1 {
+			t.Errorf("doSetup(%q) = %d, want 1", in, code)
+		}
+		for _, f := range []string{"config", "secrets.enc", "keyseed", "secrets"} {
+			if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+				t.Errorf("doSetup(%q) wrote %s despite empty input", in, f)
+			}
+		}
 	}
 }
 
