@@ -135,32 +135,32 @@ func TestBumpTurnAdoptsAndCounts(t *testing.T) {
 	rec, _ := st.New("/bump/dir")
 	orig := rec.HermesSessionID
 
-	if err := st.BumpTurn(rec, "run_1", ""); err != nil {
+	if err := st.BumpTurn(rec, "run_1", "", 1200); err != nil {
 		t.Fatal(err)
 	}
-	if rec.Turns != 1 || rec.LastRunID != "run_1" {
-		t.Errorf("after bump#1: turns=%d last=%q", rec.Turns, rec.LastRunID)
+	if rec.Turns != 1 || rec.LastRunID != "run_1" || rec.LastTokens != 1200 || rec.Splits != 0 {
+		t.Errorf("after bump#1: turns=%d last=%q tok=%d splits=%d", rec.Turns, rec.LastRunID, rec.LastTokens, rec.Splits)
 	}
 	if rec.HermesSessionID != orig {
 		t.Errorf("empty server sid must not change hermes id")
 	}
 
-	if err := st.BumpTurn(rec, "run_2", "srv-sid-999"); err != nil {
+	if err := st.BumpTurn(rec, "run_2", "srv-sid-999", 0); err != nil {
 		t.Fatal(err)
 	}
-	if rec.Turns != 2 {
-		t.Errorf("turns = %d, want 2", rec.Turns)
+	if rec.Turns != 2 || rec.LastTokens != 1200 { // 0 tokens must not clobber
+		t.Errorf("after bump#2: turns=%d tok=%d", rec.Turns, rec.LastTokens)
 	}
-	if rec.HermesSessionID != "srv-sid-999" {
-		t.Errorf("differing server sid should be adopted, got %q", rec.HermesSessionID)
+	if rec.HermesSessionID != "srv-sid-999" || rec.Splits != 1 {
+		t.Errorf("differing server sid should be adopted + counted, got %q splits=%d", rec.HermesSessionID, rec.Splits)
 	}
 
-	// same sid again -> no-op adopt, still counts
-	if err := st.BumpTurn(rec, "run_3", "srv-sid-999"); err != nil {
+	// same sid again -> no-op adopt, no new split, still counts the turn
+	if err := st.BumpTurn(rec, "run_3", "srv-sid-999", 2048); err != nil {
 		t.Fatal(err)
 	}
-	if rec.Turns != 3 || rec.HermesSessionID != "srv-sid-999" {
-		t.Errorf("after bump#3: turns=%d sid=%q", rec.Turns, rec.HermesSessionID)
+	if rec.Turns != 3 || rec.Splits != 1 || rec.LastTokens != 2048 {
+		t.Errorf("after bump#3: turns=%d splits=%d tok=%d", rec.Turns, rec.Splits, rec.LastTokens)
 	}
 }
 
