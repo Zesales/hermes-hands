@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0 — more of the Hermes API
+
+Tier 1 of the API sweep — the safe, testable parts. SSE streaming of the answer
+(`GET /v1/runs/{id}/events`) is the remaining Tier 1 item and lands separately.
+
+- **`POST /v1/runs/{id}/stop` on Ctrl-C.** Cancelling a turn now also stops the
+  run on Hermes, so the server isn't left burning tokens after you've moved on.
+  (`api.Client.OnRunStart` records the in-flight run id.)
+- **`GET /api/sessions/{id}` in `/session`.** The detail view now also shows
+  server-side numbers when available: message count, context tokens, the
+  `parent_session_id` (pre-compaction lineage), model, ended flag. Lenient
+  parsing — the `/api/sessions` response schema isn't published, so missing
+  fields are just skipped.
+- **`GET /api/sessions` in `/sessions` and `--session-list`.** Alongside the
+  local index, the real hermes-agent session list (id / message count / tokens /
+  title, with `(from <parent>)` on compaction continuations).
+- **`/v1/capabilities` is parsed** into `client.Caps` (feature flags) so later
+  features can gate on what a given Hermes build actually supports.
+
 ## 0.4.2 — approval-prompt hang fixed
 
 - **Fixed a hard hang**: at a `[y]es [n]o [a]ll [q]uit` approval prompt you
