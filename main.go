@@ -404,11 +404,10 @@ func runREPL(smode string) int {
 		}
 	}()
 
-	promptStr := a.ui.YouPrompt()
 	for {
-		input, err := ln.Prompt(promptStr)
-		if err == liner.ErrPromptAborted {
-			fmt.Fprintln(os.Stderr)
+		input, err := ln.Prompt(a.ui.SessionPrompt(rec.ID))
+		if err == liner.ErrPromptAborted { // Ctrl-C clears the line, never quits
+			fmt.Fprintln(os.Stderr, "  (use /exit to quit)")
 			continue
 		}
 		if err != nil { // io.EOF (Ctrl-D), or an unexpected liner error
