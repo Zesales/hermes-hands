@@ -56,10 +56,8 @@ func Load() (*Config, error) {
 		}
 	}
 	if merged["HERMES_API_URL"] == "" || merged["HERMES_API_KEY"] == "" {
-		if b, err := os.ReadFile(secPath); err == nil {
-			for k, v := range parseAssignments(b) {
-				merged[k] = v
-			}
+		if err := applyFallbackSecrets(merged, xdgConfigHome(proc)+"/hermes-hands", secPath); err != nil {
+			return nil, err
 		}
 	}
 
@@ -86,6 +84,45 @@ func Load() (*Config, error) {
 		ConfigPath:  cfgPath,
 		SecretsPath: secPath,
 	}, nil
+}
+
+// applyFallbackSecrets fills still-empty HERMES_API_* keys, only when a URL or
+// key is missing. The encrypted store (secrets.enc + keyseed, in confDir) is
+// authoritative for the fallback when present; a missing keyseed or a decrypt
+// failure is a hard error (never a silent fall-through). Only when there is no
+// secrets.enc at all does the narrowed-parser plaintext `secrets` file apply,
+// keeping pre-M10 installs working until they re-run setup.
+func applyFallbackSecrets(merged map[string]string, confDir, plainPath string) error {
+	encPath := confDir + "/secrets.enc"
+	seedPath := confDir + "/keyseed"
+
+	blob, err := os.ReadFile(encPath)
+	if err != nil {
+		if b, perr := os.ReadFile(plainPath); perr == nil {
+			for k, v := range parseAssignments(b) {
+				merged[k] = v
+			}
+		}
+		return nil
+	}
+
+	warnIfLoose(encPath)
+	seed, serr := os.ReadFile(seedPath)
+	if serr != nil {
+		return ErrSecretsUndecryptable
+	}
+	warnIfLoose(seedPath)
+
+	payload, derr := decryptBlob(blob, seed)
+	if derr != nil {
+		return ErrSecretsUndecryptable
+	}
+	for k, v := range payload {
+		if merged[k] == "" {
+			merged[k] = v
+		}
+	}
+	return nil
 }
 
 // LooksUnset ports hh_looks_unset: empty, or carrying an obvious placeholder
