@@ -49,14 +49,15 @@ const usageText = `hermes-hands - terminal chat with a central Hermes brain over
 Hermes holds the plan/memory; it drives a persistent local shell plus
 read_file / write_file / edit_file to see and act on the repo you're in.
 
-  hermes-hands                    open this repo's session (resumes; main use)
-  hermes-hands --new              open a fresh session instead
-  hermes-hands --session <id>     open a specific session
-  hermes-hands --rpc              JSON-lines session server for an editor/plugin
-  hermes-hands "message"          run one turn on this repo's session
-  … | hermes-hands -              same, message on stdin
+A session is one task. Continue it, or start a new one — there is no one-shot.
 
-  hermes-hands sessions           list local sessions
+  hermes-hands                    continue this repo's latest session (main use)
+  hermes-hands --session          same, explicitly
+  hermes-hands --session <id>     open a specific session  (id from --session-list)
+  hermes-hands --new              start a fresh session (new task)
+  hermes-hands --rpc              JSON-lines session server for an editor/plugin
+
+  hermes-hands --session-list     list sessions with id / turns / tokens
   hermes-hands sessions new       mint a session id (for --session / --rpc)
   hermes-hands setup              first-run config  (also: /setup in-session)
   hermes-hands check              preflight the API connection
@@ -67,20 +68,17 @@ read_file / write_file / edit_file to see and act on the repo you're in.
 
 // parsed is the outcome of the argv scan.
 type parsed struct {
-	action  string // "" | help | version | check | sessions | sessionnew | setup
-	errMsg  string // non-empty => fatal "unknown option" / "--session needs an id"
-	smode   string // "" (unset) | new | continue | <id>
-	oneshot []string
-	stdin   bool
-	rpc     bool
-	yolo    bool
+	action string // "" | help | version | check | sessions | sessionnew | setup
+	errMsg string // non-empty => fatal (unknown option / stray argument)
+	smode  string // "" (== continue) | new | continue | <id>
+	rpc    bool
+	yolo   bool
 }
 
-// parseArgs scans argv, first match winning per token; the eager subcommands
-// return immediately.
+// parseArgs scans argv, first match winning; the eager subcommands return
+// immediately. There is no positional message: every mode works on a session
+// (see runREPL / runRPC).
 func parseArgs(args []string) parsed {
-	// smode "" = unset: the REPL then resumes this dir's last session, a
-	// one-shot / stdin run starts fresh. -c and --new pin it explicitly.
 	p := parsed{}
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
@@ -93,7 +91,7 @@ func parseArgs(args []string) parsed {
 		case "check", "--check":
 			p.action = "check"
 			return p
-		case "sessions", "--list":
+		case "sessions", "--list", "--session-list":
 			if a == "sessions" && i+1 < len(args) && args[i+1] == "new" {
 				p.action = "sessionnew"
 			} else {
@@ -106,30 +104,27 @@ func parseArgs(args []string) parsed {
 		case "--rpc":
 			p.rpc = true
 		case "-c", "--continue":
-			// no-op: a bare run already resumes. Kept so old muscle memory
-			// and scripts don't hit "unknown option".
+			p.smode = "continue"
 		case "--new":
 			p.smode = "new"
 		case "--session":
-			i++
-			if i >= len(args) {
-				p.errMsg = "--session needs an id"
-				return p
+			// optional id: "--session" alone == continue the latest;
+			// "--session <id>" opens that one.
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				p.smode = args[i]
+			} else {
+				p.smode = "continue"
 			}
-			p.smode = args[i]
 		case "--yolo":
 			p.yolo = true
-		case "-":
-			p.stdin = true
-		case "--":
-			p.oneshot = append(p.oneshot, args[i+1:]...)
-			return p
 		default:
 			if strings.HasPrefix(a, "-") {
 				p.errMsg = "unknown option: " + a
-				return p
+			} else {
+				p.errMsg = "unexpected argument: " + a + " (there is no one-shot; start a session)"
 			}
-			p.oneshot = append(p.oneshot, a)
+			return p
 		}
 	}
 	return p
@@ -160,26 +155,16 @@ func main() {
 		os.Exit(runSetup())
 	}
 	if p.errMsg != "" {
-		if strings.HasPrefix(p.errMsg, "unknown option") {
-			fmt.Printf("BLOCKED: %s\n", p.errMsg)
-		} else {
-			fmt.Fprintf(os.Stderr, "hermes-hands: %s\n", p.errMsg)
-		}
+		fmt.Fprintf(os.Stderr, "hermes-hands: %s\n", p.errMsg)
 		os.Exit(1)
 	}
 
-	// Every mode works ON a session (resume by default, never a silent new one
-	// per invocation) so Hermes central isn't fragmented into throwaway
-	// sessions. --new / --session pin it; --rpc lets a caller hold one.
+	// Every mode works ON a session: a bare run (or --session with no id)
+	// continues this repo's latest, --new starts one, --session <id> opens a
+	// specific one, --rpc lets a caller hold one. No throwaway session per
+	// invocation, so the central Hermes isn't fragmented.
 	if p.rpc {
 		os.Exit(runRPC(orElse(p.smode, "continue")))
-	}
-	if p.stdin {
-		b, _ := io.ReadAll(os.Stdin)
-		os.Exit(runTurn(orElse(p.smode, "continue"), strings.TrimRight(string(b), "\n")))
-	}
-	if msg := strings.Join(p.oneshot, " "); msg != "" {
-		os.Exit(runTurn(orElse(p.smode, "continue"), msg))
 	}
 	os.Exit(runREPL(orElse(p.smode, "continue")))
 }
@@ -352,59 +337,12 @@ func gitBranch(root string) string {
 	return b
 }
 
-// --- one-shot / stdin turn (bash run_turn: answer -> stdout, frames -> stderr) ---
-
-func runTurn(smode, msg string) int {
-	if cfg := loadCfgOrExit(); notConfigured(cfg) {
-		reportNotConfigured(cfg)
-		return 1
-	}
-	a, err := newApp()
-	if err != nil {
-		fmt.Printf("BLOCKED: %v\n", err)
-		return 1
-	}
-	defer a.shell.Stop()
-
-	rec, err := a.store.Resolve(smode, a.repoRoot)
-	if err != nil {
-		fmt.Printf("BLOCKED: %s\n", err)
-		return 1
-	}
-
-	ctx := context.Background()
-	out := a.loop.Run(ctx, msg, rec, func(runID, sid string) { _ = a.store.BumpTurn(rec, runID, sid) })
-	if out.OK {
-		if changed, _ := a.store.SetTitleLocal(rec, msg); changed && rec.HermesSessionID != "" {
-			a.client.SetTitle(ctx, rec.HermesSessionID, rec.Title)
-		}
-		fmt.Println(out.Answer)
-		return 0
-	}
-	fmt.Println(out.Answer)
-	return 1
-}
-
 // --- REPL ---
 
 // notConfigured reports whether there is no usable URL+key yet — nothing worth
 // preflighting. Network is not touched.
 func notConfigured(cfg *config.Config) bool {
 	return config.LooksUnset(cfg.APIURL) || config.LooksUnset(cfg.APIKey)
-}
-
-// reportNotConfigured names which required settings are missing and how to set
-// them, then the caller exits. The bash version just refused; this says what is
-// missing instead of pointing at a file.
-func reportNotConfigured(cfg *config.Config) {
-	fmt.Println("BLOCKED: hermes-hands is not configured.")
-	if config.LooksUnset(cfg.APIURL) {
-		fmt.Fprintln(os.Stderr, "  HERMES_API_URL is not set")
-	}
-	if config.LooksUnset(cfg.APIKey) {
-		fmt.Fprintln(os.Stderr, "  HERMES_API_KEY is not set")
-	}
-	fmt.Fprintln(os.Stderr, "Run `hermes-hands setup`, or export the vars / put them in ~/.config/hermes-hands/secrets.")
 }
 
 func runREPL(smode string) int {
@@ -505,8 +443,12 @@ func runREPL(smode string) int {
 			fmt.Fprintln(os.Stderr)
 			continue
 		case "/session":
-			if rest == "" {
-				fmt.Fprintln(os.Stderr, "  usage: /session <id>   (ids from /sessions)")
+			if rest == "" { // no id -> show the current session's detail
+				fresh, _ := a.store.Resolve(rec.ID, a.repoRoot)
+				if fresh == nil {
+					fresh = rec
+				}
+				fmt.Fprint(os.Stderr, session.FormatDetail(fresh))
 				fmt.Fprintln(os.Stderr)
 				continue
 			}
@@ -572,7 +514,7 @@ func runREPL(smode string) int {
 		cancelTurn = cancel
 		turnMu.Unlock()
 
-		out := a.loop.Run(ctx, input, rec, func(runID, sid string) { _ = a.store.BumpTurn(rec, runID, sid) })
+		out := a.loop.Run(ctx, input, rec, func(runID, sid string, tok int) { _ = a.store.BumpTurn(rec, runID, sid, tok) })
 
 		turnMu.Lock()
 		cancelTurn = nil
