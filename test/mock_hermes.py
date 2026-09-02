@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mock Hermes Runs API for hermes-code tests. No network, no model.
+"""Mock Hermes Runs API for hermes-hands tests. No network, no model.
 
 MODE:
   plain      -> every run answers with {"calls":[],"final":"..."}

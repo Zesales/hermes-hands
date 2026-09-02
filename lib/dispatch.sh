@@ -14,8 +14,8 @@
 #   return 0 normally, 3 to abort the whole turn ([q] at an approval).
 # HC_REPO_ROOT must be set to the directory the turn is rooted at.
 
-HC_TOOL_MAX_OUT="${HERMES_CODE_MAX_OUTPUT:-20000}"     # bytes kept per call
-HC_TOOL_RUN_TIMEOUT="${HERMES_CODE_RUN_TIMEOUT:-120}"  # per shell command
+HC_TOOL_MAX_OUT="${HERMES_HANDS_MAX_OUTPUT:-20000}"     # bytes kept per call
+HC_TOOL_RUN_TIMEOUT="${HERMES_HANDS_RUN_TIMEOUT:-120}"  # per shell command
 
 # ---------------------------------------------------------------- persistent shell
 HC_SH_UP=0
@@ -63,7 +63,7 @@ _hc_resolve_in_repo() {
   return 1
 }
 
-# denylist for shell commands; HERMES_CODE_DENY adds '|'-separated case-globs
+# denylist for shell commands; HERMES_HANDS_DENY adds '|'-separated case-globs
 _hc_cmd_blocked() {
   local c=" $1 " g
   case "$c" in
@@ -74,9 +74,9 @@ _hc_cmd_blocked() {
   case "$c" in *" curl "*|*" wget "*)
     case "$c" in *"| sh"*|*"|sh"*|*"| bash"*|*"|bash"*) echo "pipe-to-shell download"; return 0 ;; esac ;;
   esac
-  if [[ -n "${HERMES_CODE_DENY:-}" ]]; then
-    IFS='|' read -r -a _dg <<< "$HERMES_CODE_DENY"
-    for g in "${_dg[@]}"; do [[ -n "$g" && "$1" == $g ]] && { echo "matches HERMES_CODE_DENY ($g)"; return 0; }; done
+  if [[ -n "${HERMES_HANDS_DENY:-}" ]]; then
+    IFS='|' read -r -a _dg <<< "$HERMES_HANDS_DENY"
+    for g in "${_dg[@]}"; do [[ -n "$g" && "$1" == $g ]] && { echo "matches HERMES_HANDS_DENY ($g)"; return 0; }; done
   fi
   return 1
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # util.sh - shared helpers. Sourced by every other lib; never run directly.
 
-hc_log()  { printf 'hermes-code: %s\n' "$*" >&2; }
-hc_warn() { printf 'hermes-code: WARNING: %s\n' "$*" >&2; }
+hc_log()  { printf 'hermes-hands: %s\n' "$*" >&2; }
+hc_warn() { printf 'hermes-hands: WARNING: %s\n' "$*" >&2; }
 
 # Print a BLOCKED line and exit non-zero. In --raw contexts callers wrap this.
 hc_die() { printf 'BLOCKED: %s\n' "$*"; exit 1; }
@@ -26,8 +26,8 @@ hc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # --- config / secrets ------------------------------------------------------
 # KEY=value files, sourced. Env vars already set win. secrets should be 0600.
 hc_load_config() {
-  local cfg="${HERMES_CODE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/hermes-code/config}"
-  local sec="${HERMES_CODE_SECRETS:-${XDG_CONFIG_HOME:-$HOME/.config}/hermes-code/secrets}"
+  local cfg="${HERMES_HANDS_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/hermes-hands/config}"
+  local sec="${HERMES_HANDS_SECRETS:-${XDG_CONFIG_HOME:-$HOME/.config}/hermes-hands/secrets}"
   [[ -r "$cfg" ]] && { set -a; . "$cfg"; set +a; }
   if { [[ -z "${HERMES_API_URL:-}" ]] || [[ -z "${HERMES_API_KEY:-}" ]]; } && [[ -r "$sec" ]]; then
     set -a; . "$sec"; set +a
@@ -45,8 +45,8 @@ hc_require_https() {   # $1 = url, $2 = var name for messages
   case "$1" in
     https://*) return 0 ;;
     http://127.0.0.1*|http://localhost*|http://0.0.0.0*|http://[::1]*)
-      [[ "${HERMES_CODE_ALLOW_HTTP:-}" == "1" ]] && { hc_warn "$2 is plain http on loopback (tests only)"; return 0; }
-      hc_die "$2 is plain http on loopback; set HERMES_CODE_ALLOW_HTTP=1 only for local tests." ;;
+      [[ "${HERMES_HANDS_ALLOW_HTTP:-}" == "1" ]] && { hc_warn "$2 is plain http on loopback (tests only)"; return 0; }
+      hc_die "$2 is plain http on loopback; set HERMES_HANDS_ALLOW_HTTP=1 only for local tests." ;;
     http://*) hc_die "$2 must be https:// - the bearer token may not cross the network unencrypted." ;;
     *) hc_die "$2 is not a http(s) URL: $1" ;;
   esac
@@ -70,14 +70,14 @@ hc_scrub() {
 }
 
 # --- approval gate -------------------------------------------------------
-# HERMES_CODE_APPROVE: ask (default) | auto | never
+# HERMES_HANDS_APPROVE: ask (default) | auto | never
 # hc_confirm <one-line summary> [<multiline detail>]  -> 0 approve, 1 deny, 2 abort-turn
 HC_APPROVE_ALL=0
 hc_confirm() {
   local summary="$1" detail="${2:-}"
-  case "${HERMES_CODE_APPROVE:-ask}" in
+  case "${HERMES_HANDS_APPROVE:-ask}" in
     auto) return 0 ;;
-    never) hc_warn "denied by policy (HERMES_CODE_APPROVE=never): $summary"; return 1 ;;
+    never) hc_warn "denied by policy (HERMES_HANDS_APPROVE=never): $summary"; return 1 ;;
   esac
   (( HC_APPROVE_ALL )) && return 0
   [[ -e /dev/tty ]] || { hc_warn "no tty for approval, denying: $summary"; return 1; }
