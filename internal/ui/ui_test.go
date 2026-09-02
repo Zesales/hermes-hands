@@ -83,19 +83,18 @@ func TestAnswerPlainPathIndents(t *testing.T) {
 
 func TestBannerByteExact(t *testing.T) {
 	var b strings.Builder
-	newUI(&b, false, false).Banner("0.1.0", "/home/x/repo", "hh_20260902T101112_abc123", "hh-agent-99")
+	newUI(&b, false, false).Banner("0.1.0", "/home/x/repo", "hh-agent-99")
 	want := "hermes-hands 0.1.0  ·  /home/x/repo\n" +
-		"hermes-hands · session 20260902T101112_abc123\n" +
 		"hermes-agent · session hh-agent-99\n" +
 		"/help  /new  /sessions  /check  /exit\n\n"
 	if b.String() != want {
 		t.Errorf("Banner =\n%q\nwant\n%q", b.String(), want)
 	}
 
-	// no server session id yet -> "(none yet)"
+	// no confirmed session id yet -> a "pending" note, no fabricated id
 	var b2 strings.Builder
-	newUI(&b2, false, false).Banner("0.1.0", "/r", "hh_x", "")
-	if !strings.Contains(b2.String(), "hermes-agent · session (none yet)") {
+	newUI(&b2, false, false).Banner("0.1.0", "/r", "")
+	if !strings.Contains(b2.String(), "hermes-agent · session (pending") {
 		t.Errorf("empty hermesID = %q", b2.String())
 	}
 }

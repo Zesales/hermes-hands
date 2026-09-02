@@ -120,19 +120,18 @@ func (u *UI) Answer(text string) {
 	io.WriteString(u.w, indentLines(strings.TrimSuffix(rendered, "\n"), "   "))
 }
 
-// Banner is the REPL header: name + version + cwd, then the two session ids
-// (this worker's local id and the one in play on the hermes-agent side, shown
-// so a divergence is visible), then the command list.
-func (u *UI) Banner(version, cwd, localID, hermesID string) {
+// Banner is the REPL header: name + version + cwd, then the hermes-agent-side
+// session id (the local worker id lives in the prompt, every line), then the
+// command list. hermesID is "" until the first turn confirms it.
+func (u *UI) Banner(version, cwd, hermesID string) {
+	agent := hermesID + " "
 	if hermesID == "" {
-		hermesID = "(none yet)"
+		agent = "(pending — confirmed on the first turn) "
 	}
 	fmt.Fprintf(u.w, "%s%shermes-hands%s %s%s  ·  %s%s\n",
 		u.cB, u.cHermes, u.cR, u.cDim, version, cwd, u.cR)
-	fmt.Fprintf(u.w, "%s%shermes-hands%s%s · session %s%s\n",
-		u.cB, u.cHermes, u.cR, u.cDim, strings.TrimPrefix(localID, "hh_"), u.cR)
 	fmt.Fprintf(u.w, "%s%shermes-agent%s%s · session %s%s\n",
-		u.cB, u.cAcc, u.cR, u.cDim, hermesID, u.cR)
+		u.cB, u.cAcc, u.cR, u.cDim, strings.TrimRight(agent, " "), u.cR)
 	fmt.Fprintf(u.w, "%s/help  /new  /sessions  /check  /exit%s\n\n", u.cDim, u.cR)
 }
 
