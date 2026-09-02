@@ -44,6 +44,10 @@ type Loop struct {
 	// UI). --rpc uses it to emit a JSON progress event.
 	OnTool func(tool, preview string, exit int)
 
+	// PendingNote carries a one-off line to prepend to the next turn's message
+	// (e.g. "the previous turn was cancelled"). Set by Run, consumed by Run.
+	PendingNote string
+
 	Vlogf func(string, ...any)
 	Warnf func(string, ...any)
 }
@@ -62,11 +66,15 @@ func (l *Loop) frame(userMsg string) string {
 		}
 	}
 	return "[hermes-hands — remote worker session; you are NOT local]\n" +
-		"This message is the operator at a terminal on their own machine. You act\n" +
-		"only by returning the envelope {\"calls\":[{\"tool\",\"args\"}],\"final\":null};\n" +
-		"I run the calls here and reply with {\"results\":[...]}. \"the readme\", \"this\n" +
-		"repo\", \"here\" all mean " + loc + " — you hold no copy, so reach for\n" +
-		"read_file or shell before saying you cannot see something.\n\n" +
+		"This message is the operator at a terminal on their own machine. The\n" +
+		"{\"calls\":[{\"tool\",\"args\"}],\"final\":null} envelope delegates work to me,\n" +
+		"but ONLY into the git repo at " + loc + ".\n" +
+		"\"the readme\" / \"this repo\" / \"here\" mean that directory — reach for\n" +
+		"read_file or shell there instead of saying you can't see it.\n" +
+		"Everything else you answer directly from your own context: what you know\n" +
+		"about the operator, your memory, our earlier conversation, general\n" +
+		"knowledge. Never delegate a read of your own files (SOUL.md, memory,\n" +
+		"~/.hermes/*, /root/.hermes/*) — those are on your side, not in the repo.\n\n" +
 		"operator: " + userMsg
 }
 
@@ -98,6 +106,10 @@ type callSpec struct {
 func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string, tokens int)) Outcome {
 	round := 1
 	send := l.frame(userMsg)
+	if l.PendingNote != "" { // a prior turn was cancelled — tell Hermes now
+		send = l.PendingNote + "\n\n" + send
+		l.PendingNote = ""
+	}
 	turnlog := "[operator] " + userMsg + "\n"
 	recap := false
 	fixups := 0
@@ -188,7 +200,12 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 
 			result, derr := l.Dispatch.Dispatch(tool, args)
 			if errors.Is(derr, dispatch.ErrAbortTurn) {
-				return Outcome{Answer: "(turn aborted by operator at a " + tool + " approval)", OK: true}
+				// Ctrl-C / "q" at an approval = decline this call AND stop the
+				// turn. Nothing more runs; Hermes is told at the start of the
+				// next turn so its transcript stays coherent.
+				l.PendingNote = "[the previous turn was cancelled by the operator at the \"" + tool +
+					"\" approval — that call was declined and nothing further was run. Treat it as not done.]"
+				return Outcome{Answer: "(cancelled — declined " + tool + " and stopped the turn)", OK: true}
 			}
 			if l.UI != nil {
 				l.UI.Call(tool, preview, result.Exit)
