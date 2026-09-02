@@ -40,6 +40,10 @@ type Loop struct {
 	RepoRoot  string
 	GitBranch func() string
 
+	// OnTool, when set, is called once per executed tool call (in addition to
+	// UI). --rpc uses it to emit a JSON progress event.
+	OnTool func(tool, preview string, exit int)
+
 	Vlogf func(string, ...any)
 	Warnf func(string, ...any)
 }
@@ -188,6 +192,9 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			}
 			if l.UI != nil {
 				l.UI.Call(tool, preview, result.Exit)
+			}
+			if l.OnTool != nil {
+				l.OnTool(tool, preview, result.Exit)
 			}
 
 			e := resultElem{

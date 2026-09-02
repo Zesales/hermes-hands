@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -27,18 +28,21 @@ func TestParseArgsTable(t *testing.T) {
 		{"sessions", []string{"sessions"}, parsed{action: "sessions"}},
 		{"list flag", []string{"--list"}, parsed{action: "sessions"}},
 		{"setup", []string{"setup"}, parsed{action: "setup"}},
-		{"continue", []string{"-c"}, parsed{smode: "continue"}},
-		{"continue long", []string{"--continue"}, parsed{smode: "continue"}},
+		{"continue no-op", []string{"-c"}, parsed{}},
+		{"continue long no-op", []string{"--continue"}, parsed{}},
 		{"new explicit", []string{"--new"}, parsed{smode: "new"}},
+		{"rpc", []string{"--rpc"}, parsed{rpc: true}},
 		{"session id", []string{"--session", "hh_abc"}, parsed{smode: "hh_abc"}},
 		{"session missing id", []string{"--session"}, parsed{errMsg: "--session needs an id"}},
+		{"sessions new", []string{"sessions", "new"}, parsed{action: "sessionnew"}},
+		{"sessions list", []string{"sessions"}, parsed{action: "sessions"}},
 		{"yolo", []string{"--yolo"}, parsed{yolo: true}},
 		{"stdin dash", []string{"-"}, parsed{stdin: true}},
 		{"oneshot words", []string{"why", "is", "ci", "red"}, parsed{oneshot: []string{"why", "is", "ci", "red"}}},
 		{"double dash rest", []string{"--", "check", "--help"}, parsed{oneshot: []string{"check", "--help"}}},
 		{"unknown option", []string{"--bogus"}, parsed{errMsg: "unknown option: --bogus"}},
 		{"eager check wins mid-parse", []string{"foo", "check"}, parsed{action: "check", oneshot: []string{"foo"}}},
-		{"continue then oneshot", []string{"-c", "and", "fix"}, parsed{smode: "continue", oneshot: []string{"and", "fix"}}},
+		{"continue then oneshot", []string{"-c", "and", "fix"}, parsed{oneshot: []string{"and", "fix"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,17 +54,23 @@ func TestParseArgsTable(t *testing.T) {
 	}
 }
 
-func TestUsageTextByteExact(t *testing.T) {
-	// The last line must not carry an extra trailing blank line (matches
-	// `cat <<'EOF'`).
-	if !strings.HasSuffix(usageText, "  --new   force a fresh session      --yolo   skip run/write approvals\n") {
-		t.Errorf("usage text tail is wrong:\n%q", usageText[len(usageText)-90:])
-	}
+func TestUsageTextShape(t *testing.T) {
 	if !strings.HasPrefix(usageText, "hermes-hands - terminal chat with a central Hermes brain over its Runs API.\n") {
 		t.Errorf("usage text head is wrong")
 	}
+	if !strings.HasSuffix(usageText, "\n") || strings.HasSuffix(usageText, "\n\n") {
+		t.Errorf("usage text must end with exactly one newline")
+	}
 	if strings.Contains(usageText, "\n\n\n") {
 		t.Errorf("usage text has a triple newline")
+	}
+	for _, want := range []string{"--rpc", "sessions new", "/setup in-session", "/yolo in-session"} {
+		if !strings.Contains(usageText, want) {
+			t.Errorf("usage text missing %q", want)
+		}
+	}
+	if strings.Contains(usageText, "hermes-hands -c") {
+		t.Errorf("usage text still documents the removed -c flag")
 	}
 }
 
@@ -193,5 +203,32 @@ func TestShellQuoteQRoundTrips(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestSplitCmd(t *testing.T) {
+	for _, tc := range []struct{ in, cmd, rest string }{
+		{"", "", ""},
+		{"  ", "", ""},
+		{"/help", "/help", ""},
+		{"/session hh_abc123", "/session", "hh_abc123"},
+		{"/session   hh_abc  ", "/session", "hh_abc"},
+		{"hello world", "hello", "world"},
+		{"just-one-word", "just-one-word", ""},
+	} {
+		c, r := splitCmd(tc.in)
+		if c != tc.cmd || r != tc.rest {
+			t.Errorf("splitCmd(%q) = (%q,%q), want (%q,%q)", tc.in, c, r, tc.cmd, tc.rest)
+		}
+	}
+}
+
+func TestRPCReqUnmarshal(t *testing.T) {
+	var r rpcReq
+	if err := json.Unmarshal([]byte(`{"id":7,"type":"turn","text":"hi"}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Type != "turn" || r.Text != "hi" || string(r.ID) != "7" {
+		t.Errorf("rpcReq = %+v", r)
 	}
 }

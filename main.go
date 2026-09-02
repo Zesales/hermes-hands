@@ -43,31 +43,36 @@ var (
 	commit  = ""
 )
 
-// usageText is the verbatim body of the bash `usage()` heredoc
-// (bin/hermes-hands). It must stay byte-identical.
+// usageText is what `hermes-hands -h` prints. Everything past first-run config
+// happens inside the session with /commands; the shell surface stays small.
 const usageText = `hermes-hands - terminal chat with a central Hermes brain over its Runs API.
 Hermes holds the plan/memory; it drives a persistent local shell plus
 read_file / write_file / edit_file to see and act on the repo you're in.
 
-  hermes-hands                    resume this repo's last session (main use)
-  hermes-hands --new              start a fresh session instead
+  hermes-hands                    open this repo's session (resumes; main use)
+  hermes-hands --new              open a fresh session instead
   hermes-hands --session <id>     open a specific session
+  hermes-hands --rpc              JSON-lines session server for an editor/plugin
+  hermes-hands "message"          run one turn on this repo's session
+  … | hermes-hands -              same, message on stdin
+
   hermes-hands sessions           list local sessions
-  hermes-hands setup              interactive first-run config
+  hermes-hands sessions new       mint a session id (for --session / --rpc)
+  hermes-hands setup              first-run config  (also: /setup in-session)
   hermes-hands check              preflight the API connection
   hermes-hands --version          print version
 
-  hermes-hands "message"          one-shot (scripting); also: … | hermes-hands -
-  --new   force a fresh session      --yolo   skip run/write approvals
+  --yolo   skip run/write approvals   (also: /yolo in-session)
 `
 
-// parsed is the outcome of the argv scan (bash bin/hermes-hands:89-111).
+// parsed is the outcome of the argv scan.
 type parsed struct {
-	action  string // "" | help | version | check | sessions | setup
+	action  string // "" | help | version | check | sessions | sessionnew | setup
 	errMsg  string // non-empty => fatal "unknown option" / "--session needs an id"
-	smode   string // new | continue | <id>
+	smode   string // "" (unset) | new | continue | <id>
 	oneshot []string
 	stdin   bool
+	rpc     bool
 	yolo    bool
 }
 
@@ -89,13 +94,20 @@ func parseArgs(args []string) parsed {
 			p.action = "check"
 			return p
 		case "sessions", "--list":
-			p.action = "sessions"
+			if a == "sessions" && i+1 < len(args) && args[i+1] == "new" {
+				p.action = "sessionnew"
+			} else {
+				p.action = "sessions"
+			}
 			return p
 		case "setup":
 			p.action = "setup"
 			return p
+		case "--rpc":
+			p.rpc = true
 		case "-c", "--continue":
-			p.smode = "continue"
+			// no-op: a bare run already resumes. Kept so old muscle memory
+			// and scripts don't hit "unknown option".
 		case "--new":
 			p.smode = "new"
 		case "--session":
@@ -142,6 +154,8 @@ func main() {
 		os.Exit(runCheck())
 	case "sessions":
 		os.Exit(runSessions())
+	case "sessionnew":
+		os.Exit(runSessionNew())
 	case "setup":
 		os.Exit(runSetup())
 	}
@@ -154,16 +168,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Every mode works ON a session (resume by default, never a silent new one
+	// per invocation) so Hermes central isn't fragmented into throwaway
+	// sessions. --new / --session pin it; --rpc lets a caller hold one.
+	if p.rpc {
+		os.Exit(runRPC(orElse(p.smode, "continue")))
+	}
 	if p.stdin {
 		b, _ := io.ReadAll(os.Stdin)
-		// bash run_turn "$(cat)" — command substitution strips trailing newlines.
-		os.Exit(runTurn(orElse(p.smode, "new"), strings.TrimRight(string(b), "\n")))
+		os.Exit(runTurn(orElse(p.smode, "continue"), strings.TrimRight(string(b), "\n")))
 	}
 	if msg := strings.Join(p.oneshot, " "); msg != "" {
-		os.Exit(runTurn(orElse(p.smode, "new"), msg))
+		os.Exit(runTurn(orElse(p.smode, "continue"), msg))
 	}
-	// Bare `hermes-hands` resumes this directory's last session (a terminal you
-	// re-open, not a fresh one each time); --new / -c pin it.
 	os.Exit(runREPL(orElse(p.smode, "continue")))
 }
 
@@ -172,6 +189,17 @@ func orElse(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// splitCmd separates a REPL line into its first word (the /command) and the
+// rest. A plain message returns (firstWord, rest) too; only the switch's
+// /command cases act on it, everything else is sent as-is.
+func splitCmd(s string) (cmd, rest string) {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, ' '); i > 0 {
+		return s[:i], strings.TrimSpace(s[i+1:])
+	}
+	return s, ""
 }
 
 // --- version strings (bash hh_version + HH_VERSION) ---
@@ -380,23 +408,20 @@ func reportNotConfigured(cfg *config.Config) {
 }
 
 func runREPL(smode string) int {
-	cfg := loadCfgOrExit()
-	if notConfigured(cfg) {
-		reportNotConfigured(cfg)
-		return 1
-	}
-
 	a, err := newApp()
 	if err != nil {
 		fmt.Printf("BLOCKED: %v\n", err)
 		return 1
 	}
-	defer a.shell.Stop()
+	defer func() { a.shell.Stop() }()
 
-	if _, err := a.client.Check(context.Background()); err != nil {
-		fmt.Printf("BLOCKED: %v\n", err)
-		fmt.Fprintln(os.Stderr, "(re-run `hermes-hands setup` to fix the URL or key)")
-		return 1
+	configured := !notConfigured(a.cfg)
+	if configured {
+		if _, err := a.client.Check(context.Background()); err != nil {
+			fmt.Printf("BLOCKED: %v\n", err)
+			fmt.Fprintln(os.Stderr, "(fix the URL/key: `hermes-hands setup`, or /setup in-session)")
+			return 1
+		}
 	}
 
 	rec, err := a.store.Resolve(smode, a.repoRoot)
@@ -410,9 +435,12 @@ func runREPL(smode string) int {
 		agentSID = rec.HermesSessionID
 	}
 	a.ui.Banner(bareVersion(), a.repoRoot, agentSID)
+	if !configured {
+		fmt.Fprintln(os.Stderr, "hermes-hands is not configured — type /setup")
+	}
 
 	ln := liner.NewLiner()
-	defer ln.Close()
+	defer func() { ln.Close() }()
 	ln.SetCtrlCAborts(true)
 
 	// SIGINT during a turn -> cancel the turn context + kill the shell child,
@@ -450,8 +478,9 @@ func runREPL(smode string) int {
 			break
 		}
 
-		switch input {
-		case "", " ":
+		cmd, rest := splitCmd(input)
+		switch cmd {
+		case "":
 			continue
 		case "/exit", "/quit", "/q":
 			return 0
@@ -459,10 +488,53 @@ func runREPL(smode string) int {
 			a.ui.Help(a.repoRoot)
 			fmt.Fprintln(os.Stderr)
 			continue
+		case "/setup":
+			if code := doSetup(bufio.NewReader(os.Stdin), xdgConfigHome()+"/hermes-hands", false); code == 0 {
+				if na, e := newApp(); e == nil {
+					a.shell.Stop()
+					a = na
+					configured = !notConfigured(a.cfg)
+					if _, e2 := a.client.Check(context.Background()); e2 != nil {
+						fmt.Fprintf(os.Stderr, "BLOCKED: %v\n", e2)
+					}
+					if nr, e3 := a.store.Resolve(smode, a.repoRoot); e3 == nil {
+						rec = nr
+					}
+				}
+			}
+			fmt.Fprintln(os.Stderr)
+			continue
+		case "/session":
+			if rest == "" {
+				fmt.Fprintln(os.Stderr, "  usage: /session <id>   (ids from /sessions)")
+				fmt.Fprintln(os.Stderr)
+				continue
+			}
+			nr, e := a.store.Resolve(rest, a.repoRoot)
+			if e != nil {
+				fmt.Fprintf(os.Stderr, "  %v\n\n", e)
+				continue
+			}
+			rec = nr
+			a.ui.NewSessionNote(rec.ID)
+			continue
+		case "/yolo":
+			if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
+				if ta.Mode == "auto" {
+					ta.Mode = "ask"
+					fmt.Fprintln(os.Stderr, "  approvals: ON — shell / write ask first")
+				} else {
+					ta.Mode = "auto"
+					fmt.Fprintln(os.Stderr, "  approvals: OFF (yolo) — shell / write run unattended")
+				}
+			}
+			fmt.Fprintln(os.Stderr)
+			continue
 		case "/check":
 			if res, e := a.client.Check(context.Background()); e != nil {
 				fmt.Fprintf(os.Stderr, "BLOCKED: %s\n", e)
 			} else {
+				configured = true
 				fmt.Fprintf(os.Stderr, "API OK: %s @ %s\n", res.Model, res.Base)
 			}
 			fmt.Fprintln(os.Stderr)
@@ -479,6 +551,12 @@ func runREPL(smode string) int {
 		case "/sessions":
 			recs, _ := a.store.List()
 			fmt.Fprint(os.Stderr, session.FormatList(recs))
+			fmt.Fprintln(os.Stderr)
+			continue
+		}
+
+		if !configured {
+			fmt.Fprintln(os.Stderr, "  not configured — type /setup first")
 			fmt.Fprintln(os.Stderr)
 			continue
 		}
@@ -556,6 +634,25 @@ func runSessions() int {
 	}
 	recs, _ := store.List()
 	fmt.Print(session.FormatList(recs))
+	return 0
+}
+
+// runSessionNew mints one session rooted at the cwd and prints its id on
+// stdout — a plugin captures it once and then drives it with --session <id> or
+// --rpc, instead of spawning a new session per call.
+func runSessionNew() int {
+	cfg := loadCfgOrExit()
+	store, err := session.Open(cfg.StateDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+		return 1
+	}
+	rec, err := store.Resolve("new", physicalCwd())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+		return 1
+	}
+	fmt.Println(rec.ID)
 	return 0
 }
 
