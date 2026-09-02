@@ -103,8 +103,6 @@ func parseArgs(args []string) parsed {
 			return p
 		case "--rpc":
 			p.rpc = true
-		case "-c", "--continue":
-			p.smode = "continue"
 		case "--new":
 			p.smode = "new"
 		case "--session":
@@ -478,6 +476,20 @@ func runREPL(smode string) int {
 			} else {
 				configured = true
 				fmt.Fprintf(os.Stderr, "API OK: %s @ %s\n", res.Model, res.Base)
+			}
+			fmt.Fprintln(os.Stderr)
+			continue
+		case "/compact", "/compress":
+			if rec.HermesSessionID == "" {
+				fmt.Fprintln(os.Stderr, "  no hermes-agent session yet — run a turn first")
+				fmt.Fprintln(os.Stderr)
+				continue
+			}
+			fmt.Fprintln(os.Stderr, "  requesting compaction…")
+			if e := a.client.Compress(context.Background(), rec.HermesSessionID, rest); e != nil {
+				fmt.Fprintf(os.Stderr, "  BLOCKED: %v\n", e)
+			} else {
+				fmt.Fprintln(os.Stderr, "  compaction requested — the next turn threads into the compacted session")
 			}
 			fmt.Fprintln(os.Stderr)
 			continue
