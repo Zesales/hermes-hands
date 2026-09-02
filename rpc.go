@@ -139,7 +139,7 @@ func runRPC(smode string) int {
 			cancelTurn = cancel
 			turnMu.Unlock()
 
-			out := a.loop.Run(ctx, req.Text, rec, func(runID, sid string) { _ = a.store.BumpTurn(rec, runID, sid) })
+			out := a.loop.Run(ctx, req.Text, rec, func(runID, sid string, tok int) { _ = a.store.BumpTurn(rec, runID, sid, tok) })
 
 			turnMu.Lock()
 			cancelTurn = nil

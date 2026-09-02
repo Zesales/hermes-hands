@@ -52,7 +52,7 @@ func run(t *testing.T, a Asker, d *dispatch.Dispatcher, maxRounds int) (Outcome,
 	var persisted [][2]string
 	sa, _ := a.(*scriptAsker)
 	l := &Loop{API: a, Dispatch: d, MaxRounds: maxRounds}
-	out := l.Run(context.Background(), "hello", rec(), func(r, s string) {
+	out := l.Run(context.Background(), "hello", rec(), func(r, s string, _ int) {
 		persisted = append(persisted, [2]string{r, s})
 	})
 	return out, persisted, sa
@@ -282,7 +282,7 @@ func TestRunResultsHTMLNotEscapedAndScrubbed(t *testing.T) {
 		reply(`{"calls":[],"final":"ok"}`, true),
 	}}
 	l := &Loop{API: sa, Dispatch: d, MaxRounds: 8, Scrub: redact.Scrub}
-	l.Run(context.Background(), "hi", rec(), func(string, string) {})
+	l.Run(context.Background(), "hi", rec(), func(string, string, int) {})
 
 	got := sa.msgs[1]
 	if !strings.Contains(got, "a<b>&c") {
@@ -327,7 +327,7 @@ func TestRunFramesFirstMessage(t *testing.T) {
 		RepoRoot:  "/home/me/proj",
 		GitBranch: func() string { return "main" },
 	}
-	out := l.Run(context.Background(), "was hälst du von der readme ?", rec(), func(string, string) {})
+	out := l.Run(context.Background(), "was hälst du von der readme ?", rec(), func(string, string, int) {})
 	if !out.OK || out.Answer != "ok" {
 		t.Fatalf("out = %+v", out)
 	}
@@ -348,7 +348,7 @@ func TestRunNoFrameWithoutRepoRoot(t *testing.T) {
 	d := realDisp(t, prompt.AutoApprover{})
 	sa := &scriptAsker{replies: []api.AskResult{reply(`{"calls":[],"final":"ok"}`, true)}}
 	l := &Loop{API: sa, Dispatch: d, MaxRounds: 8, Scrub: redact.Scrub}
-	_ = l.Run(context.Background(), "hello", rec(), func(string, string) {})
+	_ = l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
 	if sa.msgs[0] != "hello" {
 		t.Errorf("without RepoRoot the message must pass through, got %q", sa.msgs[0])
 	}

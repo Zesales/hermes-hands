@@ -32,6 +32,8 @@ type Record struct {
 	Updated          string `json:"updated"`
 	Turns            int    `json:"turns"`
 	LastRunID        string `json:"last_run_id,omitempty"`
+	LastTokens       int    `json:"last_tokens,omitempty"` // best-effort tokens from the last run's usage
+	Splits           int    `json:"splits,omitempty"`      // times Hermes handed back a different session id (~ compactions)
 
 	path string // on-disk path; not serialised
 }
@@ -129,14 +131,18 @@ func (s *Store) Resolve(mode, cwd string) (*Record, error) {
 }
 
 // BumpTurn ports _hh_session_write: after a completed run, bump turns, record
-// the run id and time, and adopt the server's session_id if it handed back a
-// different one. Mutates rec in place so the loop's next round uses the
-// adopted id.
-func (s *Store) BumpTurn(rec *Record, runID, serverSID string) error {
+// the run id / time / token count, and adopt the server's session_id if it
+// handed back a different one (counting that as a split ~ compaction). Mutates
+// rec in place so the loop's next round uses the adopted id.
+func (s *Store) BumpTurn(rec *Record, runID, serverSID string, tokens int) error {
 	rec.LastRunID = runID
 	rec.Updated = s.nowFn().UTC().Format("2006-01-02T15:04:05Z")
 	rec.Turns++
+	if tokens > 0 {
+		rec.LastTokens = tokens
+	}
 	if serverSID != "" && serverSID != rec.HermesSessionID {
+		rec.Splits++
 		rec.HermesSessionID = serverSID
 	}
 	return s.write(rec)
@@ -186,7 +192,7 @@ func (s *Store) List() ([]Record, error) {
 // its cwd) — the DIR column carries the location instead.
 func FormatList(recs []Record) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%-24s  %5s  %-19s  %-16s  %s\n", "ID", "TURNS", "UPDATED", "DIR", "TITLE")
+	fmt.Fprintf(&b, "%-24s  %5s  %8s  %-19s  %-14s  %s\n", "ID", "TURNS", "TOKENS", "UPDATED", "DIR", "TITLE")
 	for _, r := range recs {
 		upd := r.Updated
 		if len(upd) > 19 {
@@ -196,12 +202,52 @@ func FormatList(recs []Record) string {
 		if dir == "." || dir == "/" || dir == "" {
 			dir = r.Cwd
 		}
-		if len(dir) > 16 {
-			dir = dir[:15] + "…"
+		if len(dir) > 14 {
+			dir = dir[:13] + "…"
 		}
-		fmt.Fprintf(&b, "%-24s  %5d  %-19s  %-16s  %s\n", r.ID, r.Turns, upd, dir, r.Title)
+		tok := "-"
+		if r.LastTokens > 0 {
+			tok = "~" + strconv.Itoa(r.LastTokens)
+		}
+		fmt.Fprintf(&b, "%-24s  %5d  %8s  %-19s  %-14s  %s\n", r.ID, r.Turns, tok, upd, dir, r.Title)
 	}
 	return b.String()
+}
+
+// FormatDetail renders one session for the in-REPL `/session` view: local id,
+// the hermes-agent session id, turn count, split count (~ compactions), the
+// last run's token count, and timestamps.
+//
+// Hermes does not yet expose real context-window usage or a compaction count
+// via the API (NousResearch/hermes-agent#15618); "tokens" is the last run's
+// cumulative billing usage and "splits" counts how many times Hermes handed
+// back a new session id (which a compaction/session-split causes).
+func FormatDetail(r *Record) string {
+	tok := "unknown"
+	if r.LastTokens > 0 {
+		tok = "~" + strconv.Itoa(r.LastTokens) + " (last run, billing usage)"
+	}
+	title := r.Title
+	if title == "" {
+		title = "(none yet)"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "  hermes-hands session : %s\n", r.ID)
+	fmt.Fprintf(&b, "  hermes-agent session : %s\n", orDash(r.HermesSessionID))
+	fmt.Fprintf(&b, "  title                : %s\n", title)
+	fmt.Fprintf(&b, "  turns                : %d\n", r.Turns)
+	fmt.Fprintf(&b, "  splits (~compactions): %d\n", r.Splits)
+	fmt.Fprintf(&b, "  tokens               : %s\n", tok)
+	fmt.Fprintf(&b, "  created / updated    : %s  /  %s\n", r.Created, r.Updated)
+	fmt.Fprintf(&b, "  dir                  : %s\n", r.Cwd)
+	return b.String()
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // load reads the record for id. The id is taken from the filename (bash uses
