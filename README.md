@@ -41,11 +41,9 @@ curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.s
 hermes-hands setup      # asks for your Hermes API URL + key, writes config
 ```
 
-The installer drops **one self-contained file** at `~/.local/bin/hermes-hands`
-(a release binary, or built from source with `git`+`jq`). Re-run it to update.
-From a checkout: `make install` (build + copy the single file) or `make
-dev-install` (symlink `bin/hermes-hands`, for hacking on it). `make build`
-produces `dist/hermes-hands` on its own.
+That drops **one self-contained file** at `~/.local/bin/hermes-hands` — plain
+bash you can `less`, so you can see exactly what it will run. Re-run the same
+`curl … | sh` any time to update.
 
 `setup` writes `~/.config/hermes-hands/{config,secrets}` (secrets `chmod 600`)
 and offers to source them from `~/.bashrc`. The key is your gateway's
@@ -151,10 +149,24 @@ runs only — your phone and web UI never see it.
   on Hermes' compaction; start a `/new` session for a new task.
 - No streaming of the final answer yet (the loop polls run status).
 
-## Tests
+## Development
 
-`./test/run_tests.sh` — offline, against `test/mock_hermes.py`. No network, no
-model. CI runs shellcheck + these on every push.
+```sh
+git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
+make dev-install     # symlink bin/hermes-hands onto your PATH (runs from the checkout)
+make test            # offline suite against test/mock_hermes.py - no network, no model
+make lint            # shellcheck
+```
+
+Source layout: `bin/hermes-hands` (entry) + `lib/*.sh` (util, ui, session, api,
+dispatch, loop) + `share/instructions.md`. `build.sh` bundles all of it into the
+single `dist/hermes-hands` (libs inlined, instructions base64'd) — that's what a
+release ships and what `install.sh` fetches. CI runs shellcheck, the offline
+suite, and the bundle build on every push.
+
+**Releasing:** bump `VERSION`, tag `vX.Y.Z`, `make build`, upload `dist/hermes-hands`
+as a release asset named `hermes-hands`. `install.sh` prefers that asset and only
+clones + builds from source when no release exists.
 
 ## License
 
