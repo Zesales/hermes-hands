@@ -34,8 +34,36 @@ type Loop struct {
 	MaxRounds int
 	Scrub     func(string) string
 
+	// RepoRoot / GitBranch feed the per-turn frame that reminds Hermes it is
+	// driving a remote terminal and names the cwd. Both optional; an empty
+	// RepoRoot disables framing (tests).
+	RepoRoot  string
+	GitBranch func() string
+
 	Vlogf func(string, ...any)
 	Warnf func(string, ...any)
+}
+
+// frame wraps the operator's message so every turn re-establishes that Hermes
+// is remote, must answer with the tool-call envelope, and what "here" / "the
+// repo" resolves to. Without a RepoRoot it is a passthrough.
+func (l *Loop) frame(userMsg string) string {
+	if l.RepoRoot == "" {
+		return userMsg
+	}
+	loc := "cwd: " + l.RepoRoot
+	if l.GitBranch != nil {
+		if b := l.GitBranch(); b != "" {
+			loc += "  (git branch: " + b + ")"
+		}
+	}
+	return "[hermes-hands — remote worker session; you are NOT local]\n" +
+		"This message is the operator at a terminal on their own machine. You act\n" +
+		"only by returning the envelope {\"calls\":[{\"tool\",\"args\"}],\"final\":null};\n" +
+		"I run the calls here and reply with {\"results\":[...]}. \"the readme\", \"this\n" +
+		"repo\", \"here\" all mean " + loc + " — you hold no copy, so reach for\n" +
+		"read_file or shell before saying you cannot see something.\n\n" +
+		"operator: " + userMsg
 }
 
 // Outcome is the turn result. OK == false means Answer is a "BLOCKED: ..."
@@ -65,8 +93,8 @@ type callSpec struct {
 // re-reads next round).
 func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string)) Outcome {
 	round := 1
-	send := userMsg
-	turnlog := ""
+	send := l.frame(userMsg)
+	turnlog := "[operator] " + userMsg + "\n"
 	recap := false
 	fixups := 0
 
