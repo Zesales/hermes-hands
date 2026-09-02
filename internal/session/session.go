@@ -107,7 +107,8 @@ func (s *Store) Resolve(mode, cwd string) (*Record, error) {
 		if id, ok := s.LatestForCwd(cwd); ok {
 			rec, err = s.load(id)
 		} else {
-			s.warnf("no session for this directory yet - starting a new one")
+			// first time in this directory: just start one, quietly - the
+			// REPL banner already shows the new session id.
 			rec, err = s.New(cwd)
 		}
 	case "new", "":
