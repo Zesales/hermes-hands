@@ -128,11 +128,12 @@ func (u *UI) Banner(version, cwd, sessionID string) {
 		u.cDim, strings.TrimPrefix(sessionID, "hh_"), u.cR)
 }
 
-// YouPrompt is the REPL input prompt. It MUST stay free of ANSI escapes:
-// liner.Prompt rejects any prompt containing a control rune (ErrInvalidPrompt),
-// which would make the REPL exit immediately on a colour-capable terminal.
-func (u *UI) YouPrompt() string {
-	return "you ❯ "
+// SessionPrompt is the REPL input prompt: "session <id> > ". It MUST stay free
+// of ANSI escapes — liner.Prompt rejects any prompt containing a control rune
+// (ErrInvalidPrompt), which would make the REPL exit right after the banner on
+// a colour-capable terminal.
+func (u *UI) SessionPrompt(id string) string {
+	return "session " + strings.TrimPrefix(id, "hh_") + " > "
 }
 
 // NewSessionNote ports the `/new` line: "— new session <id> —" (dim), then a
