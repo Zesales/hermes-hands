@@ -55,26 +55,32 @@ version.
 
 ## Use
 
-The primary mode is the **REPL** — coding is multi-turn (look, ask, look again,
-change, verify) and each turn threads into the same Hermes session. The one-shot
-forms are for quick questions and scripting.
+The primary mode is the **REPL**. Every mode works **on a session** — a bare
+run, a one-shot, and `--rpc` all resume this repo's existing session rather than
+minting a throwaway one per call, so the central Hermes isn't fragmented.
+`--new` forces a fresh session; `--session <id>` pins one.
 
 ```sh
-hermes-hands                       # REPL, rooted at the current directory
-hermes-hands "why is CI failing?"  # one-shot, plain output on stdout
-hermes-hands -c "and now fix it"   # continue this directory's latest session
-hermes-hands --new "…"             # force a fresh session
-hermes-hands --session <id> "…"    # a specific session
-hermes-hands --yolo "…"            # skip approval prompts
-… | hermes-hands -                 # read the message from stdin
+hermes-hands                       # open this repo's session (resumes)
+hermes-hands --new                 # open a fresh session instead
+hermes-hands --session <id>        # open a specific session
+hermes-hands "why is CI failing?"  # run one turn on this repo's session, answer on stdout
+… | hermes-hands -                 # same, message on stdin
+hermes-hands --yolo …              # skip approval prompts for this run
 hermes-hands sessions              # list local sessions
+hermes-hands sessions new          # mint a session id (prints it; for --session / --rpc)
 hermes-hands check                 # preflight the connection
+hermes-hands --rpc                 # JSON-lines session server for an editor/plugin
 ```
 
-REPL commands: `/help` `/new` `/sessions` `/check` `/exit` (`Ctrl-D` also exits;
-`Ctrl-C` cancels the current turn and returns to the prompt). Tool calls are
-shown as they run (`⟩ shell npm test… → exit 0`); the final answer renders
-through `glow`/`bat`/`fmt` if installed.
+`-c` / `--continue` still parse (no-op — a bare run already resumes).
+
+REPL commands: `/help` `/new` `/sessions` `/session <id>` `/setup` `/yolo`
+`/check` `/exit` (`Ctrl-D` also exits; `Ctrl-C` at the prompt just hints, during
+a turn it cancels the turn). `/setup` configures without leaving the session and
+the REPL starts even when unconfigured. Tool calls are shown as they run
+(`⟩ shell npm test… → exit 0`); the final answer renders through
+`glow`/`bat`/`fmt` if installed.
 
 Hermes drives these tools, all in the directory you launched from:
 
@@ -105,9 +111,46 @@ CLI adopts it. If the server ever rejects the id, the CLI retries fresh (keeping
 the headers) and falls back to a local transcript recap for that turn.
 
 The `/v1` API has no endpoint to *list* sessions, so a thin local index lives in
-`$XDG_STATE_HOME/hermes-hands/sessions/` purely to make `-c` (continue this
+`$XDG_STATE_HOME/hermes-hands/sessions/` purely to make a bare run (resume this
 repo's latest), `--session <id>`, and `sessions` work offline. Titles are also
 mirrored into Hermes via a best-effort `PATCH /api/sessions/{id}`.
+
+## Plugin / editor integration
+
+`hermes-hands --rpc` is a **persistent JSON-lines session server**: one process,
+one held session, driven over stdin/stdout. An editor extension spawns it once
+and streams turns — it does **not** script the interactive REPL, and it does not
+spawn a process per turn (that would fragment the central Hermes into throwaway
+sessions). It wraps the CLI rather than calling the Hermes API directly to get
+the persistent shell, approval denylist, repo jail and secret-scrubbing for
+free.
+
+One request object per line on **stdin**; one response object per line on
+**stdout**; diagnostics on **stderr**.
+
+```jsonc
+// requests
+{"id":1,"type":"turn","text":"why is CI red?"}
+{"id":2,"type":"new"}                                   // start a fresh session, becomes current
+{"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
+{"id":4,"type":"check"}
+
+// responses
+{"type":"ready","session":"hh_…","cwd":"/repo","version":"0.3.0","approvals":"off"}
+{"type":"tool","id":1,"tool":"shell","preview":"npm test","exit":0}
+{"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…"}
+{"type":"session","id":2,"session":"hh_…","hermes_session":"…"}
+{"type":"check","id":4,"ok":true,"model":"…","base":"…"}
+{"type":"error","id":1,"message":"…"}
+```
+
+Approvals can't be prompted over the pipe, so `--rpc` requires `--yolo`
+(`HERMES_HANDS_APPROVE=auto`) or `HERMES_HANDS_APPROVE=never` — the editor is
+expected to run its own approval UI before sending a `turn`. Close stdin to shut
+it down; `SIGINT` cancels the in-flight turn.
+
+Persist a session across editor restarts with `hermes-hands sessions new` (mint
++ print an id) and pass it back via `--session <id>` or an rpc `use` message.
 
 ## Config
 

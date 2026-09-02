@@ -166,11 +166,14 @@ func (u *UI) Help(cwd string) {
 	fmt.Fprintf(u.w, "%s  Type a message to your Hermes brain. It works this directory through\n", u.cDim)
 	fmt.Fprintf(u.w, "  you — shell, read_file, write_file, edit_file in %s,\n", cwd)
 	io.WriteString(u.w, "  each with your approval.\n")
-	io.WriteString(u.w, "    /new       start a fresh session in this directory\n")
-	io.WriteString(u.w, "    /sessions  list this machine's sessions, newest first\n")
-	io.WriteString(u.w, "    /check     re-test the gateway connection\n")
-	io.WriteString(u.w, "    /help      show this\n")
-	fmt.Fprintf(u.w, "    /exit      quit  (Ctrl-D too; Ctrl-C cancels the running turn)%s\n", u.cR)
+	io.WriteString(u.w, "    /new          start a fresh session in this directory\n")
+	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
+	io.WriteString(u.w, "    /sessions     list this machine's sessions, newest first\n")
+	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")
+	io.WriteString(u.w, "    /setup        (re)configure the gateway URL + key\n")
+	io.WriteString(u.w, "    /check        re-test the gateway connection\n")
+	io.WriteString(u.w, "    /help         show this\n")
+	fmt.Fprintf(u.w, "    /exit         quit  (Ctrl-D too; Ctrl-C cancels the running turn)%s\n", u.cR)
 }
 
 func have(name string) bool {
