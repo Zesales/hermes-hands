@@ -95,11 +95,13 @@ $send"
       if printf '%s' "$args" | jq -e 'type=="string"' >/dev/null 2>&1; then
         args="$(printf '%s' "$args" | jq -r '.' | jq -c '.' 2>/dev/null || printf '{}')"
       fi
+      local preview; preview="$(printf '%s' "$args" | jq -r '(.cmd // .path // .pattern // "")' 2>/dev/null | head -c 80)"
       hc_dispatch "$tool" "$args"; local drc=$?
       if (( drc == 3 )); then
         HC_LOOP_ANSWER="(turn aborted by operator at a $tool approval)"
         return 0
       fi
+      printf '  \342\237\251 %-10s %s\342\200\246  \342\206\222 exit %s\n' "$tool" "$preview" "$HC_TOOL_EXIT" >&2
       ctx="$(printf '%s' "$HC_TOOL_CTX" | hc_scrub)"
       results="$(jq -c --argjson r "$results" --arg t "$tool" --argjson a "$args" \
         --arg o "$(printf '%s' "$HC_TOOL_OUT" | hc_scrub)" --argjson x "$HC_TOOL_EXIT" \
