@@ -49,8 +49,8 @@ const usageText = `hermes-hands - terminal chat with a central Hermes brain over
 Hermes holds the plan/memory; it drives a persistent local shell plus
 read_file / write_file / edit_file to see and act on the repo you're in.
 
-  hermes-hands                    open a session in the current repo (main use)
-  hermes-hands -c                 resume this repo's last session
+  hermes-hands                    resume this repo's last session (main use)
+  hermes-hands --new              start a fresh session instead
   hermes-hands --session <id>     open a specific session
   hermes-hands sessions           list local sessions
   hermes-hands setup              interactive first-run config
@@ -74,7 +74,9 @@ type parsed struct {
 // parseArgs scans argv, first match winning per token; the eager subcommands
 // return immediately.
 func parseArgs(args []string) parsed {
-	p := parsed{smode: "new"}
+	// smode "" = unset: the REPL then resumes this dir's last session, a
+	// one-shot / stdin run starts fresh. -c and --new pin it explicitly.
+	p := parsed{}
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "-h", "--help":
@@ -155,12 +157,21 @@ func main() {
 	if p.stdin {
 		b, _ := io.ReadAll(os.Stdin)
 		// bash run_turn "$(cat)" — command substitution strips trailing newlines.
-		os.Exit(runTurn(p.smode, strings.TrimRight(string(b), "\n")))
+		os.Exit(runTurn(orElse(p.smode, "new"), strings.TrimRight(string(b), "\n")))
 	}
 	if msg := strings.Join(p.oneshot, " "); msg != "" {
-		os.Exit(runTurn(p.smode, msg))
+		os.Exit(runTurn(orElse(p.smode, "new"), msg))
 	}
-	os.Exit(runREPL(p.smode))
+	// Bare `hermes-hands` resumes this directory's last session (a terminal you
+	// re-open, not a fresh one each time); --new / -c pin it.
+	os.Exit(runREPL(orElse(p.smode, "continue")))
+}
+
+func orElse(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 // --- version strings (bash hh_version + HH_VERSION) ---
