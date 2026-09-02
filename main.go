@@ -394,7 +394,11 @@ func runREPL(smode string) int {
 		return 1
 	}
 
-	a.ui.Banner(bareVersion(), a.repoRoot, rec.ID, rec.HermesSessionID)
+	agentSID := "" // only real once a turn has confirmed it
+	if rec.Turns > 0 {
+		agentSID = rec.HermesSessionID
+	}
+	a.ui.Banner(bareVersion(), a.repoRoot, agentSID)
 
 	ln := liner.NewLiner()
 	defer ln.Close()
