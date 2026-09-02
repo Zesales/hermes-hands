@@ -82,7 +82,8 @@ func (u *UI) You(msg string) {
 
 // Working ports ui_working.
 func (u *UI) Working() {
-	fmt.Fprintf(u.w, "%s   %s⋯ working%s\n", u.cDim, u.cAcc, u.cR)
+	fmt.Fprintf(u.w, "%s   %s⋯ working%s%s  ·  Ctrl+C to cancel%s\n",
+		u.cDim, u.cAcc, u.cR, u.cDim, u.cR)
 }
 
 // Call ports ui_call: a per-tool progress line. The exit code is green when 0,
