@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1 — `/compact`; drop `-c`
+
+- **`/compact [focus]`** (in-REPL; alias `/compress`) and an rpc `compact`
+  request — asks Hermes to compact the current session's context now via
+  `POST {base}/api/session/compress` (the app-server's `/compress`; `/compact`
+  is a legacy alias upstream). Optional `focus` = "compress around this topic".
+  The next turn threads into the compacted continuation session. Best-effort:
+  the exact request shape isn't fully documented, so a non-2xx is reported with
+  its status.
+- **`-c` / `--continue` removed** — redundant with a bare run / `--session`.
+
 ## 0.4.0 — no one-shot; explicit sessions; session detail
 
 - **One-shot removed.** `hermes-hands "message"` and `… | hermes-hands -` are
