@@ -106,7 +106,7 @@ func TestHelpByteExact(t *testing.T) {
 	for _, want := range []string{
 		"Type a message to your Hermes brain",
 		"in /home/x/repo,",
-		"/new", "/session <id>", "/sessions", "/yolo", "/setup", "/check", "/help", "/exit",
+		"/new", "/session <id>", "/sessions", "/compact", "/yolo", "/setup", "/check", "/help", "/exit",
 		"Ctrl-C cancels the running turn",
 	} {
 		if !strings.Contains(got, want) {
