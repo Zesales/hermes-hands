@@ -309,9 +309,22 @@ func TestRunTurnAbortedByOperator(t *testing.T) {
 	sa := &scriptAsker{replies: []api.AskResult{
 		reply(`{"calls":[{"tool":"write_file","args":{"path":"new.txt","content":"z"}}],"final":null}`, true),
 	}}
-	out, _, _ := run(t, sa, d, 8)
-	if !out.OK || out.Answer != "(turn aborted by operator at a write_file approval)" {
+	l := &Loop{API: sa, Dispatch: d, MaxRounds: 8}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if !out.OK || !strings.Contains(out.Answer, "declined write_file") {
 		t.Errorf("out = %+v", out)
+	}
+	if !strings.Contains(l.PendingNote, "write_file") || !strings.Contains(l.PendingNote, "cancelled") {
+		t.Errorf("PendingNote = %q, want a cancellation note naming write_file", l.PendingNote)
+	}
+	// the note is consumed and prepended to the next turn's message
+	sa.replies = []api.AskResult{reply(`{"calls":[],"final":"ok"}`, true)}
+	_ = l.Run(context.Background(), "next task", rec(), func(string, string, int) {})
+	if l.PendingNote != "" {
+		t.Errorf("PendingNote should be cleared after the next Run, got %q", l.PendingNote)
+	}
+	if got := sa.msgs[len(sa.msgs)-1]; !strings.Contains(got, "previous turn was cancelled") {
+		t.Errorf("next turn message should carry the cancellation note, got:\n%s", got)
 	}
 }
 

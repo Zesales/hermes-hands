@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.2 — approval-prompt hang fixed
+
+- **Fixed a hard hang**: at a `[y]es [n]o [a]ll [q]uit` approval prompt you
+  could not type and Ctrl-C did nothing — the gate opened a second reader on
+  `/dev/tty` while the REPL's line editor still owned the terminal, so
+  keystrokes went nowhere and the blocking read never returned. The gate now
+  reads its answer through the same line editor. Ctrl-C there = decline this
+  call **and** stop the turn.
+- On a cancelled turn, the next message to Hermes is prefixed with a note that
+  the previous turn was cancelled and nothing ran — so its transcript stays
+  coherent (Hermes is not told automatically otherwise).
+- Per-turn frame + `instructions.md` tightened: delegation is **only** for the
+  operator's repo. Questions about the operator, Hermes' own memory, or past
+  conversation are answered from context — Hermes no longer tries to
+  `read_file` its own `~/.hermes/memory.md` (which the repo jail rejects).
+
 ## 0.4.1 — `/compact`; drop `-c`
 
 - **`/compact [focus]`** (in-REPL; alias `/compress`) and an rpc `compact`

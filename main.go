@@ -379,6 +379,17 @@ func runREPL(smode string) int {
 	defer func() { ln.Close() }()
 	ln.SetCtrlCAborts(true)
 
+	// The approval gate reads its y/n/a/q answer through liner too, so there is
+	// one owner of the terminal (a separate /dev/tty reader deadlocks against
+	// liner's input goroutine). Ctrl-C there -> ErrPromptAborted -> quit turn.
+	wireApprover := func() {
+		if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
+			ta.Out = os.Stderr
+			ta.AskLine = func(q string) (string, error) { return ln.Prompt(q) }
+		}
+	}
+	wireApprover()
+
 	// SIGINT during a turn -> cancel the turn context + kill the shell child,
 	// then fall back to the prompt. At the prompt, liner turns Ctrl-C into
 	// ErrPromptAborted itself (raw mode, no signal).
@@ -429,6 +440,7 @@ func runREPL(smode string) int {
 				if na, e := newApp(); e == nil {
 					a.shell.Stop()
 					a = na
+					wireApprover()
 					configured = !notConfigured(a.cfg)
 					if _, e2 := a.client.Check(context.Background()); e2 != nil {
 						fmt.Fprintf(os.Stderr, "BLOCKED: %v\n", e2)
