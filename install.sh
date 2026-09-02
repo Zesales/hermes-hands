@@ -1,45 +1,47 @@
 #!/bin/sh
-# hermes-hands installer (Linux / WSL).
+# hermes-hands installer (Linux / WSL). Produces one self-contained file at
+#   ~/.local/bin/hermes-hands
 #
-#   curl -fsSL https://raw.githubusercontent.com/<you>/hermes-hands/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/CHANGE-ME/hermes-hands/main/install.sh | sh
 #
-# Clones (or updates) the repo and links bin/hermes-hands onto your PATH.
-# Re-run any time to update. Windows: use WSL (a PowerShell installer is a
-# later feature).
+# Prefers a released single-file binary; falls back to cloning + building.
+# Re-run any time to update. Windows: use WSL (PowerShell installer is later).
 set -eu
 
-REPO_URL="${HERMES_HANDS_REPO:-https://github.com/CHANGE-ME/hermes-hands}"
-DEST="${HERMES_HANDS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/hermes-hands}"
+REPO="${HERMES_HANDS_REPO:-CHANGE-ME/hermes-hands}"
 BIN="${HERMES_HANDS_BIN:-$HOME/.local/bin}"
+SRC="${HERMES_HANDS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/hermes-hands-src}"
+TARGET="$BIN/hermes-hands"
 
 missing=
-for c in bash curl jq git; do
-  command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
-done
+for c in bash curl jq; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
 if [ -n "$missing" ]; then
-  echo "hermes-hands: missing dependencies:$missing" >&2
+  echo "hermes-hands: missing:$missing" >&2
   echo "  Debian/Ubuntu:  sudo apt-get install -y$missing" >&2
   echo "  Fedora:         sudo dnf install -y$missing" >&2
   exit 1
 fi
 
-if [ -d "$DEST/.git" ]; then
-  echo "hermes-hands: updating $DEST"
-  git -C "$DEST" pull --ff-only
+mkdir -p "$BIN"
+
+# 1) try a released single-file
+url="https://github.com/$REPO/releases/latest/download/hermes-hands"
+if curl -fsSL -o "$TARGET.new" "$url" 2>/dev/null && head -1 "$TARGET.new" | grep -q '^#!/usr/bin/env bash'; then
+  chmod +x "$TARGET.new"; mv "$TARGET.new" "$TARGET"
+  echo "hermes-hands: installed from release -> $TARGET"
 else
-  echo "hermes-hands: cloning into $DEST"
-  mkdir -p "$(dirname "$DEST")"
-  git clone --depth 1 "$REPO_URL" "$DEST"
+  rm -f "$TARGET.new"
+  # 2) clone + build
+  command -v git >/dev/null 2>&1 || { echo "hermes-hands: no release yet and 'git' missing for the source build" >&2; exit 1; }
+  if [ -d "$SRC/.git" ]; then git -C "$SRC" pull --ff-only; else
+    mkdir -p "$(dirname "$SRC")"; git clone --depth 1 "https://github.com/$REPO" "$SRC"
+  fi
+  ( cd "$SRC" && ./build.sh "$SRC/dist/hermes-hands" )
+  install -m 0755 "$SRC/dist/hermes-hands" "$TARGET"
+  echo "hermes-hands: built from source -> $TARGET"
 fi
 
-mkdir -p "$BIN"
-ln -sf "$DEST/bin/hermes-hands" "$BIN/hermes-hands"
-chmod +x "$DEST/bin/hermes-hands" 2>/dev/null || true
-
 echo
-"$BIN/hermes-hands" --version
-case ":$PATH:" in
-  *":$BIN:"*) ;;
-  *) echo "hermes-hands: add $BIN to your PATH  (export PATH=\"$BIN:\$PATH\")" ;;
-esac
+"$TARGET" --version
+case ":$PATH:" in *":$BIN:"*) ;; *) echo "hermes-hands: add $BIN to PATH  (export PATH=\"$BIN:\$PATH\")" ;; esac
 echo "next: hermes-hands setup"
