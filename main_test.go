@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bufio"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,6 +71,61 @@ func TestVersionString(t *testing.T) {
 	}
 	if strings.Contains(got, "(") && !strings.HasSuffix(got, ")") {
 		t.Errorf("unbalanced sha parens: %q", got)
+	}
+}
+
+func TestDoSetupPlaintext(t *testing.T) {
+	stdinTTY = func() bool { return false }
+	defer func() { stdinTTY = func() bool { return true } }()
+	t.Setenv("HOME", t.TempDir()) // hermetic ~/.bashrc for offerBashrc
+
+	dir := filepath.Join(t.TempDir(), "hermes-hands")
+	in := bufio.NewReader(strings.NewReader("https://h.example.net\nsk-plainkey\nn\n"))
+	if code := doSetup(in, dir, true); code != 0 {
+		t.Fatalf("doSetup(--plaintext) = %d", code)
+	}
+
+	sec := filepath.Join(dir, "secrets")
+	fi, err := os.Stat(sec)
+	if err != nil {
+		t.Fatalf("secrets not written: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("secrets perm = %o, want 600", fi.Mode().Perm())
+	}
+	body, _ := os.ReadFile(sec)
+	if !strings.Contains(string(body), "export HERMES_API_URL=https://h.example.net") ||
+		!strings.Contains(string(body), "export HERMES_API_KEY=sk-plainkey") {
+		t.Errorf("secrets body = %q", body)
+	}
+	for _, gone := range []string{"secrets.enc", "keyseed"} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
+			t.Errorf("--plaintext must not write %s", gone)
+		}
+	}
+}
+
+func TestDoSetupEncryptedDefault(t *testing.T) {
+	stdinTTY = func() bool { return false }
+	defer func() { stdinTTY = func() bool { return true } }()
+
+	dir := filepath.Join(t.TempDir(), "hermes-hands")
+	in := bufio.NewReader(strings.NewReader("https://h.example.net\nsk-enckey\n"))
+	if code := doSetup(in, dir, false); code != 0 {
+		t.Fatalf("doSetup(default) = %d", code)
+	}
+
+	for _, f := range []string{"config", "secrets.enc", "keyseed"} {
+		fi, err := os.Stat(filepath.Join(dir, f))
+		if err != nil {
+			t.Fatalf("%s not written: %v", f, err)
+		}
+		if f != "config" && fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s perm = %o, want 600", f, fi.Mode().Perm())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "secrets")); err == nil {
+		t.Errorf("default setup must not write the plaintext secrets file")
 	}
 }
 

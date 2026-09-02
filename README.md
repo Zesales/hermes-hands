@@ -114,8 +114,21 @@ mirrored into Hermes via a best-effort `PATCH /api/sessions/{id}`.
 `~/.config/hermes-hands/config` — `KEY=value` / `export KEY=value`, values
 optionally `"…"`, `'…'` or `$'…'`-quoted. Anything else on a line is ignored (the
 old bash version `source`d the file; the Go port deliberately parses only
-assignments). The `secrets` file is applied only while `HERMES_API_URL` or
-`HERMES_API_KEY` is still unset.
+assignments).
+
+**Secrets.** The URL + key are resolved in this order: the `HERMES_API_URL` /
+`HERMES_API_KEY` environment variables always win; then, only while one is still
+unset, the secrets store. `setup` (default) writes a machine-bound
+`secrets.enc` + a 0600 `keyseed` — AES-256-GCM, key derived per-machine
+(HKDF over the keyseed, `/etc/machine-id`, your uid and hostname), so a copied
+`secrets.enc` alone is useless. It needs nothing in your shell env. If it can't
+be decrypted here (wrong machine, tampered, missing `keyseed`) the CLI says so
+and exits — re-run `hermes-hands setup`. This is **at-rest protection only**: it
+does not stop a program running as you (or an approved `shell`) from reading the
+key — the approval gate + denylist are the real boundary. `setup --plaintext`
+keeps the old 0600 `secrets` file (`export HERMES_API_URL=…` / `…KEY=…`) plus the
+`~/.bashrc` offer, for people who inject via env or a secrets manager; that file
+is the fallback when no `secrets.enc` exists. See [`docs/secrets.md`](docs/secrets.md).
 
 | key | default | meaning |
 |---|---|---|
@@ -149,8 +162,14 @@ runs only — your phone and web UI never see it.
 - **Secret scrubbing.** Tool output is passed through a redactor (bearer tokens,
   `api_key=`/`password=`, AWS keys, `sk-…`, `ghp_…`, PEM headers) before it goes
   back to the gateway.
+- **Secrets at rest.** The default `secrets.enc` is AES-256-GCM, machine-bound
+  (see Config). No passphrase — deliberately: it protects a stolen/backed-up
+  copy of the file, not a live read by something already running as you. The
+  approval gate + denylist are the boundary that matters.
 - **TLS enforced.** A non-`https://` `HERMES_API_URL` is refused (loopback needs
   an explicit `HERMES_HANDS_ALLOW_HTTP=1`, for tests).
+- **WSL:** `/etc/machine-id` is stable across WSL restarts but is regenerated if
+  you re-register the distro — re-run `hermes-hands setup` after that.
 
 ## Honest limitations
 

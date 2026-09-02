@@ -213,11 +213,19 @@ type app struct {
 	loop     *loop.Loop
 }
 
-func newApp() (*app, error) {
+// loadCfgOrExit resolves configuration, or prints "hermes-hands: <err>" and
+// exits 1 (e.g. an undecryptable secrets.enc — never a panic).
+func loadCfgOrExit() *config.Config {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+		os.Exit(1)
 	}
+	return cfg
+}
+
+func newApp() (*app, error) {
+	cfg := loadCfgOrExit()
 	repoRoot := physicalCwd()
 	u := ui.New(os.Stderr)
 
@@ -452,11 +460,7 @@ func runREPL(smode string) int {
 // --- subcommands ---
 
 func runCheck() int {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Printf("BLOCKED: %v\n", err)
-		return 1
-	}
+	cfg := loadCfgOrExit()
 	res, err := checkClient(cfg).Check(context.Background())
 	if err != nil {
 		fmt.Printf("BLOCKED: %s\n", err)
@@ -483,11 +487,7 @@ func checkClient(cfg *config.Config) *api.Client {
 }
 
 func runSessions() int {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
-		return 0
-	}
+	cfg := loadCfgOrExit()
 	store, err := session.Open(cfg.StateDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
@@ -500,41 +500,63 @@ func runSessions() int {
 
 // --- setup (bash hh_setup) ---
 
+const setupConfigBody = "# hermes-hands config\n" +
+	"# HERMES_API_PROFILE=coder   # optional /p/<profile>/ prefix\n" +
+	"# HERMES_HANDS_APPROVE=ask    # ask | auto | never\n"
+
 func runSetup() int {
-	dir := xdgConfigHome() + "/hermes-hands"
+	plaintext := false
+	for _, a := range os.Args[1:] {
+		if a == "--plaintext" {
+			plaintext = true
+		}
+	}
+	if code := doSetup(bufio.NewReader(os.Stdin), xdgConfigHome()+"/hermes-hands", plaintext); code != 0 {
+		return code
+	}
+	// bash re-execs `"$_self" check`; the Go port calls check directly
+	// (plan §2 #21 — $_self is unset in a released bundle).
+	_ = runCheck()
+	return 0
+}
+
+// doSetup prompts, then writes config + the secrets store. Default: a
+// machine-bound secrets.enc + keyseed (nothing to add to the shell env).
+// --plaintext: the pre-M10 0600 `secrets` file + the ~/.bashrc offer, for
+// people who inject via env or a secrets manager.
+func doSetup(in *bufio.Reader, dir string, plaintext bool) int {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
 		return 1
 	}
 	_ = os.Chmod(dir, 0o700)
 
-	in := bufio.NewReader(os.Stdin) // one reader for every stdin prompt
 	url := promptLine(in, "Hermes API base URL (https://…): ")
 	key := promptSecret(in, "Hermes API_SERVER_KEY: ")
 
-	cfgBody := "# hermes-hands config\n" +
-		"# HERMES_API_PROFILE=coder   # optional /p/<profile>/ prefix\n" +
-		"# HERMES_HANDS_APPROVE=ask    # ask | auto | never\n"
-	if err := os.WriteFile(dir+"/config", []byte(cfgBody), 0o644); err != nil {
+	if err := os.WriteFile(dir+"/config", []byte(setupConfigBody), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
 		return 1
 	}
 
-	secBody := "# hermes-hands secrets - chmod 600, do not commit\n" +
-		"export HERMES_API_URL=" + shellQuoteQ(url) + "\n" +
-		"export HERMES_API_KEY=" + shellQuoteQ(key) + "\n"
-	if err := os.WriteFile(dir+"/secrets", []byte(secBody), 0o600); err != nil {
+	if plaintext {
+		body := "# hermes-hands secrets - chmod 600, do not commit\n" +
+			"export HERMES_API_URL=" + shellQuoteQ(url) + "\n" +
+			"export HERMES_API_KEY=" + shellQuoteQ(key) + "\n"
+		if err := os.WriteFile(dir+"/secrets", []byte(body), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+			return 1
+		}
+		fmt.Printf("wrote %s/config and %s/secrets\n", dir, dir)
+		offerBashrc(in)
+		return 0
+	}
+
+	if err := config.WriteEncryptedSecrets(dir, url, key); err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
 		return 1
 	}
-
-	fmt.Printf("wrote %s/config and %s/secrets\n", dir, dir)
-
-	// bash re-execs `"$_self" check`; the Go port calls check directly
-	// (plan §2 #21 — $_self is unset in a released bundle).
-	_ = runCheck()
-
-	offerBashrc(in)
+	fmt.Printf("wrote %s/config, %s/secrets.enc and %s/keyseed (machine-bound; nothing to add to your shell)\n", dir, dir, dir)
 	return 0
 }
 
@@ -577,8 +599,12 @@ func promptLine(in *bufio.Reader, msg string) string {
 	return strings.Trim(line, " \t\r\n")
 }
 
+// stdinTTY reports whether stdin is an interactive terminal. A package var so
+// setup tests can force the plain-read path.
+var stdinTTY = func() bool { return ttyio.IsTerminal(os.Stdin) }
+
 func promptSecret(in *bufio.Reader, msg string) string {
-	if ttyio.IsTerminal(os.Stdin) {
+	if stdinTTY() {
 		ln := liner.NewLiner()
 		defer ln.Close()
 		if s, err := ln.PasswordPrompt(msg); err == nil {
