@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
@@ -268,6 +269,7 @@ func newApp() (*app, error) {
 	lp := &loop.Loop{
 		API: client, Dispatch: disp, UI: u,
 		MaxRounds: cfg.MaxRounds, Scrub: redact.Scrub,
+		RepoRoot: repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
 		Vlogf: vlogf, Warnf: warnf,
 	}
 	return &app{cfg, repoRoot, u, client, store, sh, disp, lp}, nil
@@ -294,6 +296,21 @@ func physicalCwd() string {
 		return p
 	}
 	return wd
+}
+
+// gitBranch is the current branch name at root, or "" when root is not a git
+// work tree (or git is missing). Used only to enrich the per-turn frame.
+func gitBranch(root string) string {
+	cmd := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	b := strings.TrimSpace(string(out))
+	if b == "HEAD" { // detached
+		return ""
+	}
+	return b
 }
 
 // --- one-shot / stdin turn (bash run_turn: answer -> stdout, frames -> stderr) ---

@@ -38,6 +38,11 @@ Keep changes minimal and literal. No `ssh`, no reaching `*.wvpk.net` directly -
 stack / deploy changes go through the repo's own pipeline. Ask for exactly what
 you need; don't fish.
 
+"I don't have that file / I can't see the repo" is never an answer: you have
+`read_file` and `shell`. When the operator refers to a file, the repo, "here",
+or "this", your first turn is the call that fetches it - not a request for them
+to paste it.
+
 ## Examples
 
 Explore first:
