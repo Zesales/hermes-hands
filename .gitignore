@@ -1,3 +1,5 @@
 *.tmp
 /dist/
 /local/
+# `go build ./...` drops the module binary here; the real build target is dist/
+/hermes-hands
