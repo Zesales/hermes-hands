@@ -108,13 +108,13 @@ func TestResolve(t *testing.T) {
 
 	var warned int
 	st.Warnf = func(string, ...any) { warned++ }
-	// continue with a DIFFERENT dir that has no session -> warn + new
+	// continue with a DIFFERENT dir that has no session -> quietly starts one
 	r2, err := st.Resolve("continue", "/resolve/other")
 	if err != nil || r2 == nil {
 		t.Fatalf("Resolve(continue, none): %v", err)
 	}
-	if warned != 1 {
-		t.Errorf("expected one warning for continue-with-none, got %d", warned)
+	if warned != 0 {
+		t.Errorf("continue-with-none should be silent now, got %d warnings", warned)
 	}
 
 	// explicit missing id -> error
