@@ -318,3 +318,38 @@ func TestRunTurnAbortedByOperator(t *testing.T) {
 type abortApprover struct{}
 
 func (abortApprover) Confirm(string, string) prompt.Decision { return prompt.AbortTurn }
+
+func TestRunFramesFirstMessage(t *testing.T) {
+	d := realDisp(t, prompt.AutoApprover{})
+	sa := &scriptAsker{replies: []api.AskResult{reply(`{"calls":[],"final":"ok"}`, true)}}
+	l := &Loop{
+		API: sa, Dispatch: d, MaxRounds: 8, Scrub: redact.Scrub,
+		RepoRoot:  "/home/me/proj",
+		GitBranch: func() string { return "main" },
+	}
+	out := l.Run(context.Background(), "was hälst du von der readme ?", rec(), func(string, string) {})
+	if !out.OK || out.Answer != "ok" {
+		t.Fatalf("out = %+v", out)
+	}
+	got := sa.msgs[0]
+	for _, want := range []string{
+		"remote worker session", "you are NOT local",
+		"cwd: /home/me/proj", "git branch: main",
+		`{"calls":[{"tool","args"}],"final":null}`,
+		"operator: was hälst du von der readme ?",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("framed round-1 message missing %q\n---\n%s", want, got)
+		}
+	}
+}
+
+func TestRunNoFrameWithoutRepoRoot(t *testing.T) {
+	d := realDisp(t, prompt.AutoApprover{})
+	sa := &scriptAsker{replies: []api.AskResult{reply(`{"calls":[],"final":"ok"}`, true)}}
+	l := &Loop{API: sa, Dispatch: d, MaxRounds: 8, Scrub: redact.Scrub}
+	_ = l.Run(context.Background(), "hello", rec(), func(string, string) {})
+	if sa.msgs[0] != "hello" {
+		t.Errorf("without RepoRoot the message must pass through, got %q", sa.msgs[0])
+	}
+}
