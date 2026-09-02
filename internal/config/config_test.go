@@ -87,6 +87,14 @@ func TestSecretsFileOnlyWhenURLorKeyEmpty(t *testing.T) {
 	if c.APIURL != "https://from-secrets" || c.APIKey != "sekret" {
 		t.Fatalf("secrets file not applied: %q / %q", c.APIURL, c.APIKey)
 	}
+
+	// A placeholder key counts as missing -> secrets file applied.
+	t.Setenv("HERMES_API_URL", "https://from-env")
+	t.Setenv("HERMES_API_KEY", "<REPLACE_ME>")
+	c, _ = Load()
+	if c.APIKey != "sekret" {
+		t.Fatalf("placeholder key should trigger the secrets fallback, got %q", c.APIKey)
+	}
 }
 
 func TestStateDir(t *testing.T) {
