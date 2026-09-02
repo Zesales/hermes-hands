@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    env:
+      GOFLAGS: -mod=vendor   # deps are vendored; CI never touches the network
     steps:
       # actions/checkout v4.2.2, pinned by commit
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -15,7 +17,9 @@ jobs:
         with:
           go-version: '1.26.7'   # exact, must equal go.mod
           check-latest: false
-      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: |
+          bad=$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))
+          test -z "$bad" || { echo "gofmt needed on:"; echo "$bad"; exit 1; }
       - run: go vet ./...
       - run: go test ./...
       - run: CGO_ENABLED=0 go build -trimpath ./...

@@ -128,6 +128,29 @@ func (u *UI) Banner(version, cwd, sessionID string) {
 		u.cDim, strings.TrimPrefix(sessionID, "hh_"), u.cR)
 }
 
+// YouPrompt is the REPL input prompt: a bold cyan "you" then " ❯ ".
+func (u *UI) YouPrompt() string {
+	return u.cB + u.cYou + "you" + u.cR + " ❯ "
+}
+
+// NewSessionNote ports the `/new` line: "— new session <id> —" (dim), then a
+// blank line, with any leading "hh_" stripped from the id.
+func (u *UI) NewSessionNote(id string) {
+	fmt.Fprintf(u.w, "%s— new session %s —%s\n\n", u.cDim, strings.TrimPrefix(id, "hh_"), u.cR)
+}
+
+// InterruptedNote marks a turn cancelled by Ctrl-C (no bash equivalent — bash
+// dies on SIGINT; the Go REPL returns to the prompt).
+func (u *UI) InterruptedNote() {
+	fmt.Fprintf(u.w, "%s— interrupted —%s\n\n", u.cDim, u.cR)
+}
+
+// DimLine writes one dim line (used for HERMES_HANDS_VERBOSE chatter, matching
+// hh_vlog's dim wrapping).
+func (u *UI) DimLine(msg string) {
+	fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, msg, u.cR)
+}
+
 // Help ports the REPL `_help` block (bin/hermes-hands:145-152).
 func (u *UI) Help() {
 	fmt.Fprintf(u.w, "%s  type a message to talk to Hermes; it drives shell/read/write here.\n", u.cDim)
