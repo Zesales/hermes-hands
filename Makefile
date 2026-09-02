@@ -24,7 +24,8 @@ test:
 	CGO_ENABLED=0 go test ./...
 
 lint:
-	@test -z "$$(gofmt -l .)" || { echo "gofmt needs a run on:"; gofmt -l .; exit 1; }
+	@bad=$$(gofmt -l $$(find . -name '*.go' -not -path './vendor/*')); \
+	 test -z "$$bad" || { echo "gofmt needs a run on:"; echo "$$bad"; exit 1; }
 	go vet ./...
 ifdef STATICCHECK
 	go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 ./...
