@@ -113,15 +113,18 @@ func TestColorCodesWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestYouPromptHasNoControlRunes(t *testing.T) {
+func TestSessionPromptHasNoControlRunes(t *testing.T) {
 	// liner.Prompt rejects any prompt containing a control rune with
 	// ErrInvalidPrompt, which silently kills the REPL on a colour terminal.
 	for _, color := range []bool{false, true} {
-		p := newUI(io.Discard, color, true).YouPrompt()
+		p := newUI(io.Discard, color, true).SessionPrompt("hh_20260902T160152_8fcc06")
 		for _, r := range p {
 			if r == 0x1b || (r < 0x20 && r != '\t') {
-				t.Fatalf("YouPrompt(color=%v) = %q contains control rune %U", color, p, r)
+				t.Fatalf("SessionPrompt(color=%v) = %q contains control rune %U", color, p, r)
 			}
+		}
+		if !strings.HasPrefix(p, "session 20260902T160152_8fcc06 ") {
+			t.Errorf("SessionPrompt = %q, want it to start with the trimmed id", p)
 		}
 	}
 }
