@@ -71,11 +71,12 @@ hermes-hands sessions new          # mint a session id (prints it; for --session
 hermes-hands check                 # preflight the connection
 ```
 
-`-c` / `--continue` alias `--session`. Scripts drive `--rpc` (send one `turn`,
-read the `answer`, close stdin) rather than a per-call one-shot.
+Scripts drive `--rpc` (send one `turn`, read the `answer`, close stdin) rather
+than a per-call one-shot.
 
 REPL commands: `/help` `/new` `/session` (this session's detail) `/session <id>`
-(switch) `/sessions` `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits;
+(switch) `/sessions` `/compact [focus]` (ask Hermes to compact the context now)
+`/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits;
 `Ctrl-C` at the prompt just hints, during a turn it cancels the turn). `/setup`
 configures without leaving the session and the REPL starts even when
 unconfigured. Tool calls are shown as they run
@@ -141,6 +142,7 @@ One request object per line on **stdin**; one response object per line on
 {"id":2,"type":"new"}                                   // start a fresh session, becomes current
 {"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
 {"id":4,"type":"check"}
+{"id":5,"type":"compact","text":"auth flow"}              // optional focus; asks Hermes to compact now
 
 // responses
 {"type":"ready","session":"hh_…","cwd":"/repo","version":"0.3.0","approvals":"off"}
@@ -148,6 +150,7 @@ One request object per line on **stdin**; one response object per line on
 {"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…"}
 {"type":"session","id":2,"session":"hh_…","hermes_session":"…"}
 {"type":"check","id":4,"ok":true,"model":"…","base":"…"}
+{"type":"compact","id":5,"ok":true,"session":"hh_…"}
 {"type":"error","id":1,"message":"…"}
 ```
 

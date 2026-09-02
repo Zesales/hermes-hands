@@ -201,6 +201,37 @@ func (c *Client) SetTitle(ctx context.Context, hermesSessionID, title string) {
 		body, map[string]string{"Content-Type": "application/json"})
 }
 
+// Compress asks Hermes to compact the session's context now (the app-server's
+// `/compress`; `/compact` is a legacy alias). Endpoint per
+// NousResearch/hermes-agent: POST {base}/api/session/compress with the session
+// id. focus is an optional "compress around this topic" hint (""=none). Returns
+// an error with the HTTP status on non-2xx so the REPL can report it — the
+// exact request shape is not fully documented, so this is best-effort.
+func (c *Client) Compress(ctx context.Context, hermesSessionID, focus string) error {
+	if hermesSessionID == "" {
+		return fmt.Errorf("no hermes-agent session id yet (run a turn first)")
+	}
+	payload := map[string]string{"session_id": hermesSessionID}
+	if focus != "" {
+		payload["focus"] = focus
+	}
+	body, err := marshalJSON(payload)
+	if err != nil {
+		return err
+	}
+	tctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	code, resp, err := c.do(tctx, http.MethodPost, c.titleBase()+"/api/session/compress",
+		body, map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return fmt.Errorf("compress request failed: %v", err)
+	}
+	if !is2xx(code) {
+		return fmt.Errorf("compress -> HTTP %s: %s", httpCode(code), trunc(stripNL(string(resp)), 200))
+	}
+	return nil
+}
+
 func (c *Client) warnf(f string, a ...any) { logOr(c.Warnf, "hermes-hands: WARNING: "+f, a...) }
 func (c *Client) logf(f string, a ...any)  { logOr(c.Log, "hermes-hands: "+f, a...) }
 
