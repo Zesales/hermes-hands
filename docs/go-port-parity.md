@@ -37,7 +37,7 @@ transport change); nothing is an accidental regression.
 
 Not part of the bash port. A no-passphrase, stdlib-only (`crypto/hkdf` +
 AES-256-GCM) at-rest store: `setup` writes `secrets.enc` + a `0600` `keyseed`
-bound to machine id + uid + hostname; `config.Load` decrypts it as the
+bound to `/etc/machine-id` + uid; `config.Load` decrypts it as the
 URL/key fallback (env still wins, `config` file still applied). A decrypt
 failure → `hermes-hands: cannot decrypt secrets.enc on this machine — run
 'hermes-hands setup'`, exit 1, never a panic. `setup --plaintext` keeps the

@@ -120,7 +120,7 @@ assignments).
 `HERMES_API_KEY` environment variables always win; then, only while one is still
 unset, the secrets store. `setup` (default) writes a machine-bound
 `secrets.enc` + a 0600 `keyseed` — AES-256-GCM, key derived per-machine
-(HKDF over the keyseed, `/etc/machine-id`, your uid and hostname), so a copied
+(HKDF over the keyseed, `/etc/machine-id` and your uid), so a copied
 `secrets.enc` alone is useless. It needs nothing in your shell env. If it can't
 be decrypted here (wrong machine, tampered, missing `keyseed`) the CLI says so
 and exits — re-run `hermes-hands setup`. This is **at-rest protection only**: it
