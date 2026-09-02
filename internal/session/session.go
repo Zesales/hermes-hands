@@ -179,22 +179,26 @@ func (s *Store) List() ([]Record, error) {
 	return recs, nil
 }
 
-// FormatList ports hh_session_list's presentation: the header plus one
-// "%-24s  %5s  %-19s  %s" row per record, updated clipped to 19 chars, title
-// falling back to cwd.
+// FormatList renders the session index newest-first: one row per record with
+// the local id, turn count, last-updated (clipped to the date+time), the repo
+// directory name, and the title. An untitled session shows a blank title (not
+// its cwd) — the DIR column carries the location instead.
 func FormatList(recs []Record) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%-24s  %5s  %-19s  %s\n", "ID", "TURNS", "UPDATED", "TITLE")
+	fmt.Fprintf(&b, "%-24s  %5s  %-19s  %-16s  %s\n", "ID", "TURNS", "UPDATED", "DIR", "TITLE")
 	for _, r := range recs {
 		upd := r.Updated
 		if len(upd) > 19 {
 			upd = upd[:19]
 		}
-		title := r.Title
-		if title == "" {
-			title = r.Cwd
+		dir := filepath.Base(r.Cwd)
+		if dir == "." || dir == "/" || dir == "" {
+			dir = r.Cwd
 		}
-		fmt.Fprintf(&b, "%-24s  %5d  %-19s  %s\n", r.ID, r.Turns, upd, title)
+		if len(dir) > 16 {
+			dir = dir[:15] + "…"
+		}
+		fmt.Fprintf(&b, "%-24s  %5d  %-19s  %-16s  %s\n", r.ID, r.Turns, upd, dir, r.Title)
 	}
 	return b.String()
 }

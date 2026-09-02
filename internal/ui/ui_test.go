@@ -83,25 +83,39 @@ func TestAnswerPlainPathIndents(t *testing.T) {
 
 func TestBannerByteExact(t *testing.T) {
 	var b strings.Builder
-	newUI(&b, false, false).Banner("0.1.0", "/home/x/repo", "hh_20260902T101112_abc123")
+	newUI(&b, false, false).Banner("0.1.0", "/home/x/repo", "hh_20260902T101112_abc123", "hh-agent-99")
 	want := "hermes-hands 0.1.0  ·  /home/x/repo\n" +
-		"session 20260902T101112_abc123  ·  /help  /new  /sessions  /exit\n\n"
+		"hermes-hands · session 20260902T101112_abc123\n" +
+		"hermes-agent · session hh-agent-99\n" +
+		"/help  /new  /sessions  /check  /exit\n\n"
 	if b.String() != want {
 		t.Errorf("Banner =\n%q\nwant\n%q", b.String(), want)
+	}
+
+	// no server session id yet -> "(none yet)"
+	var b2 strings.Builder
+	newUI(&b2, false, false).Banner("0.1.0", "/r", "hh_x", "")
+	if !strings.Contains(b2.String(), "hermes-agent · session (none yet)") {
+		t.Errorf("empty hermesID = %q", b2.String())
 	}
 }
 
 func TestHelpByteExact(t *testing.T) {
 	var b strings.Builder
-	newUI(&b, false, false).Help()
-	want := "  type a message to talk to Hermes; it drives shell/read/write here.\n" +
-		"    /new       fresh session in this directory\n" +
-		"    /sessions  list local sessions\n" +
-		"    /check     re-test the API\n" +
-		"    /exit      quit  (Ctrl-D also)\n" +
-		"  one-shot for scripts:  hermes-hands \"question\"\n"
+	newUI(&b, false, false).Help("/home/x/repo")
+	want := "  Type a message to your Hermes brain. It works this directory through\n" +
+		"  you — shell, read_file, write_file, edit_file in /home/x/repo,\n" +
+		"  each with your approval.\n" +
+		"    /new       start a fresh session in this directory\n" +
+		"    /sessions  list this machine's sessions, newest first\n" +
+		"    /check     re-test the gateway connection\n" +
+		"    /help      show this\n" +
+		"    /exit      quit  (Ctrl-D too; Ctrl-C cancels the running turn)\n"
 	if b.String() != want {
 		t.Errorf("Help =\n%q\nwant\n%q", b.String(), want)
+	}
+	if strings.Contains(b.String(), "one-shot") {
+		t.Errorf("Help must not mention one-shot: %q", b.String())
 	}
 }
 
@@ -133,8 +147,8 @@ func TestSessionPromptHasNoControlRunes(t *testing.T) {
 				t.Fatalf("SessionPrompt(color=%v) = %q contains control rune %U", color, p, r)
 			}
 		}
-		if !strings.HasPrefix(p, "session 20260902T160152_8fcc06 ") {
-			t.Errorf("SessionPrompt = %q, want it to start with the trimmed id", p)
+		if p != "hermes-hands - session 20260902T160152_8fcc06 > " {
+			t.Errorf("SessionPrompt = %q", p)
 		}
 	}
 }

@@ -394,7 +394,7 @@ func runREPL(smode string) int {
 		return 1
 	}
 
-	a.ui.Banner(bareVersion(), a.repoRoot, rec.ID)
+	a.ui.Banner(bareVersion(), a.repoRoot, rec.ID, rec.HermesSessionID)
 
 	ln := liner.NewLiner()
 	defer ln.Close()
@@ -441,7 +441,7 @@ func runREPL(smode string) int {
 		case "/exit", "/quit", "/q":
 			return 0
 		case "/help", "/h", "/?":
-			a.ui.Help()
+			a.ui.Help(a.repoRoot)
 			fmt.Fprintln(os.Stderr)
 			continue
 		case "/check":
