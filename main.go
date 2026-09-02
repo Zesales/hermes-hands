@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -379,35 +380,43 @@ func runREPL(smode string) int {
 	defer func() { ln.Close() }()
 	ln.SetCtrlCAborts(true)
 
-	// The approval gate reads its y/n/a/q answer through liner too, so there is
-	// one owner of the terminal (a separate /dev/tty reader deadlocks against
-	// liner's input goroutine). Ctrl-C there -> ErrPromptAborted -> quit turn.
-	wireApprover := func() {
+	var (
+		turnMu     sync.Mutex
+		cancelTurn context.CancelFunc
+		runID      string // in-flight Hermes run, for POST /v1/runs/{id}/stop
+	)
+
+	// Per-app wiring that must be redone when /setup swaps `a`:
+	//  - the approval gate reads its answer through liner (one terminal owner;
+	//    a separate /dev/tty reader deadlocks against liner's input goroutine),
+	//  - OnRunStart records the run id so Ctrl-C can stop the server run.
+	wireApp := func() {
 		if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
 			ta.Out = os.Stderr
 			ta.AskLine = func(q string) (string, error) { return ln.Prompt(q) }
 		}
+		a.client.OnRunStart = func(id string) { turnMu.Lock(); runID = id; turnMu.Unlock() }
 	}
-	wireApprover()
+	wireApp()
 
-	// SIGINT during a turn -> cancel the turn context + kill the shell child,
-	// then fall back to the prompt. At the prompt, liner turns Ctrl-C into
+	// SIGINT during a turn -> cancel the turn context, kill the shell child,
+	// and stop the server run. At the prompt, liner turns Ctrl-C into
 	// ErrPromptAborted itself (raw mode, no signal).
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
 	defer signal.Stop(sigCh)
-	var (
-		turnMu     sync.Mutex
-		cancelTurn context.CancelFunc
-	)
 	go func() {
 		for range sigCh {
 			turnMu.Lock()
+			rid := runID
 			if cancelTurn != nil {
 				cancelTurn()
 				a.shell.Kill()
 			}
 			turnMu.Unlock()
+			if rid != "" { // stop the server run too, not just the local wait
+				go a.client.StopRun(context.Background(), rid)
+			}
 		}
 	}()
 
@@ -440,7 +449,7 @@ func runREPL(smode string) int {
 				if na, e := newApp(); e == nil {
 					a.shell.Stop()
 					a = na
-					wireApprover()
+					wireApp()
 					configured = !notConfigured(a.cfg)
 					if _, e2 := a.client.Check(context.Background()); e2 != nil {
 						fmt.Fprintf(os.Stderr, "BLOCKED: %v\n", e2)
@@ -459,6 +468,24 @@ func runREPL(smode string) int {
 					fresh = rec
 				}
 				fmt.Fprint(os.Stderr, session.FormatDetail(fresh))
+				if si, e := a.client.SessionInfo(context.Background(), fresh.HermesSessionID); e == nil {
+					fmt.Fprintln(os.Stderr, "  — from hermes-agent —")
+					if si.Messages > 0 {
+						fmt.Fprintf(os.Stderr, "  messages             : %d\n", si.Messages)
+					}
+					if si.Tokens > 0 {
+						fmt.Fprintf(os.Stderr, "  context tokens       : %d\n", si.Tokens)
+					}
+					if si.Parent != "" {
+						fmt.Fprintf(os.Stderr, "  parent (pre-compact) : %s\n", si.Parent)
+					}
+					if si.Model != "" {
+						fmt.Fprintf(os.Stderr, "  model                : %s\n", si.Model)
+					}
+					if si.Ended {
+						fmt.Fprintln(os.Stderr, "  ended                : yes")
+					}
+				}
 				fmt.Fprintln(os.Stderr)
 				continue
 			}
@@ -517,6 +544,9 @@ func runREPL(smode string) int {
 		case "/sessions":
 			recs, _ := a.store.List()
 			fmt.Fprint(os.Stderr, session.FormatList(recs))
+			if ss, e := a.client.ListSessions(context.Background()); e == nil && len(ss) > 0 {
+				fmt.Fprint(os.Stderr, "\n"+formatSrvList(ss))
+			}
 			fmt.Fprintln(os.Stderr)
 			continue
 		}
@@ -600,7 +630,35 @@ func runSessions() int {
 	}
 	recs, _ := store.List()
 	fmt.Print(session.FormatList(recs))
+	if !notConfigured(cfg) {
+		if ss, e := checkClient(cfg).ListSessions(context.Background()); e == nil && len(ss) > 0 {
+			fmt.Print("\n" + formatSrvList(ss))
+		}
+	}
 	return 0
+}
+
+// formatSrvList renders the server-side session list (from GET /api/sessions).
+func formatSrvList(ss []api.SrvSession) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "hermes-agent sessions (%d):\n", len(ss))
+	fmt.Fprintf(&b, "%-40s  %5s  %7s  %s\n", "SESSION", "MSGS", "TOKENS", "TITLE")
+	for _, s := range ss {
+		id := s.ID
+		if len(id) > 40 {
+			id = id[:39] + "…"
+		}
+		tok := "-"
+		if s.Tokens > 0 {
+			tok = strconv.Itoa(s.Tokens)
+		}
+		title := s.Title
+		if s.Parent != "" {
+			title += "  (from " + s.Parent + ")"
+		}
+		fmt.Fprintf(&b, "%-40s  %5d  %7s  %s\n", id, s.Messages, tok, title)
+	}
+	return b.String()
 }
 
 // runSessionNew mints one session rooted at the cwd and prints its id on

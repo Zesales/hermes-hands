@@ -38,6 +38,15 @@ type Client struct {
 	RunTimeout   time.Duration // whole poll loop ceiling (HERMES_API_RUN_TIMEOUT)
 	Instructions string
 
+	// Caps is filled by Check from /v1/capabilities so callers can gate
+	// optional features (run_events_sse, session_compress, …).
+	Caps Caps
+
+	// OnRunStart, when set, is called with the run id as soon as POST /v1/runs
+	// returns it — before polling. The REPL uses it so Ctrl-C can POST
+	// /v1/runs/{id}/stop on the in-flight run.
+	OnRunStart func(runID string)
+
 	Warnf func(string, ...any)
 	Vlogf func(string, ...any)
 	Log   func(string, ...any)
@@ -52,6 +61,31 @@ type Client struct {
 
 // CheckResult is the outcome of a successful preflight.
 type CheckResult struct{ Model, Base string }
+
+// Caps is the parsed /v1/capabilities surface — used to gate features that a
+// given Hermes build may not have (SSE run events, session compress, …).
+type Caps struct {
+	Model    string
+	Features map[string]bool
+}
+
+// Has reports whether a feature flag is present and true.
+func (c Caps) Has(f string) bool { return c.Features[f] }
+
+// SrvSession is the subset of a server-side session record we render. Every
+// field is best-effort — the /api/sessions response schema is not published, so
+// missing keys just leave zero values.
+type SrvSession struct {
+	ID       string
+	Title    string
+	Messages int
+	Parent   string // parent_session_id — compaction/split lineage
+	Model    string
+	Created  string
+	Updated  string
+	Tokens   int
+	Ended    bool
+}
 
 // AskResult is a completed turn.
 type AskResult struct {
@@ -168,6 +202,7 @@ func (c *Client) Check(ctx context.Context) (CheckResult, error) {
 		code, body, err := c.do(ctx, http.MethodGet, base+"/v1/capabilities",
 			nil, map[string]string{"Accept": "application/json"})
 		if err == nil && is2xx(code) && looksJSON(body) {
+			c.Caps = parseCaps(body)
 			return CheckResult{Model: checkModel(body), Base: base}, nil
 		}
 		switch code {
@@ -230,6 +265,140 @@ func (c *Client) Compress(ctx context.Context, hermesSessionID, focus string) er
 		return fmt.Errorf("compress -> HTTP %s: %s", httpCode(code), trunc(stripNL(string(resp)), 200))
 	}
 	return nil
+}
+
+// StopRun asks Hermes to interrupt a running turn (POST /v1/runs/{id}/stop).
+// Best-effort: fire it on Ctrl-C so the server turn doesn't keep burning
+// tokens after the operator has moved on. Errors are swallowed.
+func (c *Client) StopRun(ctx context.Context, runID string) {
+	if runID == "" || c.BaseURL == "" || c.Key == "" {
+		return
+	}
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, _, _ = c.do(tctx, http.MethodPost, c.base()+"/v1/runs/"+runID+"/stop", nil, nil)
+}
+
+// SessionInfo reads a server-side session record (GET /api/sessions/{id}).
+// The response schema is not published, so parsing is lenient; a non-2xx or an
+// unparseable body returns an error and the caller falls back to the local
+// index.
+func (c *Client) SessionInfo(ctx context.Context, hermesSessionID string) (SrvSession, error) {
+	if hermesSessionID == "" {
+		return SrvSession{}, fmt.Errorf("no hermes-agent session id yet")
+	}
+	tctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodGet, c.titleBase()+"/api/sessions/"+hermesSessionID,
+		nil, map[string]string{"Accept": "application/json"})
+	if err != nil {
+		return SrvSession{}, err
+	}
+	if !is2xx(code) {
+		return SrvSession{}, fmt.Errorf("GET /api/sessions/%s -> HTTP %s", hermesSessionID, httpCode(code))
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil {
+		return SrvSession{}, fmt.Errorf("unparseable session body")
+	}
+	return srvSessionFrom(m), nil
+}
+
+// ListSessions reads the server-side session list (GET /api/sessions). Lenient:
+// it accepts a bare array or an object with a "sessions"/"data"/"items" array.
+func (c *Client) ListSessions(ctx context.Context) ([]SrvSession, error) {
+	tctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodGet, c.titleBase()+"/api/sessions?limit=100",
+		nil, map[string]string{"Accept": "application/json"})
+	if err != nil {
+		return nil, err
+	}
+	if !is2xx(code) {
+		return nil, fmt.Errorf("GET /api/sessions -> HTTP %s", httpCode(code))
+	}
+	var arr []map[string]json.RawMessage
+	if json.Unmarshal(body, &arr) != nil {
+		var wrap map[string]json.RawMessage
+		if json.Unmarshal(body, &wrap) != nil {
+			return nil, fmt.Errorf("unparseable session list")
+		}
+		for _, k := range []string{"sessions", "data", "items", "results"} {
+			if raw, ok := wrap[k]; ok && json.Unmarshal(raw, &arr) == nil {
+				break
+			}
+		}
+	}
+	out := make([]SrvSession, 0, len(arr))
+	for _, m := range arr {
+		if s := srvSessionFrom(m); s.ID != "" {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
+
+// srvSessionFrom pulls the fields we render out of a raw session object,
+// trying the key names different Hermes builds are likely to use.
+func srvSessionFrom(m map[string]json.RawMessage) SrvSession {
+	str := func(keys ...string) string {
+		for _, k := range keys {
+			if raw, ok := m[k]; ok {
+				var s string
+				if json.Unmarshal(raw, &s) == nil && s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+	num := func(keys ...string) int {
+		for _, k := range keys {
+			if raw, ok := m[k]; ok {
+				var f float64
+				if json.Unmarshal(raw, &f) == nil {
+					return int(f)
+				}
+			}
+		}
+		return 0
+	}
+	s := SrvSession{
+		ID:       str("id", "session_id"),
+		Title:    str("title", "name"),
+		Parent:   str("parent_session_id", "previous_session_id", "parent_id"),
+		Model:    str("model", "model_name"),
+		Created:  str("created_at", "started_at", "created"),
+		Updated:  str("updated_at", "last_active_at", "updated"),
+		Messages: num("message_count", "messages", "num_messages"),
+		Tokens:   num("total_tokens", "token_count", "context_tokens"),
+	}
+	if str("ended_at", "end_reason") != "" {
+		s.Ended = true
+	}
+	return s
+}
+
+// parseCaps reads the feature map out of a /v1/capabilities body.
+func parseCaps(body []byte) Caps {
+	var top struct {
+		Model    string                     `json:"model"`
+		Features map[string]json.RawMessage `json:"features"`
+		Session  map[string]json.RawMessage `json:"session"`
+	}
+	_ = json.Unmarshal(body, &top)
+	feat := map[string]bool{}
+	take := func(src map[string]json.RawMessage) {
+		for k, raw := range src {
+			var b bool
+			if json.Unmarshal(raw, &b) == nil {
+				feat[k] = b
+			}
+		}
+	}
+	take(top.Features)
+	take(top.Session)
+	return Caps{Model: top.Model, Features: feat}
 }
 
 func (c *Client) warnf(f string, a ...any) { logOr(c.Warnf, "hermes-hands: WARNING: "+f, a...) }

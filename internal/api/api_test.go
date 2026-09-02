@@ -262,3 +262,67 @@ func writeTestJSON(w http.ResponseWriter, code int, body string) {
 func itoa(n int) string {
 	return string(rune('0' + n))
 }
+
+func TestStopRun_FiresPOST(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Method + " " + r.URL.Path
+		w.WriteHeader(202)
+	}))
+	defer srv.Close()
+	testClient(srv.URL).StopRun(context.Background(), "run_9")
+	if got != "POST /v1/runs/run_9/stop" {
+		t.Errorf("StopRun hit %q", got)
+	}
+	// empty run id is a no-op
+	got = ""
+	testClient(srv.URL).StopRun(context.Background(), "")
+	if got != "" {
+		t.Errorf("StopRun('') should not call, hit %q", got)
+	}
+}
+
+func TestSessionInfo_LenientParse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sessions/hh-x" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		io.WriteString(w, `{"id":"hh-x","title":"a task","message_count":42,
+		  "parent_session_id":"hh-old","model_name":"qwen","total_tokens":8100,"ended_at":"2026-09-03"}`)
+	}))
+	defer srv.Close()
+	si, err := testClient(srv.URL).SessionInfo(context.Background(), "hh-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if si.Title != "a task" || si.Messages != 42 || si.Parent != "hh-old" ||
+		si.Model != "qwen" || si.Tokens != 8100 || !si.Ended {
+		t.Errorf("SrvSession = %+v", si)
+	}
+}
+
+func TestListSessions_ArrayAndWrapped(t *testing.T) {
+	for _, body := range []string{
+		`[{"session_id":"hh-1","title":"one","messages":3},{"session_id":"hh-2"}]`,
+		`{"sessions":[{"session_id":"hh-1","title":"one","messages":3},{"session_id":"hh-2"}]}`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, body)
+		}))
+		ss, err := testClient(srv.URL).ListSessions(context.Background())
+		srv.Close()
+		if err != nil {
+			t.Fatalf("body %s: %v", body, err)
+		}
+		if len(ss) != 2 || ss[0].ID != "hh-1" || ss[0].Title != "one" || ss[0].Messages != 3 || ss[1].ID != "hh-2" {
+			t.Errorf("body %s -> %+v", body, ss)
+		}
+	}
+}
+
+func TestParseCaps(t *testing.T) {
+	c := parseCaps([]byte(`{"model":"m","features":{"run_events_sse":true,"run_stop":true},"session":{"session_compress":false}}`))
+	if c.Model != "m" || !c.Has("run_events_sse") || !c.Has("run_stop") || c.Has("session_compress") || c.Has("nope") {
+		t.Errorf("caps = %+v", c)
+	}
+}
