@@ -55,30 +55,30 @@ version.
 
 ## Use
 
-The primary mode is the **REPL**. Every mode works **on a session** — a bare
-run, a one-shot, and `--rpc` all resume this repo's existing session rather than
-minting a throwaway one per call, so the central Hermes isn't fragmented.
-`--new` forces a fresh session; `--session <id>` pins one.
+**A session is one task.** You continue it or start a new one — there is no
+one-shot, so the central Hermes never fills up with throwaway sessions. When a
+task is done, consciously `--new` (or `/new`) for the next one.
 
 ```sh
-hermes-hands                       # open this repo's session (resumes)
-hermes-hands --new                 # open a fresh session instead
-hermes-hands --session <id>        # open a specific session
-hermes-hands "why is CI failing?"  # run one turn on this repo's session, answer on stdout
-… | hermes-hands -                 # same, message on stdin
-hermes-hands --yolo …              # skip approval prompts for this run
-hermes-hands sessions              # list local sessions
+hermes-hands                       # continue this repo's latest session (main use)
+hermes-hands --session             # same, explicitly
+hermes-hands --session <id>        # open a specific session  (id from --session-list)
+hermes-hands --new                 # start a fresh session (new task)
+hermes-hands --rpc                 # JSON-lines session server for an editor/plugin
+
+hermes-hands --session-list        # list sessions: id / turns / tokens / dir / title
 hermes-hands sessions new          # mint a session id (prints it; for --session / --rpc)
 hermes-hands check                 # preflight the connection
-hermes-hands --rpc                 # JSON-lines session server for an editor/plugin
 ```
 
-`-c` / `--continue` still parse (no-op — a bare run already resumes).
+`-c` / `--continue` alias `--session`. Scripts drive `--rpc` (send one `turn`,
+read the `answer`, close stdin) rather than a per-call one-shot.
 
-REPL commands: `/help` `/new` `/sessions` `/session <id>` `/setup` `/yolo`
-`/check` `/exit` (`Ctrl-D` also exits; `Ctrl-C` at the prompt just hints, during
-a turn it cancels the turn). `/setup` configures without leaving the session and
-the REPL starts even when unconfigured. Tool calls are shown as they run
+REPL commands: `/help` `/new` `/session` (this session's detail) `/session <id>`
+(switch) `/sessions` `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits;
+`Ctrl-C` at the prompt just hints, during a turn it cancels the turn). `/setup`
+configures without leaving the session and the REPL starts even when
+unconfigured. Tool calls are shown as they run
 (`⟩ shell npm test… → exit 0`); the final answer renders through
 `glow`/`bat`/`fmt` if installed.
 
@@ -114,6 +114,13 @@ The `/v1` API has no endpoint to *list* sessions, so a thin local index lives in
 `$XDG_STATE_HOME/hermes-hands/sessions/` purely to make a bare run (resume this
 repo's latest), `--session <id>`, and `sessions` work offline. Titles are also
 mirrored into Hermes via a best-effort `PATCH /api/sessions/{id}`.
+
+`/session` (in-REPL) and `--session-list` show per-session **turns**, the last
+run's **tokens** (cumulative billing `usage`), and **splits** — the number of
+times Hermes handed back a *different* `session_id`, which a server-side
+compaction / session-split causes, so it's a rough compaction counter. Real
+context-window usage and a true compaction count are not exposed by the Hermes
+API yet ([hermes-agent#15618](https://github.com/NousResearch/hermes-agent/issues/15618)).
 
 ## Plugin / editor integration
 

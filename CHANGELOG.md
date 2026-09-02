@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 — no one-shot; explicit sessions; session detail
+
+- **One-shot removed.** `hermes-hands "message"` and `… | hermes-hands -` are
+  gone. A session is one task — continue it or start a new one. Scripts /
+  editors use `--rpc` (send a `turn`, read the `answer`, close stdin).
+- **`--session` takes an optional id.** `--session` alone (and a bare
+  `hermes-hands`) continues this repo's latest; `--session <id>` opens a
+  specific one; `--new` starts a fresh one. `-c` / `--continue` now alias
+  `--session`. `--session-list` = `sessions` (list).
+- **Session detail.** `--session-list` shows a `TOKENS` column; the in-REPL
+  `/session` (no id) prints the current session's local id, the hermes-agent
+  session id, turns, **splits** (times Hermes handed back a new session id ≈
+  compactions), and the last run's token count. Real context-window usage and a
+  compaction count are **not in the Hermes API yet**
+  ([NousResearch/hermes-agent#15618](https://github.com/NousResearch/hermes-agent/issues/15618));
+  "tokens" is the last run's cumulative billing `usage`, "splits" is the
+  observable proxy.
+
 ## 0.3.0 — session-first, plugin surface
 
 The theme: **always work on a session, never fragment the central Hermes** into

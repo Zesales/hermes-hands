@@ -95,7 +95,7 @@ type callSpec struct {
 // every completed api.Ask with (runID, serverSessionID) so the caller can bump
 // the local index and adopt a re-issued session id (mutating rec, which Run
 // re-reads next round).
-func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string)) Outcome {
+func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string, tokens int)) Outcome {
 	round := 1
 	send := l.frame(userMsg)
 	turnlog := "[operator] " + userMsg + "\n"
@@ -118,7 +118,7 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			}
 			return Outcome{Answer: "BLOCKED: " + reason, OK: false}
 		}
-		persist(res.RunID, res.SessionID)
+		persist(res.RunID, res.SessionID, res.Tokens)
 		if round > 1 && !res.Threaded {
 			recap = true
 		}

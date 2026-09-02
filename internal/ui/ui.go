@@ -167,6 +167,7 @@ func (u *UI) Help(cwd string) {
 	fmt.Fprintf(u.w, "  you — shell, read_file, write_file, edit_file in %s,\n", cwd)
 	io.WriteString(u.w, "  each with your approval.\n")
 	io.WriteString(u.w, "    /new          start a fresh session in this directory\n")
+	io.WriteString(u.w, "    /session      show this session's detail (turns, tokens, splits)\n")
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
 	io.WriteString(u.w, "    /sessions     list this machine's sessions, newest first\n")
 	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")

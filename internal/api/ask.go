@@ -112,6 +112,7 @@ func (c *Client) Ask(ctx context.Context, msg, sess, skey string) (AskResult, er
 					RunID:     runID,
 					SessionID: jsonString(respBody, "session_id"),
 					Threaded:  threaded,
+					Tokens:    usageTokens(respBody),
 				}, nil
 			case "failed", "cancelled":
 				return AskResult{}, fmt.Errorf("run %s %s: %s", runID, status,

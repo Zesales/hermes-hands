@@ -78,8 +78,8 @@ func (h *harness) turn(t *testing.T, mode, msg string) (loop.Outcome, *session.R
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	out := h.loop.Run(context.Background(), msg, rec, func(runID, sid string) {
-		if err := h.store.BumpTurn(rec, runID, sid); err != nil {
+	out := h.loop.Run(context.Background(), msg, rec, func(runID, sid string, tok int) {
+		if err := h.store.BumpTurn(rec, runID, sid, tok); err != nil {
 			t.Fatalf("bump: %v", err)
 		}
 	})
