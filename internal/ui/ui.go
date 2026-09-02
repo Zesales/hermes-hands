@@ -170,6 +170,7 @@ func (u *UI) Help(cwd string) {
 	io.WriteString(u.w, "    /session      show this session's detail (turns, tokens, splits)\n")
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
 	io.WriteString(u.w, "    /sessions     list this machine's sessions, newest first\n")
+	io.WriteString(u.w, "    /compact [x]  ask Hermes to compact this session's context now\n")
 	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")
 	io.WriteString(u.w, "    /setup        (re)configure the gateway URL + key\n")
 	io.WriteString(u.w, "    /check        re-test the gateway connection\n")

@@ -192,6 +192,13 @@ func runRPC(smode string) int {
 			}
 			emit(map[string]any{"type": "check", "id": id, "ok": true, "model": res.Model, "base": res.Base})
 
+		case "compact", "compress":
+			if e := a.client.Compress(context.Background(), rec.HermesSessionID, req.Text); e != nil {
+				emit(map[string]any{"type": "compact", "id": id, "ok": false, "message": e.Error()})
+				continue
+			}
+			emit(map[string]any{"type": "compact", "id": id, "ok": true, "session": rec.ID})
+
 		default:
 			emit(map[string]any{"type": "error", "id": id, "message": fmt.Sprintf("unknown request type %q", req.Type)})
 		}
