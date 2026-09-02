@@ -96,10 +96,10 @@ func (c *Client) titleBase() string {
 // preflight ports hh_api_preflight (minus the dropped `hh_need jq curl`).
 func (c *Client) preflight() error {
 	if config.LooksUnset(c.BaseURL) {
-		return fmt.Errorf("HERMES_API_URL not set (or placeholder) - see %s", homeCollapse(c.SecretsPath))
+		return fmt.Errorf("HERMES_API_URL not set (or placeholder) - run: hermes-hands setup")
 	}
 	if config.LooksUnset(c.Key) {
-		return fmt.Errorf("HERMES_API_KEY not set (or placeholder) - see %s", homeCollapse(c.SecretsPath))
+		return fmt.Errorf("HERMES_API_KEY not set (or placeholder) - run: hermes-hands setup")
 	}
 	return config.RequireHTTPS(c.BaseURL, "HERMES_API_URL", c.AllowHTTP)
 }
@@ -217,13 +217,6 @@ func errText(err error) string {
 		return ""
 	}
 	return err.Error()
-}
-
-func homeCollapse(p string) string {
-	if home := os.Getenv("HOME"); home != "" && strings.HasPrefix(p, home) {
-		return "~" + p[len(home):]
-	}
-	return p
 }
 
 // sleep is a context-cancellable pause (bash just `sleep`s; the Go REPL cancels

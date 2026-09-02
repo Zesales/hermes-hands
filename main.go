@@ -327,7 +327,42 @@ func runTurn(smode, msg string) int {
 
 // --- REPL ---
 
+// notConfigured reports whether there is no usable URL+key yet — nothing worth
+// preflighting. Network is not touched.
+func notConfigured(cfg *config.Config) bool {
+	return config.LooksUnset(cfg.APIURL) || config.LooksUnset(cfg.APIKey)
+}
+
+// ensureConfigured makes the REPL a first-run entry point: if there is no
+// config yet and stdin is a terminal, walk the user through `setup` in place
+// rather than sending them off to another command. Returns (exitCode, proceed).
+func ensureConfigured() (int, bool) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+		return 1, false
+	}
+	if !notConfigured(cfg) {
+		return 0, true
+	}
+	if !stdinTTY() {
+		fmt.Println("BLOCKED: not configured yet - run: hermes-hands setup")
+		return 1, false
+	}
+	fmt.Fprintln(os.Stderr, "hermes-hands isn't set up yet — let's do that now.")
+	fmt.Fprintln(os.Stderr)
+	if code := doSetup(bufio.NewReader(os.Stdin), xdgConfigHome()+"/hermes-hands", false); code != 0 {
+		return code, false
+	}
+	fmt.Fprintln(os.Stderr)
+	return 0, true
+}
+
 func runREPL(smode string) int {
+	if code, ok := ensureConfigured(); !ok {
+		return code
+	}
+
 	a, err := newApp()
 	if err != nil {
 		fmt.Printf("BLOCKED: %v\n", err)
@@ -336,11 +371,8 @@ func runREPL(smode string) int {
 	defer a.shell.Stop()
 
 	if _, err := a.client.Check(context.Background()); err != nil {
-		if _, e := os.Stat(a.cfg.SecretsPath); e == nil {
-			fmt.Println("BLOCKED: API preflight failed - run: hermes-hands check")
-		} else {
-			fmt.Println("BLOCKED: not configured yet - run: hermes-hands setup")
-		}
+		fmt.Printf("BLOCKED: %v\n", err)
+		fmt.Fprintln(os.Stderr, "(re-run `hermes-hands setup` to fix the URL or key)")
 		return 1
 	}
 
