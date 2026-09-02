@@ -7,7 +7,9 @@ A built-in, machine-bound, **no-passphrase** encrypted store for the Hermes URL
 
 This is **at-rest protection only.** It makes a copied / backed-up
 `secrets.enc` useless on another machine (or another uid), and keeps the key
-out of a plaintext dotfile. It does **not** defend against anything running as
+out of a plaintext dotfile. The blob is bound to `/etc/machine-id` + your uid —
+**not** hostname (dropped as too fragile: renames, DHCP, WSL — for near-zero
+gain over "the keyseed is already a 0600 file"). It does **not** defend against anything running as
 your uid — including an approved `shell` command — reading the key. The
 approval gate + denylist remain the security boundary. No passphrase is asked
 for, on purpose.
@@ -20,17 +22,17 @@ for, on purpose.
 | `secrets.enc` | `{"v":1,"binds":[…],"nonce":"<b64>","ct":"<b64>"}`. Plaintext payload before encryption is `{"HERMES_API_URL":"…","HERMES_API_KEY":"…"}`. |
 
 `binds` lists the inputs the key was derived from, so decryption is reproducible
-from exactly that list: `["keyseed","machine-id","uid","host"]`, or
-`["keyseed","uid","host"]` when no machine id was available at `setup` time.
+from exactly that list: `["keyseed","machine-id","uid"]`, or
+`["keyseed","uid"]` when no machine id was available at `setup` time.
 
 ## Crypto
 
 - **KDF:** `crypto/hkdf` (stdlib, Go 1.24+) HKDF-SHA256.
-  `masterKey = HKDF(ikm = keyseed, salt = machine-id bytes (nil when unbound), info = "hermes-hands secrets v1 uid=<uid> host=<hostname>")`, 32 bytes.
+  `masterKey = HKDF(ikm = keyseed, salt = machine-id bytes (nil when unbound), info = "hermes-hands secrets v1 uid=<uid>")`, 32 bytes.
 - **Cipher:** AES-256-GCM (`crypto/aes` + `crypto/cipher`), a fresh 12-byte
   nonce from `crypto/rand` per write, AAD = the literal `hermes-hands/secrets.enc/v1`.
 - **machine-id:** `/etc/machine-id`, then `/var/lib/dbus/machine-id`, else omit
-  from `binds` and derive from `keyseed` + uid + host only. Whitespace trimmed.
+  from `binds` and derive from `keyseed` + uid only. Whitespace trimmed.
 
 ## Runtime load order (`internal/config.Load`)
 

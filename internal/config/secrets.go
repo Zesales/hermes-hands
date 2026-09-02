@@ -20,7 +20,7 @@ import (
 // protection only: it does NOT defend against a same-uid read or an approved
 // shell — the approval gate + denylist remain the security boundary. The point
 // is that a copied `secrets.enc` alone is useless (it is bound to the machine
-// id + uid + hostname, and the real secret is a separate 0600 `keyseed` file).
+// id + uid, and the real secret is a separate 0600 `keyseed` file).
 
 const secretsAAD = "hermes-hands/secrets.enc/v1"
 
@@ -58,15 +58,12 @@ func resolveMachineID() string {
 
 func currentUID() string { return strconv.Itoa(os.Getuid()) }
 
-func currentHost() string {
-	h, _ := os.Hostname()
-	return h
-}
-
 // deriveKey = HKDF-SHA256(ikm = keyseed, salt = machine-id bytes (nil when not
-// bound), info = "hermes-hands secrets v1 uid=<uid> host=<host>"), 32 bytes.
-func deriveKey(keyseed, salt []byte, uid, host string) ([]byte, error) {
-	info := "hermes-hands secrets v1 uid=" + uid + " host=" + host
+// bound), info = "hermes-hands secrets v1 uid=<uid>"), 32 bytes. Bound to
+// machine id + uid only — hostname was dropped as too fragile (renames, DHCP,
+// WSL) for the near-zero gain over "keyseed is a 0600 file + machine id".
+func deriveKey(keyseed, salt []byte, uid string) ([]byte, error) {
+	info := "hermes-hands secrets v1 uid=" + uid
 	return hkdf.Key(sha256.New, keyseed, salt, info, 32)
 }
 
@@ -81,7 +78,7 @@ func encryptBlob(keyseed []byte, machineID string, binds []string, payload map[s
 	if slices.Contains(binds, "machine-id") {
 		salt = []byte(machineID)
 	}
-	dk, err := deriveKey(keyseed, salt, currentUID(), currentHost())
+	dk, err := deriveKey(keyseed, salt, currentUID())
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +114,7 @@ func decryptBlob(blob, keyseed []byte) (map[string]string, error) {
 		}
 		salt = []byte(mid)
 	}
-	dk, err := deriveKey(keyseed, salt, currentUID(), currentHost())
+	dk, err := deriveKey(keyseed, salt, currentUID())
 	if err != nil {
 		return nil, ErrSecretsUndecryptable
 	}
@@ -150,17 +147,17 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 }
 
 // WriteEncryptedSecrets mints a fresh 32-byte keyseed, binds to machine
-// id/uid/host (machine id omitted when unavailable), and writes keyseed +
+// id + uid (machine id omitted when unavailable), and writes keyseed +
 // secrets.enc into dir, both 0600.
 func WriteEncryptedSecrets(dir, url, key string) error {
 	seed := make([]byte, 32)
 	if _, err := rand.Read(seed); err != nil {
 		return err
 	}
-	binds := []string{"keyseed", "uid", "host"}
+	binds := []string{"keyseed", "uid"}
 	mid := resolveMachineID()
 	if mid != "" {
-		binds = []string{"keyseed", "machine-id", "uid", "host"}
+		binds = []string{"keyseed", "machine-id", "uid"}
 	}
 	blob, err := encryptBlob(seed, mid, binds, map[string]string{
 		"HERMES_API_URL": url,

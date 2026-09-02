@@ -26,7 +26,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 	seed := []byte("0123456789abcdef0123456789abcdef") // 32 bytes
 	payload := map[string]string{"HERMES_API_URL": "https://h.example.net", "HERMES_API_KEY": "sk-abc123"}
 
-	blob, err := encryptBlob(seed, "test-machine-0001", []string{"keyseed", "machine-id", "uid", "host"}, payload)
+	blob, err := encryptBlob(seed, "test-machine-0001", []string{"keyseed", "machine-id", "uid"}, payload)
 	if err != nil {
 		t.Fatalf("encryptBlob: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 func TestRoundTripWithoutMachineID(t *testing.T) {
 	withMachineID(t, "") // no machine id available
 	seed := []byte("0123456789abcdef0123456789abcdef")
-	blob, err := encryptBlob(seed, "", []string{"keyseed", "uid", "host"}, map[string]string{"HERMES_API_KEY": "k"})
+	blob, err := encryptBlob(seed, "", []string{"keyseed", "uid"}, map[string]string{"HERMES_API_KEY": "k"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestRoundTripWithoutMachineID(t *testing.T) {
 func TestTamperedCiphertextIsCleanError(t *testing.T) {
 	withMachineID(t, "test-machine-0001")
 	seed := []byte("0123456789abcdef0123456789abcdef")
-	blob, _ := encryptBlob(seed, "test-machine-0001", []string{"keyseed", "machine-id", "uid", "host"},
+	blob, _ := encryptBlob(seed, "test-machine-0001", []string{"keyseed", "machine-id", "uid"},
 		map[string]string{"HERMES_API_KEY": "k"})
 
 	var b encBlob
@@ -84,7 +84,7 @@ func TestTamperedCiphertextIsCleanError(t *testing.T) {
 func TestWrongMachineIsCleanError(t *testing.T) {
 	seed := []byte("0123456789abcdef0123456789abcdef")
 	withMachineID(t, "machine-A")
-	blob, _ := encryptBlob(seed, "machine-A", []string{"keyseed", "machine-id", "uid", "host"},
+	blob, _ := encryptBlob(seed, "machine-A", []string{"keyseed", "machine-id", "uid"},
 		map[string]string{"HERMES_API_KEY": "k"})
 
 	withMachineID(t, "machine-B") // decrypting elsewhere
