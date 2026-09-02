@@ -217,11 +217,16 @@ func TestListOrderAndFallback(t *testing.T) {
 
 	out := FormatList(recs)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if lines[0] != "ID                        TURNS  UPDATED              TITLE" {
+	if !strings.HasPrefix(lines[0], "ID") || !strings.Contains(lines[0], "DIR") || !strings.HasSuffix(lines[0], "TITLE") {
 		t.Errorf("header = %q", lines[0])
 	}
-	if !strings.Contains(lines[1], "2026-09-03T00:00:00") || !strings.Contains(lines[1], "/list/b") {
-		t.Errorf("row 1 (newest, cwd fallback) = %q", lines[1])
+	// newest row: no title -> the TITLE column is blank, and the DIR column
+	// carries the location basename ("b"), not the full cwd.
+	if !strings.Contains(lines[1], "2026-09-03T00:00:00") || !strings.HasSuffix(strings.TrimRight(lines[1], " "), "  b") {
+		t.Errorf("row 1 (newest, blank title, dir=b) = %q", lines[1])
+	}
+	if strings.Contains(lines[1], "/list/b") {
+		t.Errorf("row 1 must not show the full cwd as a title: %q", lines[1])
 	}
 	if !strings.Contains(lines[2], "older with title") {
 		t.Errorf("row 2 (title) = %q", lines[2])

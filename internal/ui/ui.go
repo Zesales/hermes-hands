@@ -120,24 +120,31 @@ func (u *UI) Answer(text string) {
 	io.WriteString(u.w, indentLines(strings.TrimSuffix(rendered, "\n"), "   "))
 }
 
-// Banner ports the two REPL header lines (bin/hermes-hands:141-142). The
-// session id is shown with any leading "hh_" stripped.
-func (u *UI) Banner(version, cwd, sessionID string) {
-	fmt.Fprintf(u.w, "%s%shermes-hands%s %s%s  %s·%s  %s\n",
-		u.cB, u.cHermes, u.cR, u.cDim, version, u.cDim, u.cR, cwd)
-	fmt.Fprintf(u.w, "%ssession %s  ·  /help  /new  /sessions  /exit%s\n\n",
-		u.cDim, strings.TrimPrefix(sessionID, "hh_"), u.cR)
+// Banner is the REPL header: name + version + cwd, then the two session ids
+// (this worker's local id and the one in play on the hermes-agent side, shown
+// so a divergence is visible), then the command list.
+func (u *UI) Banner(version, cwd, localID, hermesID string) {
+	if hermesID == "" {
+		hermesID = "(none yet)"
+	}
+	fmt.Fprintf(u.w, "%s%shermes-hands%s %s%s  ·  %s%s\n",
+		u.cB, u.cHermes, u.cR, u.cDim, version, cwd, u.cR)
+	fmt.Fprintf(u.w, "%s%shermes-hands%s%s · session %s%s\n",
+		u.cB, u.cHermes, u.cR, u.cDim, strings.TrimPrefix(localID, "hh_"), u.cR)
+	fmt.Fprintf(u.w, "%s%shermes-agent%s%s · session %s%s\n",
+		u.cB, u.cAcc, u.cR, u.cDim, hermesID, u.cR)
+	fmt.Fprintf(u.w, "%s/help  /new  /sessions  /check  /exit%s\n\n", u.cDim, u.cR)
 }
 
-// SessionPrompt is the REPL input prompt: "session <id> > ". It MUST stay free
-// of ANSI escapes — liner.Prompt rejects any prompt containing a control rune
-// (ErrInvalidPrompt), which would make the REPL exit right after the banner on
-// a colour-capable terminal.
+// SessionPrompt is the REPL input prompt: "hermes-hands - session <id> > ". It
+// MUST stay free of ANSI escapes — liner.Prompt rejects any prompt containing a
+// control rune (ErrInvalidPrompt), which would make the REPL exit right after
+// the banner on a colour-capable terminal.
 func (u *UI) SessionPrompt(id string) string {
-	return "session " + strings.TrimPrefix(id, "hh_") + " > "
+	return "hermes-hands - session " + strings.TrimPrefix(id, "hh_") + " > "
 }
 
-// NewSessionNote ports the `/new` line: "— new session <id> —" (dim), then a
+// NewSessionNote is the `/new` line: "— new session <id> —" (dim), then a
 // blank line, with any leading "hh_" stripped from the id.
 func (u *UI) NewSessionNote(id string) {
 	fmt.Fprintf(u.w, "%s— new session %s —%s\n\n", u.cDim, strings.TrimPrefix(id, "hh_"), u.cR)
@@ -155,14 +162,16 @@ func (u *UI) DimLine(msg string) {
 	fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, msg, u.cR)
 }
 
-// Help ports the REPL `_help` block (bin/hermes-hands:145-152).
-func (u *UI) Help() {
-	fmt.Fprintf(u.w, "%s  type a message to talk to Hermes; it drives shell/read/write here.\n", u.cDim)
-	io.WriteString(u.w, "    /new       fresh session in this directory\n")
-	io.WriteString(u.w, "    /sessions  list local sessions\n")
-	io.WriteString(u.w, "    /check     re-test the API\n")
-	io.WriteString(u.w, "    /exit      quit  (Ctrl-D also)\n")
-	fmt.Fprintf(u.w, "  one-shot for scripts:  hermes-hands \"question\"%s\n", u.cR)
+// Help is the REPL `/help` block: what typing does, then the slash commands.
+func (u *UI) Help(cwd string) {
+	fmt.Fprintf(u.w, "%s  Type a message to your Hermes brain. It works this directory through\n", u.cDim)
+	fmt.Fprintf(u.w, "  you — shell, read_file, write_file, edit_file in %s,\n", cwd)
+	io.WriteString(u.w, "  each with your approval.\n")
+	io.WriteString(u.w, "    /new       start a fresh session in this directory\n")
+	io.WriteString(u.w, "    /sessions  list this machine's sessions, newest first\n")
+	io.WriteString(u.w, "    /check     re-test the gateway connection\n")
+	io.WriteString(u.w, "    /help      show this\n")
+	fmt.Fprintf(u.w, "    /exit      quit  (Ctrl-D too; Ctrl-C cancels the running turn)%s\n", u.cR)
 }
 
 func have(name string) bool {
