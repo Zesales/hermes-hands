@@ -33,6 +33,17 @@ transport change); nothing is an accidental regression.
 - `go mod verify`: all modules verified; deps vendored under `vendor/`
 - `VERSION` unchanged at `0.1.0` (never shipped)
 
+## M10 — machine-bound encrypted secrets store (post-parity feature)
+
+Not part of the bash port. A no-passphrase, stdlib-only (`crypto/hkdf` +
+AES-256-GCM) at-rest store: `setup` writes `secrets.enc` + a `0600` `keyseed`
+bound to machine id + uid + hostname; `config.Load` decrypts it as the
+URL/key fallback (env still wins, `config` file still applied). A decrypt
+failure → `hermes-hands: cannot decrypt secrets.enc on this machine — run
+'hermes-hands setup'`, exit 1, never a panic. `setup --plaintext` keeps the
+pre-M10 `secrets` file + `~/.bashrc` offer, which is also the fallback when no
+`secrets.enc` exists. Full write-up: [`docs/secrets.md`](secrets.md).
+
 ## Deferred
 
 - `release.yml` (tag `v*` → GOOS/GOARCH matrix upload) — a follow-up PR; the
