@@ -119,9 +119,15 @@ mirrored into Hermes via a best-effort `PATCH /api/sessions/{id}`.
 `/session` (in-REPL) and `--session-list` show per-session **turns**, the last
 run's **tokens** (cumulative billing `usage`), and **splits** — the number of
 times Hermes handed back a *different* `session_id`, which a server-side
-compaction / session-split causes, so it's a rough compaction counter. Real
-context-window usage and a true compaction count are not exposed by the Hermes
-API yet ([hermes-agent#15618](https://github.com/NousResearch/hermes-agent/issues/15618)).
+compaction / session-split causes, so it's a rough compaction counter. When the
+gateway answers `GET /api/sessions[/{id}]` they also show server-side numbers:
+message count, context tokens, model, and the `parent_session_id` of a
+compaction continuation. Real context-window usage and a true compaction count
+are not exposed by the Hermes API yet
+([hermes-agent#15618](https://github.com/NousResearch/hermes-agent/issues/15618)).
+
+Ctrl-C during a turn cancels it locally **and** `POST /v1/runs/{id}/stop`s the
+run on Hermes.
 
 ## Plugin / editor integration
 
