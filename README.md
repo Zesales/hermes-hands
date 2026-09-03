@@ -37,17 +37,29 @@ Linux / macOS / WSL. **One static binary, no runtime dependencies** — no `bash
 is used only for `git status` context on a failed command; `glow`/`bat`/`fmt` and
 `diff` are used for prettier output/diffs when present.) Windows: use WSL.
 
+**Fast install — recommended.** No clone, no Go, no build:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.sh | sh
 hermes-hands setup      # asks for your Hermes API URL + key
 ```
 
-That drops **one self-contained binary** at `~/.local/bin/hermes-hands`. The
-installer downloads the latest GitHub release for your OS/CPU and **verifies its
-SHA-256** against the release's `SHA256SUMS` before installing. Re-run any time
-to update. Flags: `--version X.Y.Z` (pin), `--local` (build from a checkout),
-`--source` (git-clone + build). No release yet for your platform → it falls
-back to a source build (needs Go).
+With no arguments this always grabs the **latest** GitHub release for your
+OS/CPU, **verifies its SHA-256** against the release's `SHA256SUMS`, and drops the
+single binary at `~/.local/bin/hermes-hands`. Re-run the same line any time to
+update — that's the whole update mechanism.
+
+Other modes (same script):
+
+| command | does |
+|---|---|
+| `… \| sh` | latest release, SHA-256 verified *(the default)* |
+| `… \| sh -s -- --version 0.9.3` | pin to release `v0.9.3` |
+| `… \| sh -s -- --source` | git-clone + build from source (needs Go + git) |
+| run in a checkout: `sh install.sh --local` | build the current checkout, install that |
+
+(`--source` is also the automatic fallback when no release exists yet for your
+platform.)
 
 `setup` writes into one self-contained directory, `~/hermes-hands/`
 (`$HERMES_HANDS_HOME` overrides): `config` + the machine-bound secrets store
@@ -56,15 +68,15 @@ the URL must be `https://…`. `hermes-hands --version` prints the version.
 
 ## Use
 
-**A session is one task.** You continue it or start a new one — there is no
-one-shot, so the central Hermes never fills up with throwaway sessions. When a
-task is done, consciously `--new` (or `/new`) for the next one.
+**A session is one task.** There is no one-shot and no implicit resume: a bare
+run starts a fresh session. Continue an old one only when you ask (`--session`,
+or `/session <id>` in the REPL).
 
 ```sh
-hermes-hands                       # continue this repo's latest session (main use)
-hermes-hands --session             # same, explicitly
+hermes-hands                       # start a fresh session here (main use)
+hermes-hands --session             # continue this repo's latest session
 hermes-hands --session <id>        # open a specific session  (id from --session-list)
-hermes-hands --new                 # start a fresh session (new task)
+hermes-hands --new                 # start a fresh session  (same as a bare run)
 hermes-hands --rpc                 # JSON-lines session server for an editor/plugin
 
 hermes-hands --session-list        # list sessions: id / turns / tokens / dir / title
@@ -151,10 +163,10 @@ One request object per line on **stdin**; one response object per line on
 {"id":2,"type":"new"}                                   // start a fresh session, becomes current
 {"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
 {"id":4,"type":"check"}
-{"id":5,"type":"compact","text":"auth flow"}              // optional focus; asks Hermes to compact now
+{"id":5,"type":"compact","text":"auth flow"}              // no-op on this gateway (no REST compaction endpoint)
 
 // responses
-{"type":"ready","session":"hh_…","cwd":"/repo","version":"0.3.0","approvals":"off"}
+{"type":"ready","session":"hh_…","cwd":"/repo","version":"X.Y.Z","approvals":"off"}
 {"type":"tool","id":1,"tool":"shell","preview":"npm test","exit":0}
 {"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…"}
 {"type":"session","id":2,"session":"hh_…","hermes_session":"…"}
@@ -253,25 +265,27 @@ your phone and web UI never see it.
   `instructions.md`.
 - The delegation transcript accumulates in the Hermes session. Long sessions lean
   on Hermes' compaction; start a `/new` session for a new task.
-- No streaming of the final answer yet (the loop polls run status). The transport
-  is isolated behind one client so an SSE reader drops in when split-runtime
-  lands.
 - `shell` is POSIX-only; on Windows use WSL.
 
 ## Development
 
 ```sh
 git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
-make dev             # go run from source; live share/instructions.md, sessions in ./.dev/
-make dev ARGS=--new  # ...pass CLI args through ARGS=
-make dev-install     # go build + copy dist/hermes-hands onto your PATH
+make                 # list targets, grouped (Develop / Build & install / Release)
+make dev             # go run from source out of ./.dev/ — live share/instructions.md
+make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
+make dev-install     # go build + copy dist/hermes-hands onto your PATH
 ```
 
-`make dev` reads the URL + key from your real `~/hermes-hands/` (no separate
-setup) but keeps its session index in `./.dev/` and reads the prompt straight
-from `share/instructions.md` — edit it, `make dev` again, no rebuild.
+`make dev` runs a **self-contained dev instance out of `./.dev/`** (gitignored):
+its own `HERMES_HANDS_HOME`, so nothing touches your real `~/hermes-hands/`. On
+first run it copies the machine-bound key over from `~/hermes-hands/` (bound to
+machine-id + uid, not its path, so the copy decrypts) — or `make dev-setup`
+prompts for a separate one. The prompt is read straight from
+`share/instructions.md`: edit it, `make dev` again, no rebuild. `make clean`
+wipes `./.dev/`.
 
 Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds

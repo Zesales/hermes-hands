@@ -1,8 +1,8 @@
-// Package api ports lib/api.sh: one Hermes turn over the merged Runs API
-// (POST /v1/runs + poll GET /v1/runs/{id}), the /v1/capabilities preflight,
-// and the best-effort PATCH /api/sessions/{id} title mirror. The transport is
-// net/http instead of curl; every wire detail (paths, headers, retry/drop
-// ladder, id minting, terminal-status handling) is kept as in the bash source.
+// Package api is one Hermes turn over the merged Runs API (POST /v1/runs +
+// poll GET /v1/runs/{id} or the SSE event stream), the /v1/capabilities
+// preflight, and the best-effort PATCH /api/sessions/{id} title mirror.
+// Transport is net/http; the retry / session-id-drop ladder, Idempotency-Key
+// minting and terminal-status handling all live here.
 package api
 
 import (
@@ -22,7 +22,7 @@ import (
 )
 
 // retrySleep is bash's fixed `sleep 2` between failed POST / capability
-// attempts (not the poll interval, not exponential — see plan §2 #6).
+// attempts (not the poll interval, not exponential).
 const retrySleep = 2 * time.Second
 
 // Client talks to one Hermes gateway.

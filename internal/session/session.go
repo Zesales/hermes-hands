@@ -1,6 +1,5 @@
-// Package session ports lib/session.sh (plus _hh_session_write from
-// lib/api.sh): the local session INDEX. The conversation itself is server-side;
-// this is a thin JSON record per session so `-c`, `--session <id>` and
+// Package session is the local session INDEX. The conversation itself is
+// server-side; this is a thin JSON record per session so `--session <id>` and
 // `sessions` work offline. State lives under <state>/sessions/.
 package session
 
