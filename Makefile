@@ -1,4 +1,5 @@
-# Dev helpers for the Go build. End users install via install.sh (see README).
+# Dev helpers for the Go build. End users install via install.sh (see README);
+# `make` is only for working ON hermes-hands.
 VERSION  := $(shell tr -d '[:space:]' < VERSION)
 GIT_SHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(GIT_SHA)
@@ -6,38 +7,51 @@ PREFIX   ?= $(HOME)/.local
 BINDIR   ?= $(PREFIX)/bin
 GOOSARCH := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-.PHONY: help build test lint staticcheck dev dev-install uninstall release clean
+# `make dev` runs a self-contained dev instance out of ./.dev/ (gitignored):
+# its own HERMES_HANDS_HOME, so sessions/config never touch your real
+# ~/hermes-hands/. The machine-bound key is copied over from your real home on
+# first run (it is bound to machine-id + uid, not its path, so the copy still
+# decrypts); `make dev-setup` instead prompts for a separate key. The prompt is
+# read LIVE from share/instructions.md — edit it, `make dev` again, no rebuild.
+DEV_HOME  ?= $(CURDIR)/.dev
+REAL_HOME ?= $(or $(HERMES_HANDS_HOME),$(HOME)/hermes-hands)
+ARGS      ?=
 
-# `make dev` runs straight from source (go run) against a checkout-local dev
-# state: sessions go under ./.dev/ (not your real ~/hermes-hands/sessions), and
-# the prompt is read LIVE from share/instructions.md so you can edit it and
-# re-run with no rebuild. The gateway URL + key are inherited from your real
-# ~/hermes-hands/ (or the env) — no separate setup. Pass CLI args with ARGS=…
-#   make dev                 # continue this repo's dev session
-#   make dev ARGS=--new
-#   make dev ARGS=setup      # first run only, if you want an isolated key too:
-#                            #   HERMES_HANDS_HOME=$(CURDIR)/.dev make dev ARGS=setup
-DEV_HOME ?= $(CURDIR)/.dev
-ARGS     ?=
+.PHONY: help dev dev-setup test lint staticcheck build dev-install uninstall release clean
 
 help:
-	@echo "make build        - build dist/hermes-hands for this host (VERSION + git sha baked in)"
-	@echo "make dev [ARGS=…]  - go run from source: live share/instructions.md, sessions under ./.dev/"
-	@echo "make test         - go test ./..."
-	@echo "make lint         - gofmt check + go vet ./...  (STATICCHECK=1 also runs staticcheck)"
-	@echo "make dev-install  - build, then copy dist/hermes-hands into $(BINDIR)"
-	@echo "make uninstall    - remove $(BINDIR)/hermes-hands"
-	@echo "make release      - cross-compile $(words $(GOOSARCH)) targets into dist/"
-	@echo "make clean        - remove dist/ and ./.dev/"
+	@echo "Develop:"
+	@echo "  make dev [ARGS=…]   run from source out of ./.dev/  (live share/instructions.md)"
+	@echo "  make dev-setup      prompt for a separate key for ./.dev/  (else it reuses ~/hermes-hands/)"
+	@echo "  make test           go test ./..."
+	@echo "  make lint           gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)"
+	@echo
+	@echo "Build & install:"
+	@echo "  make build          dist/hermes-hands for this host  (VERSION + git sha baked in)"
+	@echo "  make dev-install    build, then copy it into $(BINDIR)"
+	@echo "  make uninstall      remove $(BINDIR)/hermes-hands"
+	@echo
+	@echo "Release:"
+	@echo "  make release        cross-compile $(words $(GOOSARCH)) targets into dist/"
+	@echo
+	@echo "  make clean          remove dist/ and ./.dev/"
+
+# --- develop ---------------------------------------------------------------
 
 dev:
 	@mkdir -p $(DEV_HOME)
-	HERMES_HANDS_STATE=$(DEV_HOME) \
+	@if [ ! -e "$(DEV_HOME)/secrets.enc" ] && [ -f "$(REAL_HOME)/secrets.enc" ] && [ -f "$(REAL_HOME)/keyseed" ]; then \
+	  install -m 0600 "$(REAL_HOME)/secrets.enc" "$(DEV_HOME)/secrets.enc"; \
+	  install -m 0600 "$(REAL_HOME)/keyseed"     "$(DEV_HOME)/keyseed"; \
+	  echo "make dev: reused the key from $(REAL_HOME)/  (make clean to refresh)"; \
+	fi
+	HERMES_HANDS_HOME=$(DEV_HOME) \
 	HERMES_HANDS_INSTRUCTIONS=$(CURDIR)/share/instructions.md \
 	go run -ldflags '$(LDFLAGS)' . $(ARGS)
 
-build:
-	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/hermes-hands .
+dev-setup:
+	@mkdir -p $(DEV_HOME)
+	HERMES_HANDS_HOME=$(DEV_HOME) go run -ldflags '$(LDFLAGS)' . setup
 
 test:
 	CGO_ENABLED=0 go test ./...
@@ -50,6 +64,11 @@ ifdef STATICCHECK
 	go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 ./...
 endif
 
+# --- build & install -----------------------------------------------------
+
+build:
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/hermes-hands .
+
 dev-install: build
 	@mkdir -p $(BINDIR)
 	install -m 0755 dist/hermes-hands $(BINDIR)/hermes-hands
@@ -59,6 +78,8 @@ dev-install: build
 uninstall:
 	rm -f $(BINDIR)/hermes-hands
 	@echo "removed $(BINDIR)/hermes-hands"
+
+# --- release -----------------------------------------------------------------
 
 release:
 	@set -e; for t in $(GOOSARCH); do \

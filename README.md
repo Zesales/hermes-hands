@@ -37,17 +37,29 @@ Linux / macOS / WSL. **One static binary, no runtime dependencies** — no `bash
 is used only for `git status` context on a failed command; `glow`/`bat`/`fmt` and
 `diff` are used for prettier output/diffs when present.) Windows: use WSL.
 
+**Fast install — recommended.** No clone, no Go, no build:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.sh | sh
 hermes-hands setup      # asks for your Hermes API URL + key
 ```
 
-That drops **one self-contained binary** at `~/.local/bin/hermes-hands`. The
-installer downloads the latest GitHub release for your OS/CPU and **verifies its
-SHA-256** against the release's `SHA256SUMS` before installing. Re-run any time
-to update. Flags: `--version X.Y.Z` (pin), `--local` (build from a checkout),
-`--source` (git-clone + build). No release yet for your platform → it falls
-back to a source build (needs Go).
+With no arguments this always grabs the **latest** GitHub release for your
+OS/CPU, **verifies its SHA-256** against the release's `SHA256SUMS`, and drops the
+single binary at `~/.local/bin/hermes-hands`. Re-run the same line any time to
+update — that's the whole update mechanism.
+
+Other modes (same script):
+
+| command | does |
+|---|---|
+| `… \| sh` | latest release, SHA-256 verified *(the default)* |
+| `… \| sh -s -- --version 0.9.3` | pin to release `v0.9.3` |
+| `… \| sh -s -- --source` | git-clone + build from source (needs Go + git) |
+| run in a checkout: `sh install.sh --local` | build the current checkout, install that |
+
+(`--source` is also the automatic fallback when no release exists yet for your
+platform.)
 
 `setup` writes into one self-contained directory, `~/hermes-hands/`
 (`$HERMES_HANDS_HOME` overrides): `config` + the machine-bound secrets store
@@ -262,16 +274,21 @@ your phone and web UI never see it.
 
 ```sh
 git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
-make dev             # go run from source; live share/instructions.md, sessions in ./.dev/
-make dev ARGS=--new  # ...pass CLI args through ARGS=
-make dev-install     # go build + copy dist/hermes-hands onto your PATH
+make                 # list targets, grouped (Develop / Build & install / Release)
+make dev             # go run from source out of ./.dev/ — live share/instructions.md
+make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
+make dev-install     # go build + copy dist/hermes-hands onto your PATH
 ```
 
-`make dev` reads the URL + key from your real `~/hermes-hands/` (no separate
-setup) but keeps its session index in `./.dev/` and reads the prompt straight
-from `share/instructions.md` — edit it, `make dev` again, no rebuild.
+`make dev` runs a **self-contained dev instance out of `./.dev/`** (gitignored):
+its own `HERMES_HANDS_HOME`, so nothing touches your real `~/hermes-hands/`. On
+first run it copies the machine-bound key over from `~/hermes-hands/` (bound to
+machine-id + uid, not its path, so the copy decrypts) — or `make dev-setup`
+prompts for a separate one. The prompt is read straight from
+`share/instructions.md`: edit it, `make dev` again, no rebuild. `make clean`
+wipes `./.dev/`.
 
 Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
