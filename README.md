@@ -14,6 +14,15 @@ you type ──▶ POST /v1/runs ──────────────▶ H
                 feeds {"results":[…]} back, loops, until Hermes answers.
 ```
 
+> **Status.** A native "remote brain, local hands" path for Hermes is still
+> being decided upstream —
+> [issue #18715](https://github.com/NousResearch/hermes-agent/issues/18715) /
+> [PR #63966](https://github.com/NousResearch/hermes-agent/pull/63966), open.
+> `hermes-hands` **works well today** on the merged Runs API. Once Hermes picks
+> a mechanism (and here's hoping it's a clean one), hermes-hands moves to it for
+> a tighter local↔remote loop and this bridge becomes the fallback — the local
+> dispatcher doesn't change either way.
+
 ## Why
 
 Running Hermes as your one always-on assistant is great until you want it to
@@ -32,10 +41,17 @@ not change.**
 
 ## Install
 
-Linux / macOS / WSL. **One static binary, no runtime dependencies** — no `bash`,
-`curl` or `jq` needed to run it, no language runtime, no package manager. (`git`
-is used only for `git status` context on a failed command; `glow`/`bat`/`fmt` and
-`diff` are used for prettier output/diffs when present.) Windows: use WSL.
+**Requirements**
+
+- **OS:** Linux or macOS, `x86-64` or `arm64`. On Windows, run it **inside
+  WSL** (use the Linux binary) — native Windows has no `bash`, no `/dev/tty`,
+  no `$HOME`.
+- **`bash`** on `PATH` — the `shell` tool drives a persistent `bash --login`.
+  Without it only `read_file` / `write_file` / `edit_file` work.
+- Nothing else to *run* the binary: one static executable, no `curl` / `jq`, no
+  language runtime, no package manager. (`git` is used only for `git status`
+  context on a failed command; `glow` / `bat` / `diff` prettify output when
+  present.)
 
 **Fast install — recommended.** No clone, no Go, no build:
 
@@ -291,29 +307,51 @@ Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
 and CI never touch the network. Layout: `main.go` (CLI + REPL + setup) +
 `internal/{config,redact,ttyio,prompt,ui,api,session,shell,dispatch,loop}` +
-`share/instructions.md` (embedded via `//go:embed`). CI runs gofmt, `go vet`,
-`go test`, and a windows/darwin cross-compile smoke on every push; a separate
-`release` workflow publishes `vX.Y.Z` whenever `VERSION` changes on `main`.
+`share/instructions.md` (embedded via `//go:embed`). `.github/workflows/test.yml`
+runs gofmt, `go vet`, `go test`, `./build.sh release` (the linux+darwin ×
+amd64+arm64 cross-compile) and a windows compile check on every PR (the `test`
+job is a required check for merging); `release.yml` tags + publishes on merge
+(see Releasing).
 
 `test/mock_hermes.py` is a manual-only stand-in for the Runs API — the Go suite
 has its own in-process mock (`internal/hermesmock`) and needs no `python3`.
 
 ## Releasing
 
-**Automated.** A push to `main` that changes `VERSION` triggers
-`.github/workflows/release.yml`: it re-runs the checks, cross-compiles
-`{linux,darwin}×{amd64,arm64}` + `windows/amd64` via `./build.sh release`, then
-publishes a GitHub Release **`vX.Y.Z`** with the binaries and `SHA256SUMS`. The
-step is idempotent — if the tag already exists it does nothing, so re-pushing
-`main` without a `VERSION` bump never re-releases.
+**No `VERSION` file — git tags are the source of truth.** `git describe` bakes
+the version into every build (`0.10.0` on a release, `0.10.0-3-gabc123` in
+between; `install.sh --version 0.10.0` pins one).
 
-So the release flow is just the normal one: bump `VERSION`, land it on `main`.
+**Every merged PR ships a release.** `.github/workflows/release.yml` (on
+`pull_request` → closed & merged):
+
+1. **next version** = the highest `v*.*.*` tag, bumped by the PR's label —
+   exactly one of `bump:patch` / `bump:minor` / `bump:major` (`bump:none` = no
+   release). `pr-label.yml`'s `bump-label` job enforces the label as a required
+   check.
+2. puts an **annotated tag `vX.Y.Z`** on the merge commit and pushes **only the
+   tag** — nothing is committed to `main`, so branch protection needs no
+   bypass,
+3. runs `./build.sh release` (`{linux,darwin}×{amd64,arm64}` + `SHA256SUMS`)
+   with that version, publishes with auto-generated notes ("What's Changed"
+   from the PRs + a full-changelog link), marked *latest*.
+
+It does **not** re-test — the gate is `test.yml` + `bump-label` on the PR
+(required checks) plus "require branches up to date", so the merged code is
+exactly what was verified. `workflow_dispatch` fires it by hand with an
+explicit bump level.
+
+> One-time repo setup: Settings → Actions → Workflow permissions → **Read and
+> write**; make `test` and `bump-label` required status checks; create the
+> labels `bump:patch` / `bump:minor` / `bump:major` / `bump:none`. The first
+> release's baseline is `MIN_VERSION` in `release.yml` (used only until the
+> first tag exists).
 
 `./build.sh` builds this machine's binary into `dist/`; `./build.sh release`
-produces the exact set of artifacts the workflow publishes. `install.sh`:
+produces the exact artifact set the workflow publishes. `install.sh`:
 
 - default — latest release, SHA-256 verified;
-- `--version X.Y.Z` — pin to `vX.Y.Z`;
+- `--version X.Y.Z` — pin to release `vX.Y.Z`;
 - `--local` — build from the current checkout;
 - `--source` — git-clone + build.
 
