@@ -287,8 +287,9 @@ func TestSessionInfo_LenientParse(t *testing.T) {
 		if r.URL.Path != "/api/sessions/hh-x" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		io.WriteString(w, `{"id":"hh-x","title":"a task","message_count":42,
-		  "parent_session_id":"hh-old","model_name":"qwen","total_tokens":8100,"ended_at":"2026-09-03"}`)
+		io.WriteString(w, `{"object":"hermes.session","session":{"id":"hh-x","title":"a task",
+		  "message_count":42,"parent_session_id":"hh-old","model":"qwen",
+		  "input_tokens":600,"cache_read_tokens":7500,"started_at":1788400000,"ended_at":"2026-09-03"}}`)
 	}))
 	defer srv.Close()
 	si, err := testClient(srv.URL).SessionInfo(context.Background(), "hh-x")
@@ -296,7 +297,7 @@ func TestSessionInfo_LenientParse(t *testing.T) {
 		t.Fatal(err)
 	}
 	if si.Title != "a task" || si.Messages != 42 || si.Parent != "hh-old" ||
-		si.Model != "qwen" || si.Tokens != 8100 || !si.Ended {
+		si.Model != "qwen" || si.Tokens != 8100 || !si.Ended || si.Created == "" {
 		t.Errorf("SrvSession = %+v", si)
 	}
 }
@@ -324,5 +325,65 @@ func TestParseCaps(t *testing.T) {
 	c := parseCaps([]byte(`{"model":"m","features":{"run_events_sse":true,"run_stop":true},"session":{"session_compress":false}}`))
 	if c.Model != "m" || !c.Has("run_events_sse") || !c.Has("run_stop") || c.Has("session_compress") || c.Has("nope") {
 		t.Errorf("caps = %+v", c)
+	}
+}
+
+func TestStreamRun_RealShape(t *testing.T) {
+	// exactly the frames a live gateway emits
+	body := "" +
+		`data: {"event": "message.delta", "delta": "Hi"}` + "\n\n" +
+		`data: {"event": "message.delta", "delta": " there"}` + "\n\n" +
+		`data: {"event": "reasoning.available", "text": "thinking"}` + "\n\n" +
+		`data: {"event": "run.completed", "output": "Hi there.", "usage": {"input_tokens": 100, "output_tokens": 5, "total_tokens": 105}, "session_id": "sess-9"}` + "\n\n" +
+		": stream closed\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runs/run_x/events" {
+			t.Errorf("path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, body)
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+	var deltas []string
+	c.OnDelta = func(s string) { deltas = append(deltas, s) }
+	res, err := c.streamRun(context.Background(), srv.URL, "run_x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "Hi there." || res.SessionID != "sess-9" || res.Tokens != 105 || !res.Threaded {
+		t.Errorf("res = %+v", res)
+	}
+	if strings.Join(deltas, "") != "Hi there" {
+		t.Errorf("deltas = %q", deltas)
+	}
+}
+
+func TestStreamRun_NoCompletedFallsBack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `data: {"event":"message.delta","delta":"partial"}`+"\n\n")
+	}))
+	defer srv.Close()
+	if _, err := testClient(srv.URL).streamRun(context.Background(), srv.URL, "r", true); err == nil {
+		t.Error("stream without run.completed must error so Ask falls back to poll")
+	}
+}
+
+func TestWantStream(t *testing.T) {
+	c := &Client{}
+	if c.wantStream() {
+		t.Error("auto + no caps -> no stream")
+	}
+	c.Caps = Caps{Features: map[string]bool{"run_events_sse": true}}
+	if !c.wantStream() {
+		t.Error("auto + caps -> stream")
+	}
+	c.StreamMode = "off"
+	if c.wantStream() {
+		t.Error("off -> no stream even with caps")
+	}
+	c.StreamMode, c.Caps = "on", Caps{}
+	if !c.wantStream() {
+		t.Error("on -> stream even without caps")
 	}
 }
