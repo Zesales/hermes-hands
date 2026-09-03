@@ -39,14 +39,15 @@ is used only for `git status` context on a failed command; `glow`/`bat`/`fmt` an
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.sh | sh
-hermes-hands setup      # asks for your Hermes API URL + key, writes config
+hermes-hands setup      # asks for your Hermes API URL + key
 ```
 
-That drops **one self-contained binary** at `~/.local/bin/hermes-hands`. Unlike
-the old bash script you can't `less` it, so releases ship SHA-256 checksums —
-verify them, or build from source (below). Re-run the same `curl … | sh` any time
-to update; it prefers a released platform binary and only builds from source (Go
-required) when none is available.
+That drops **one self-contained binary** at `~/.local/bin/hermes-hands`. The
+installer downloads the latest GitHub release for your OS/CPU and **verifies its
+SHA-256** against the release's `SHA256SUMS` before installing. Re-run any time
+to update. Flags: `--version X.Y.Z` (pin), `--local` (build from a checkout),
+`--source` (git-clone + build). No release yet for your platform → it falls
+back to a source build (needs Go).
 
 `setup` writes into one self-contained directory, `~/hermes-hands/`
 (`$HERMES_HANDS_HOME` overrides): `config` + the machine-bound secrets store
@@ -271,18 +272,30 @@ Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 and CI never touch the network. Layout: `main.go` (CLI + REPL + setup) +
 `internal/{config,redact,ttyio,prompt,ui,api,session,shell,dispatch,loop}` +
 `share/instructions.md` (embedded via `//go:embed`). CI runs gofmt, `go vet`,
-`go test`, and a windows/darwin cross-compile smoke on every push.
+`go test`, and a windows/darwin cross-compile smoke on every push; a separate
+`release` workflow publishes `vX.Y.Z` whenever `VERSION` changes on `main`.
 
 `test/mock_hermes.py` is a manual-only stand-in for the Runs API — the Go suite
 has its own in-process mock (`internal/hermesmock`) and needs no `python3`.
 
 ## Releasing
 
-Bump `VERSION`, tag `vX.Y.Z`, then `make release` — it cross-compiles
-`dist/hermes-hands_<os>_<arch>` for `{linux,darwin}×{amd64,arm64}` and
-`windows/amd64`. Upload those (plus SHA-256 sums) as release assets;
-`install.sh` fetches `hermes-hands_<os>_<arch>` and only builds from source
-when no matching asset exists.
+**Automated.** A push to `main` that changes `VERSION` triggers
+`.github/workflows/release.yml`: it re-runs the checks, cross-compiles
+`{linux,darwin}×{amd64,arm64}` + `windows/amd64` via `./build.sh all`, then
+publishes a GitHub Release **`vX.Y.Z`** with the binaries and `SHA256SUMS`. The
+step is idempotent — if the tag already exists it does nothing, so re-pushing
+`main` without a `VERSION` bump never re-releases.
+
+So the release flow is just the normal one: bump `VERSION`, land it on `main`.
+
+`./build.sh` locally produces the exact same `dist/` (`./build.sh host` for
+just this machine's binary). `install.sh`:
+
+- default — latest release, SHA-256 verified;
+- `--version X.Y.Z` — pin to `vX.Y.Z`;
+- `--local` — build from the current checkout;
+- `--source` — git-clone + build.
 
 ## License
 
