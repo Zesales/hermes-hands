@@ -262,10 +262,16 @@ your phone and web UI never see it.
 
 ```sh
 git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
+make dev             # go run from source; live share/instructions.md, sessions in ./.dev/
+make dev ARGS=--new  # ...pass CLI args through ARGS=
 make dev-install     # go build + copy dist/hermes-hands onto your PATH
 make test            # go test ./... — offline, no network, no model
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
 ```
+
+`make dev` reads the URL + key from your real `~/hermes-hands/` (no separate
+setup) but keeps its session index in `./.dev/` and reads the prompt straight
+from `share/instructions.md` — edit it, `make dev` again, no rebuild.
 
 Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds

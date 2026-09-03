@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Tooling only — no `VERSION` bump, so no release.
+
+- `make dev [ARGS=…]` — run straight from source (`go run`) against a
+  checkout-local dev state: session index under `./.dev/` (gitignored, not your
+  real `~/hermes-hands/sessions`), prompt read **live** from
+  `share/instructions.md` (edit + re-run, no rebuild). URL + key inherited from
+  `~/hermes-hands/` / the env. `make clean` now also removes `./.dev/`.
+
 ## 0.9.3 — drop the stale repo `config/`; rename `build.sh` verb
 
 - **Removed `config/`** (`config.example` + `secrets.example`) — a bash-era
