@@ -56,6 +56,9 @@ func (c *Client) Ask(ctx context.Context, msg, sess, skey string) (AskResult, er
 		code, respBody, err := c.do(ctx, http.MethodPost, base+"/v1/runs", body, hdr)
 		if err == nil && is2xx(code) {
 			if runID = jsonString(respBody, "run_id"); runID != "" {
+				if c.OnRunStart != nil {
+					c.OnRunStart(runID)
+				}
 				break
 			}
 			return AskResult{}, fmt.Errorf("POST /v1/runs 2xx but no run_id: %s",
