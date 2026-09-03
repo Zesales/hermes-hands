@@ -52,9 +52,11 @@ type Loop struct {
 	Warnf func(string, ...any)
 }
 
-// frame wraps the operator's message so every turn re-establishes that Hermes
-// is remote, must answer with the tool-call envelope, and what "here" / "the
-// repo" resolves to. Without a RepoRoot it is a passthrough.
+// frame presents the operator's message to Hermes as a *problem* to solve —
+// not a chat turn — with the working directory named and the response contract
+// (reasoning, then one envelope) restated right after it. The behavioural rules
+// live in the cached instructions field; this stays a thin task wrapper.
+// Without a RepoRoot it is a passthrough (tests).
 // locNote is " at <cwd>" for the results reminder ("" when RepoRoot is unset).
 func (l *Loop) locNote() string {
 	if l.RepoRoot == "" {
@@ -67,28 +69,22 @@ func (l *Loop) frame(userMsg string) string {
 	if l.RepoRoot == "" {
 		return userMsg
 	}
-	loc := "cwd: " + l.RepoRoot
+	loc := "cwd " + l.RepoRoot
 	if l.GitBranch != nil {
 		if b := l.GitBranch(); b != "" {
-			loc += "  (git branch: " + b + ")"
+			loc += " (git branch: " + b + ")"
 		}
 	}
-	return "[hermes-hands] You are Hermes, driving a worker at the operator's Linux\n" +
-		"terminal. The worker is a persistent bash shell; " + loc + ".\n" +
-		"EVERY message this session is about THAT directory: its code, files, git,\n" +
-		"build, tests. Vague ones too — \"what can you do\", \"what's here\", \"help\",\n" +
-		"\"the readme\", \"this\" — they ask what you can do with THEIR project, not\n" +
-		"about you. You have not seen it yet: answer by LOOKING.\n" +
-		"Reply with ONE JSON object and nothing else —\n" +
-		"  {\"calls\":[{\"tool\":\"shell|read_file|write_file|edit_file\",\"args\":{...}}],\"final\":null}\n" +
-		"— the worker runs it there and returns {\"results\":[...]}. When you can\n" +
-		"answer: {\"calls\":[],\"final\":\"...\"}. One or the other, never both, never prose\n" +
-		"outside the object.\n" +
-		"Your own terminal/read_file/execute_code run in a throwaway /root container,\n" +
-		"NOT the operator's machine — even their absolute paths aren't there.\n" +
-		"tool_search/skill_view/cronjob describe you, not their project — don't reach\n" +
-		"for any of those; reach for the worker. Memory / web / reasoning: normal.\n\n" +
-		"operator: " + userMsg
+	return "[hermes-hands — you are the brain; hermes-hands is your hands at the\n" +
+		"operator's Linux terminal, a persistent bash shell in the working directory.]\n\n" +
+		"PROBLEM — operator's working directory: " + loc + "\n\n" +
+		userMsg + "\n\n" +
+		"Your reply: reason it through, then ONE instruction and nothing else —\n" +
+		"{\"calls\":[{\"tool\":\"shell|read_file|write_file|edit_file\",\"args\":{...}}],\"final\":null}\n" +
+		"to put the hands to work in that directory, or {\"calls\":[],\"final\":\"...\"} once\n" +
+		"it is solved. Not a chat reply, not a description of yourself or your tools.\n" +
+		"If you do not know the directory yet, your instruction is a look — `shell`\n" +
+		"(ls / git / rg) or `read_file`."
 }
 
 // Outcome is the turn result. OK == false means Answer is a "BLOCKED: ..."
@@ -242,9 +238,13 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 		}
 
 		payload, _ := marshalNoHTML(resultsPayload{Results: elems})
-		send = "[worker results — this is what actually ran in the operator's bash shell" + l.locNote() +
-			". Read it and continue. Empty or failing output means try another command, " +
-			"not that you \"can't access\" it — this is not your sandbox.]\n" + string(payload)
+		send = "[hands results] Your hands ran the instruction you just gave, in the operator's" +
+			" working directory" + l.locNote() + ". This is real output from the operator's" +
+			" machine — the operator did NOT paste it, and it is NOT from your sandbox. Each" +
+			" result's output is the actual file contents / command output; exit_code 0 means" +
+			" it worked (empty or non-zero: try another instruction, never \"I can't read it\")." +
+			" Now give the operator your answer in final — or another instruction if you need" +
+			" more.\n" + string(payload)
 		round++
 	}
 }

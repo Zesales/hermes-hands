@@ -193,6 +193,39 @@ func TestStartWorking_AnimatedLineShowsElapsedAndHint(t *testing.T) {
 	}
 }
 
+func TestTurnDone(t *testing.T) {
+	for _, tc := range []struct {
+		d       time.Duration
+		outcome string
+		limit   int
+		want    string
+	}{
+		{12 * time.Second, "", 0, "— worked for 12s —"},
+		{8500 * time.Millisecond, "interrupted", 0, "— interrupted after 9s —"},
+		{603 * time.Second, "timeout", 600, "— timeout after 10m03s — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=600s) —"},
+	} {
+		var b strings.Builder
+		newUI(&b, false, false).TurnDone(tc.d, tc.outcome, tc.limit)
+		if got := strings.TrimRight(b.String(), "\n"); got != tc.want {
+			t.Errorf("TurnDone(%v,%q,%d) = %q, want %q", tc.d, tc.outcome, tc.limit, got, tc.want)
+		}
+	}
+}
+
+func TestHumanDur(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0s"}, {999 * time.Millisecond, "1s"}, {59 * time.Second, "59s"},
+		{60 * time.Second, "1m00s"}, {125 * time.Second, "2m05s"},
+	} {
+		if got := humanDur(tc.d); got != tc.want {
+			t.Errorf("humanDur(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
 func TestStartWorking_NonTTYStaticAndIdempotent(t *testing.T) {
 	var b strings.Builder
 	u := newUI(&b, false, false) // non-tty
