@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.7.0 — one self-contained directory (`~/hermes-hands/`)
+
+The scattered XDG layout is gone. Everything hermes-hands reads and writes now
+lives in **one directory**, `HERMES_HANDS_HOME` (default `~/hermes-hands/`):
+
+```
+~/hermes-hands/
+  config
+  secrets.enc   keyseed        (machine-bound store; setup default)
+  secrets                       (only with setup --plaintext)
+  instructions.md               (optional per-repo override)
+  sessions/                     (local session index — was ~/.local/state/…)
+```
+
+- `HERMES_HANDS_HOME` roots all four paths; the existing per-path overrides
+  (`HERMES_HANDS_CONFIG` / `_SECRETS` / `_STATE` / `_INSTRUCTIONS`) still win
+  over the derived default. `XDG_CONFIG_HOME` / `XDG_STATE_HOME` are no longer
+  consulted.
+- **`/config` now reports the real secrets source** — `secrets.enc`
+  (encrypted, machine-bound) / plaintext `secrets` / environment — instead of
+  always printing the plaintext path. New `home` and `sessions` lines; a
+  `Config.SecretsSource` field backs it.
+- `setup` writes into `~/hermes-hands/` directly (flat, no `hermes-hands/`
+  sub-path); `setup --plaintext`'s `~/.bashrc` line points at
+  `${HERMES_HANDS_HOME:-$HOME/hermes-hands}/secrets`.
+
+**Migrating an existing install:** move `config`, `secrets.enc`, `keyseed` from
+`~/.config/hermes-hands/` and `sessions/` from `~/.local/state/hermes-hands/`
+into `~/hermes-hands/`, then delete any stale plaintext
+`~/.config/hermes-hands/secrets` and its `~/.bashrc` source line. The encrypted
+store is bound to `keyseed` + machine-id + uid, **not** its path — moving the
+files does not break decryption.
+
 ## 0.6.5 — turn timer, silence watchdog, read-only `/config`
 
 - **The `⋯ working` line now shows elapsed seconds** (`working · 47s · Ctrl+C to
