@@ -110,3 +110,28 @@ func TestAutoApprover(t *testing.T) {
 		t.Errorf("AutoApprover must Approve")
 	}
 }
+
+func TestConfirmCallsPauseAndResume(t *testing.T) {
+	var paused, resumed int
+	a := &TTYApprover{
+		Mode:    "ask",
+		AskLine: func(string) (string, error) { return "y", nil },
+		Pause: func() func() {
+			paused++
+			return func() { resumed++ }
+		},
+	}
+	if got := a.Confirm("shell: ls", ""); got != Approve {
+		t.Fatalf("Confirm = %v", got)
+	}
+	if paused != 1 || resumed != 1 {
+		t.Errorf("pause/resume = %d/%d, want 1/1", paused, resumed)
+	}
+	// auto never reaches the prompt -> no pause
+	paused, resumed = 0, 0
+	a.Mode = "auto"
+	_ = a.Confirm("x", "")
+	if paused != 0 {
+		t.Errorf("auto mode must not pause, got %d", paused)
+	}
+}

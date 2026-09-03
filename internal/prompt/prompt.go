@@ -51,6 +51,11 @@ type TTYApprover struct {
 	// returns an error on Ctrl-C, which is treated as "quit turn".
 	AskLine func(prompt string) (string, error)
 
+	// Pause, when set, is called before the prompt is drawn; its return value
+	// is called after the answer is read. The REPL uses it to freeze the
+	// animated "working" spinner so it doesn't overwrite the prompt line.
+	Pause func() (resume func())
+
 	// openTTY is indirected for tests; nil means the real /dev/tty.
 	openTTY func() (io.ReadWriteCloser, error)
 }
@@ -73,6 +78,10 @@ func (a *TTYApprover) Confirm(summary, detail string) Decision {
 	}
 	if a.allDone {
 		return Approve
+	}
+
+	if a.Pause != nil { // freeze the "working" spinner while the prompt is up
+		defer a.Pause()()
 	}
 
 	out := a.Out
