@@ -134,6 +134,7 @@ func runRPC(smode string) int {
 			a.loop.OnTool = func(tool, preview string, exit int) {
 				emit(map[string]any{"type": "tool", "id": id, "tool": tool, "preview": preview, "exit": exit})
 			}
+			a.client.OnDelta = func(t string) { emit(map[string]any{"type": "delta", "id": id, "text": t}) }
 			ctx, cancel := context.WithCancel(context.Background())
 			turnMu.Lock()
 			cancelTurn = cancel
@@ -147,6 +148,7 @@ func runRPC(smode string) int {
 			interrupted := ctx.Err() != nil
 			cancel()
 			a.loop.OnTool = nil
+			a.client.OnDelta = nil
 
 			if interrupted {
 				emit(map[string]any{"type": "error", "id": id, "message": "turn interrupted"})
@@ -193,11 +195,8 @@ func runRPC(smode string) int {
 			emit(map[string]any{"type": "check", "id": id, "ok": true, "model": res.Model, "base": res.Base})
 
 		case "compact", "compress":
-			if e := a.client.Compress(context.Background(), rec.HermesSessionID, req.Text); e != nil {
-				emit(map[string]any{"type": "compact", "id": id, "ok": false, "message": e.Error()})
-				continue
-			}
-			emit(map[string]any{"type": "compact", "id": id, "ok": true, "session": rec.ID})
+			emit(map[string]any{"type": "compact", "id": id, "ok": false,
+				"message": "this gateway exposes no REST compaction endpoint; Hermes compacts automatically"})
 
 		default:
 			emit(map[string]any{"type": "error", "id": id, "message": fmt.Sprintf("unknown request type %q", req.Type)})

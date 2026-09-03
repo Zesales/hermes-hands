@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0 — SSE streaming + more API (verified against a live gateway)
+
+The remaining API sweep, checked against a real Hermes (the SSE event shape and
+every response schema below are the live ones, not guesses).
+
+- **SSE answer streaming.** `Ask` now reads `GET /v1/runs/{id}/events` when the
+  gateway advertises `run_events_sse` (`HERMES_HANDS_STREAM` = `auto` default /
+  `on` / `off`). The REPL previews the answer *text* live as it generates — a
+  small extractor pulls the `final` string out of the streaming envelope, so
+  you never see raw JSON, and tool-call rounds stream nothing. `run.completed`
+  carries `output` + `usage`, so no follow-up poll. Any stream surprise falls
+  back to polling — the poll is always authoritative. `--rpc` emits
+  `{"type":"delta","text":…}` frames.
+- **`/session` shows real server numbers** from `GET /api/sessions/{id}`
+  (`{"session":{…}}`): message count, context tokens (`input_tokens +
+  cache_read_tokens`), model, `parent_session_id`, ended.
+- **`/fork`** — `POST /api/sessions/{id}/fork`: branch this session on the
+  server and switch to the branch.
+- **`/skills`** — `GET /v1/skills`: how many skills the brain has, by category.
+- **`/compact` is honest now** — this gateway exposes no REST compaction
+  endpoint (`/compress` is an internal chat command); the command says so.
+- Hidden dev inspectors: `hermes-hands _raw <path>` (GET a path, print the
+  body) and `_events "<prompt>"` (start a run, dump its raw SSE stream).
+
 ## 0.5.0 — more of the Hermes API
 
 Tier 1 of the API sweep — the safe, testable parts. SSE streaming of the answer

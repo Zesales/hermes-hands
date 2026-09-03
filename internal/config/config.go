@@ -32,6 +32,7 @@ type Config struct {
 	APIRetries                            int
 	APIRunTimeout                         time.Duration
 	Approve                               string // ask | auto | never (anything else behaves as ask)
+	Stream                                string // HERMES_HANDS_STREAM: "" / auto | on | off
 	Deny                                  []string
 	MaxRounds, RunTimeout, MaxOutput      int
 	AllowHTTP, Verbose                    bool
@@ -74,6 +75,7 @@ func Load() (*Config, error) {
 		APIKey:     merged["HERMES_API_KEY"],
 		APIProfile: merged["HERMES_API_PROFILE"],
 		Approve:    firstNonEmpty(merged["HERMES_HANDS_APPROVE"], "ask"),
+		Stream:     merged["HERMES_HANDS_STREAM"],
 		Deny:       splitDeny(merged["HERMES_HANDS_DENY"]),
 		AllowHTTP:  merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
 		Verbose:    merged["HERMES_HANDS_VERBOSE"] != "",

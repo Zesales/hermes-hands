@@ -81,6 +81,18 @@ type parsed struct {
 // (see runREPL / runRPC).
 func parseArgs(args []string) parsed {
 	p := parsed{}
+	// Hidden dev command: `hermes-hands _events "<prompt>"` starts a run and
+	// dumps its raw /v1/runs/{id}/events SSE stream. Not in usage / help.
+	if len(args) >= 1 && args[0] == "_events" {
+		p.action = "events"
+		p.smode = strings.Join(args[1:], " ")
+		return p
+	}
+	if len(args) >= 2 && args[0] == "_raw" {
+		p.action = "raw"
+		p.smode = args[1] // an API path, e.g. /v1/capabilities
+		return p
+	}
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "-h", "--help":
@@ -152,6 +164,10 @@ func main() {
 		os.Exit(runSessionNew())
 	case "setup":
 		os.Exit(runSetup())
+	case "events":
+		os.Exit(runEventsDump(p.smode))
+	case "raw":
+		os.Exit(runRawGet(p.smode))
 	}
 	if p.errMsg != "" {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %s\n", p.errMsg)
@@ -173,6 +189,85 @@ func orElse(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// finalStreamer turns the raw SSE token stream (which carries the JSON
+// envelope `{"calls":...,"final":"..."}`) into a live preview of just the
+// `final` answer text. On a tool-call round (non-empty "calls") it emits
+// nothing — the tool lines speak for it.
+type finalStreamer struct {
+	emit    func(string) // e.g. ui.Delta
+	raw     strings.Builder
+	started bool // found the opening quote of the final value
+	done    bool // hit its closing quote, or it's a calls-round
+	pos     int  // index in raw where unparsed value bytes begin
+}
+
+func (f *finalStreamer) reset() { *f = finalStreamer{emit: f.emit} }
+
+func (f *finalStreamer) feed(chunk string) {
+	if f.done {
+		return
+	}
+	f.raw.WriteString(chunk)
+	s := f.raw.String()
+
+	if !f.started {
+		// a real tool-call round -> never a final to stream
+		if i := strings.Index(s, `"calls"`); i >= 0 {
+			after := strings.TrimLeft(s[i+7:], " :\t\r\n")
+			if strings.HasPrefix(after, "[") && !strings.HasPrefix(strings.TrimLeft(after[1:], " \t\r\n"), "]") {
+				f.done = true
+				return
+			}
+		}
+		k := strings.Index(s, `"final"`)
+		if k < 0 {
+			return
+		}
+		q := strings.IndexByte(s[k+7:], '"') // opening quote of the value
+		if q < 0 {
+			return
+		}
+		f.started = true
+		f.pos = k + 7 + q + 1
+	}
+
+	// walk from f.pos, emitting decoded chars until an unescaped closing quote
+	var out strings.Builder
+	i := f.pos
+	for i < len(s) {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case 'n':
+				out.WriteByte('\n')
+			case 't':
+				out.WriteByte('\t')
+			case '"':
+				out.WriteByte('"')
+			case '\\':
+				out.WriteByte('\\')
+			case '/':
+				out.WriteByte('/')
+			default:
+				out.WriteByte(s[i+1])
+			}
+			i += 2
+			continue
+		}
+		if c == '"' { // end of the final string
+			f.done = true
+			i++
+			break
+		}
+		out.WriteByte(c)
+		i++
+	}
+	f.pos = i
+	if out.Len() > 0 && f.emit != nil {
+		f.emit(out.String())
+	}
 }
 
 // splitCmd separates a REPL line into its first word (the /command) and the
@@ -269,6 +364,7 @@ func newApp() (*app, error) {
 		PollInterval: cfg.PollInterval,
 		RunTimeout:   cfg.APIRunTimeout,
 		Instructions: resolveInstructions(cfg.InstrPath),
+		StreamMode:   cfg.Stream,
 		Warnf:        warnf,
 		Log:          logf,
 		Vlogf:        vlogf,
@@ -383,8 +479,10 @@ func runREPL(smode string) int {
 	var (
 		turnMu     sync.Mutex
 		cancelTurn context.CancelFunc
-		runID      string // in-flight Hermes run, for POST /v1/runs/{id}/stop
+		runID      string          // in-flight Hermes run, for POST /v1/runs/{id}/stop
+		streamBuf  strings.Builder // this turn's live-previewed answer text (dedupes the final render)
 	)
+	fs := &finalStreamer{emit: func(s string) { streamBuf.WriteString(s); a.ui.Delta(s) }}
 
 	// Per-app wiring that must be redone when /setup swaps `a`:
 	//  - the approval gate reads its answer through liner (one terminal owner;
@@ -396,6 +494,7 @@ func runREPL(smode string) int {
 			ta.AskLine = func(q string) (string, error) { return ln.Prompt(q) }
 		}
 		a.client.OnRunStart = func(id string) { turnMu.Lock(); runID = id; turnMu.Unlock() }
+		a.client.OnDelta = fs.feed // extracts + previews just the `final` text
 	}
 	wireApp()
 
@@ -519,16 +618,47 @@ func runREPL(smode string) int {
 			fmt.Fprintln(os.Stderr)
 			continue
 		case "/compact", "/compress":
+			// This gateway exposes no REST compaction endpoint (`/compress` is
+			// an internal chat command). Hermes compacts on its own; start a
+			// new session when a task is done.
+			fmt.Fprintln(os.Stderr, "  this Hermes doesn't expose compaction over the API —")
+			fmt.Fprintln(os.Stderr, "  it compacts automatically; use /new for a new task.")
+			fmt.Fprintln(os.Stderr)
+			continue
+		case "/fork":
 			if rec.HermesSessionID == "" {
 				fmt.Fprintln(os.Stderr, "  no hermes-agent session yet — run a turn first")
 				fmt.Fprintln(os.Stderr)
 				continue
 			}
-			fmt.Fprintln(os.Stderr, "  requesting compaction…")
-			if e := a.client.Compress(context.Background(), rec.HermesSessionID, rest); e != nil {
-				fmt.Fprintf(os.Stderr, "  BLOCKED: %v\n", e)
-			} else {
-				fmt.Fprintln(os.Stderr, "  compaction requested — the next turn threads into the compacted session")
+			newID, e := a.client.Fork(context.Background(), rec.HermesSessionID)
+			if e != nil {
+				fmt.Fprintf(os.Stderr, "  BLOCKED: %v\n\n", e)
+				continue
+			}
+			nr, _ := a.store.Resolve("new", a.repoRoot)
+			nr.HermesSessionID = newID
+			_, _ = a.store.SetTitleLocal(nr, "fork of "+rec.ID)
+			rec = nr
+			fmt.Fprintf(os.Stderr, "  forked → hermes-agent session %s (local %s)\n\n", newID, rec.ID)
+			continue
+		case "/skills":
+			sk, e := a.client.Skills(context.Background())
+			if e != nil {
+				fmt.Fprintf(os.Stderr, "  %v\n\n", e)
+				continue
+			}
+			byCat := map[string]int{}
+			for _, s := range sk {
+				c := s.Category
+				if c == "" {
+					c = "(uncategorised)"
+				}
+				byCat[c]++
+			}
+			fmt.Fprintf(os.Stderr, "  %d skills on the brain, across %d categories:\n", len(sk), len(byCat))
+			for c, n := range byCat {
+				fmt.Fprintf(os.Stderr, "    %-28s %d\n", c, n)
 			}
 			fmt.Fprintln(os.Stderr)
 			continue
@@ -563,6 +693,8 @@ func runREPL(smode string) int {
 		a.ui.You(input)
 		a.ui.Working()
 
+		streamBuf.Reset()
+		fs.reset()
 		ctx, cancel := context.WithCancel(context.Background())
 		turnMu.Lock()
 		cancelTurn = cancel
@@ -586,7 +718,13 @@ func runREPL(smode string) int {
 			}
 		}
 		fmt.Fprintln(os.Stderr)
-		a.ui.Answer(out.Answer)
+		// If the streamed preview already showed exactly the final answer,
+		// don't print it a second time.
+		if s := strings.TrimSpace(streamBuf.String()); s != "" && s == strings.TrimSpace(out.Answer) {
+			fmt.Fprintln(os.Stderr)
+		} else {
+			a.ui.Answer(out.Answer)
+		}
 		fmt.Fprintln(os.Stderr)
 	}
 	return 0
@@ -659,6 +797,49 @@ func formatSrvList(ss []api.SrvSession) string {
 		fmt.Fprintf(&b, "%-40s  %5d  %7s  %s\n", id, s.Messages, tok, title)
 	}
 	return b.String()
+}
+
+// runEventsDump is the hidden `_events` command: start a run and copy its raw
+// SSE event stream to stdout, verbatim, so the wire shape can be inspected.
+func runEventsDump(input string) int {
+	if input == "" {
+		input = "count from one to five"
+	}
+	cfg := loadCfgOrExit()
+	if notConfigured(cfg) {
+		fmt.Fprintln(os.Stderr, "not configured")
+		return 1
+	}
+	cl := checkClient(cfg)
+	rid, sid, err := cl.RawRun(context.Background(), input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "run_id=%s session_id=%s\n--- /v1/runs/%s/events ---\n", rid, sid, rid)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := cl.RawEvents(ctx, rid, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "\n[events: %v]\n", err)
+	}
+	return 0
+}
+
+// runRawGet is the hidden `_raw <path>` command: GET an API path with the
+// resolved key and print the body, for inspecting response schemas.
+func runRawGet(path string) int {
+	cfg := loadCfgOrExit()
+	if notConfigured(cfg) {
+		fmt.Fprintln(os.Stderr, "not configured")
+		return 1
+	}
+	body, err := checkClient(cfg).RawGet(context.Background(), path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	fmt.Println(body)
+	return 0
 }
 
 // runSessionNew mints one session rooted at the cwd and prints its id on

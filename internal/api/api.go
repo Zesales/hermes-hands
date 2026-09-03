@@ -47,6 +47,12 @@ type Client struct {
 	// /v1/runs/{id}/stop on the in-flight run.
 	OnRunStart func(runID string)
 
+	// StreamMode: "" / "auto" (stream when the gateway advertises
+	// run_events_sse), "on", or "off". OnDelta receives answer-text chunks as
+	// they arrive over the SSE stream.
+	StreamMode string
+	OnDelta    func(text string)
+
 	Warnf func(string, ...any)
 	Vlogf func(string, ...any)
 	Log   func(string, ...any)
@@ -236,35 +242,66 @@ func (c *Client) SetTitle(ctx context.Context, hermesSessionID, title string) {
 		body, map[string]string{"Content-Type": "application/json"})
 }
 
-// Compress asks Hermes to compact the session's context now (the app-server's
-// `/compress`; `/compact` is a legacy alias). Endpoint per
-// NousResearch/hermes-agent: POST {base}/api/session/compress with the session
-// id. focus is an optional "compress around this topic" hint (""=none). Returns
-// an error with the HTTP status on non-2xx so the REPL can report it — the
-// exact request shape is not fully documented, so this is best-effort.
-func (c *Client) Compress(ctx context.Context, hermesSessionID, focus string) error {
-	if hermesSessionID == "" {
-		return fmt.Errorf("no hermes-agent session id yet (run a turn first)")
+// RawRun submits one run with no retry ladder and returns its ids — for the
+// hidden `_events` inspector only.
+func (c *Client) RawRun(ctx context.Context, input string) (runID, sessionID string, err error) {
+	if err := c.preflight(); err != nil {
+		return "", "", err
 	}
-	payload := map[string]string{"session_id": hermesSessionID}
-	if focus != "" {
-		payload["focus"] = focus
+	body, _ := marshalJSON(map[string]string{"input": input})
+	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	code, resp, err := c.do(tctx, http.MethodPost, c.base()+"/v1/runs", body,
+		map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return "", "", err
 	}
-	body, err := marshalJSON(payload)
+	if !is2xx(code) {
+		return "", "", fmt.Errorf("POST /v1/runs -> HTTP %s: %s", httpCode(code), trunc(stripNL(string(resp)), 300))
+	}
+	return jsonString(resp, "run_id"), jsonString(resp, "session_id"), nil
+}
+
+// RawEvents copies the /v1/runs/{id}/events SSE stream to w verbatim, for
+// inspecting the wire shape. Stops on stream end, ctx, or ~256KB.
+func (c *Client) RawEvents(ctx context.Context, runID string, w io.Writer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+"/v1/runs/"+runID+"/events", nil)
 	if err != nil {
 		return err
 	}
-	tctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-	code, resp, err := c.do(tctx, http.MethodPost, c.titleBase()+"/api/session/compress",
-		body, map[string]string{"Content-Type": "application/json"})
+	req.Header.Set("Authorization", "Bearer "+c.Key)
+	req.Header.Set("Accept", "text/event-stream")
+	hc := &http.Client{Transport: c.HTTP.Transport} // no overall Timeout for a stream
+	resp, err := hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("compress request failed: %v", err)
+		return err
+	}
+	defer resp.Body.Close()
+	if !is2xx(resp.StatusCode) {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2000))
+		return fmt.Errorf("events -> HTTP %d: %s", resp.StatusCode, stripNL(string(b)))
+	}
+	_, err = io.Copy(w, io.LimitReader(resp.Body, 256*1024))
+	return err
+}
+
+// RawGet does one authenticated GET of an API path (joined onto base) and
+// returns the body — for the hidden `_raw` schema inspector.
+func (c *Client) RawGet(ctx context.Context, path string) (string, error) {
+	if err := c.preflight(); err != nil {
+		return "", err
+	}
+	tctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodGet, c.base()+path, nil,
+		map[string]string{"Accept": "application/json"})
+	if err != nil {
+		return "", err
 	}
 	if !is2xx(code) {
-		return fmt.Errorf("compress -> HTTP %s: %s", httpCode(code), trunc(stripNL(string(resp)), 200))
+		return "", fmt.Errorf("GET %s -> HTTP %s: %s", path, httpCode(code), stripNL(string(body)))
 	}
-	return nil
+	return string(body), nil
 }
 
 // StopRun asks Hermes to interrupt a running turn (POST /v1/runs/{id}/stop).
@@ -297,9 +334,16 @@ func (c *Client) SessionInfo(ctx context.Context, hermesSessionID string) (SrvSe
 	if !is2xx(code) {
 		return SrvSession{}, fmt.Errorf("GET /api/sessions/%s -> HTTP %s", hermesSessionID, httpCode(code))
 	}
-	var m map[string]json.RawMessage
-	if json.Unmarshal(body, &m) != nil {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(body, &top) != nil {
 		return SrvSession{}, fmt.Errorf("unparseable session body")
+	}
+	m := top
+	if raw, ok := top["session"]; ok { // {"object":"hermes.session","session":{...}}
+		var inner map[string]json.RawMessage
+		if json.Unmarshal(raw, &inner) == nil {
+			m = inner
+		}
 	}
 	return srvSessionFrom(m), nil
 }
@@ -338,8 +382,8 @@ func (c *Client) ListSessions(ctx context.Context) ([]SrvSession, error) {
 	return out, nil
 }
 
-// srvSessionFrom pulls the fields we render out of a raw session object,
-// trying the key names different Hermes builds are likely to use.
+// srvSessionFrom pulls the fields we render out of a raw session object. Field
+// names verified against a live gateway (2026-09-03).
 func srvSessionFrom(m map[string]json.RawMessage) SrvSession {
 	str := func(keys ...string) string {
 		for _, k := range keys {
@@ -363,20 +407,107 @@ func srvSessionFrom(m map[string]json.RawMessage) SrvSession {
 		}
 		return 0
 	}
+	// timestamps arrive as unix-second floats
+	ts := func(keys ...string) string {
+		for _, k := range keys {
+			if raw, ok := m[k]; ok {
+				var f float64
+				if json.Unmarshal(raw, &f) == nil && f > 0 {
+					return time.Unix(int64(f), 0).UTC().Format("2006-01-02T15:04:05Z")
+				}
+			}
+		}
+		return ""
+	}
 	s := SrvSession{
 		ID:       str("id", "session_id"),
 		Title:    str("title", "name"),
-		Parent:   str("parent_session_id", "previous_session_id", "parent_id"),
+		Parent:   str("parent_session_id", "previous_session_id"),
 		Model:    str("model", "model_name"),
-		Created:  str("created_at", "started_at", "created"),
-		Updated:  str("updated_at", "last_active_at", "updated"),
-		Messages: num("message_count", "messages", "num_messages"),
-		Tokens:   num("total_tokens", "token_count", "context_tokens"),
+		Created:  ts("started_at", "created_at"),
+		Updated:  ts("last_active", "updated_at", "last_active_at"),
+		Messages: num("message_count", "messages"),
+		// context ~ tokens sent on the last call: fresh input + the cached prefix
+		Tokens: num("input_tokens", "prompt_tokens") + num("cache_read_tokens"),
 	}
-	if str("ended_at", "end_reason") != "" {
+	var ended *bool
+	if raw, ok := m["ended_at"]; ok && string(raw) != "null" {
+		t := true
+		ended = &t
+	}
+	if str("end_reason") != "" || ended != nil {
 		s.Ended = true
 	}
 	return s
+}
+
+// Fork branches the session (POST /api/sessions/{id}/fork) and returns the new
+// session id.
+func (c *Client) Fork(ctx context.Context, hermesSessionID string) (string, error) {
+	if hermesSessionID == "" {
+		return "", fmt.Errorf("no hermes-agent session id yet")
+	}
+	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodPost,
+		c.titleBase()+"/api/sessions/"+hermesSessionID+"/fork", []byte("{}"),
+		map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return "", err
+	}
+	if !is2xx(code) {
+		return "", fmt.Errorf("fork -> HTTP %s: %s", httpCode(code), trunc(stripNL(string(body)), 200))
+	}
+	id := jsonString(body, "id")
+	if id == "" {
+		id = jsonString(body, "session_id")
+	}
+	if id == "" { // {"session":{"id":...}}
+		var top struct {
+			Session map[string]json.RawMessage `json:"session"`
+		}
+		if json.Unmarshal(body, &top) == nil {
+			if raw, ok := top.Session["id"]; ok {
+				_ = json.Unmarshal(raw, &id)
+			}
+		}
+	}
+	if id == "" {
+		return "", fmt.Errorf("fork ok but no id in response")
+	}
+	return id, nil
+}
+
+// Skill is one entry of GET /v1/skills.
+type Skill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+}
+
+// Skills lists the brain's skills (GET /v1/skills -> {"object":"list","data":[...]}).
+func (c *Client) Skills(ctx context.Context) ([]Skill, error) {
+	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodGet, c.base()+"/v1/skills",
+		nil, map[string]string{"Accept": "application/json"})
+	if err != nil {
+		return nil, err
+	}
+	if !is2xx(code) {
+		return nil, fmt.Errorf("GET /v1/skills -> HTTP %s", httpCode(code))
+	}
+	var arr []Skill
+	if json.Unmarshal(body, &arr) == nil && len(arr) > 0 {
+		return arr, nil
+	}
+	var wrap struct {
+		Data []Skill `json:"data"`
+	}
+	if json.Unmarshal(body, &wrap) != nil {
+		return nil, fmt.Errorf("unparseable skills list")
+	}
+	return wrap.Data, nil
 }
 
 // parseCaps reads the feature map out of a /v1/capabilities body.
