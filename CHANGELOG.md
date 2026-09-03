@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.2 — automated releases
+
+A push to `main` that changes `VERSION` now publishes a GitHub Release.
+
+- `.github/workflows/release.yml`: re-runs the checks, cross-compiles
+  `{linux,darwin}×{amd64,arm64}` + `windows/amd64` via `./build.sh all`, tags
+  `vX.Y.Z`, and uploads the binaries + `SHA256SUMS`. Idempotent — a tag that
+  already exists is left alone, so pushing `main` without a version bump never
+  re-releases. Actions pinned by commit, Go `1.26.7`, `-mod=vendor` (offline).
+- `build.sh` — the one build entrypoint CI and humans share. `./build.sh all`
+  = every target + checksums into `dist/`; `./build.sh host` = just this
+  machine's binary.
+- `install.sh` reworked: **verifies the release SHA-256** before installing;
+  `--version X.Y.Z` pins a release, `--local` builds from the current checkout,
+  `--source` git-clones + builds. Latest-release download stays the default.
+
+The module path stays `github.com/Zesales/hermes-hands` (GitHub is the home;
+`go install …@latest` works once it's pushed).
+
 ## 0.9.1 — small cleanup
 
 - `StartWorking()`'s non-tty branch now calls `UI.Working()` instead of
