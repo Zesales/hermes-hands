@@ -80,11 +80,12 @@ func (l *Loop) frame(userMsg string) string {
 		"PROBLEM — operator's working directory: " + loc + "\n\n" +
 		userMsg + "\n\n" +
 		"Your reply: reason it through, then ONE instruction and nothing else —\n" +
-		"{\"calls\":[{\"tool\":\"shell|read_file|write_file|edit_file\",\"args\":{...}}],\"final\":null}\n" +
-		"to put the hands to work in that directory, or {\"calls\":[],\"final\":\"...\"} once\n" +
-		"it is solved. Not a chat reply, not a description of yourself or your tools.\n" +
-		"If you do not know the directory yet, your instruction is a look — `shell`\n" +
-		"(ls / git / rg) or `read_file`."
+		"{\"calls\":[{\"id\":\"c1\",\"tool\":\"shell|read_file|write_file|edit_file\",\"args\":{...}}],\"final\":null}\n" +
+		"(give each call a short id; the hands echo it in results so you can map\n" +
+		"output to call) — or {\"calls\":[],\"final\":\"...\"} once it is solved. Not a\n" +
+		"chat reply, not a description of yourself or your tools. If you do not know\n" +
+		"the directory yet, your instruction is a look — `shell` (ls / git / rg) or\n" +
+		"`read_file`."
 }
 
 // Outcome is the turn result. OK == false means Answer is a "BLOCKED: ..."
@@ -102,11 +103,15 @@ const (
 var botchedRe = regexp.MustCompile(`(?i)"(calls|tool)"[[:space:]]*:`)
 
 type callSpec struct {
+	ID        string          `json:"id"`
+	CallID    string          `json:"call_id"` // OpenAI-ish alias; tool_call_id handled separately
 	Tool      string          `json:"tool"`
 	Name      string          `json:"name"`
 	Args      json.RawMessage `json:"args"`
 	Arguments json.RawMessage `json:"arguments"`
 }
+
+func (c callSpec) id() string { return firstNonEmpty(c.ID, c.CallID) }
 
 // Run executes the turn. persist mirrors _hh_session_write: it is called after
 // every completed api.Ask with (runID, serverSessionID) so the caller can bump
@@ -201,8 +206,27 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 
 		l.vlogf("round %d: %d call(s)", round, callsN)
 
+		// Correlation id per call. Hermes may send its own `id`; we keep it when
+		// present and unique, otherwise assign a positional `c<N>`. results[]
+		// always carries the (possibly synthesized) id so Hermes can map each
+		// output back to the call it asked for — same role as OpenAI's
+		// tool_call_id / split-runtime's tool_call.request id.
+		usedIDs := make(map[string]bool, callsN)
+		mkID := func(i int, sent string) string {
+			id := strings.TrimSpace(sent)
+			if id == "" || usedIDs[id] {
+				id = fmt.Sprintf("c%d", i+1)
+			}
+			for usedIDs[id] {
+				id += "'"
+			}
+			usedIDs[id] = true
+			return id
+		}
+
 		elems := make([]resultElem, 0, callsN)
 		for i := 0; i < callsN; i++ {
+			id := mkID(i, calls[i].id())
 			tool := firstNonEmpty(calls[i].Tool, calls[i].Name)
 			args := callArgs(calls[i])
 			preview := previewOf(args)
@@ -224,6 +248,7 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			}
 
 			e := resultElem{
+				ID:       id,
 				Tool:     tool,
 				Args:     args,
 				ExitCode: result.Exit,
@@ -234,7 +259,7 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			}
 			elems = append(elems, e)
 
-			turnlog += fmt.Sprintf("[round %d]   %s(%s) -> exit %d\n", round, tool, trunc(string(args), 120), result.Exit)
+			turnlog += fmt.Sprintf("[round %d]   %s [%s](%s) -> exit %d\n", round, tool, id, trunc(string(args), 120), result.Exit)
 		}
 
 		payload, _ := marshalNoHTML(resultsPayload{Results: elems})
@@ -250,6 +275,7 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 }
 
 type resultElem struct {
+	ID       string          `json:"id"`
 	Tool     string          `json:"tool"`
 	Args     json.RawMessage `json:"args"`
 	ExitCode int             `json:"exit_code"`
