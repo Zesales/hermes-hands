@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1 — small cleanup
+
+- `StartWorking()`'s non-tty branch now calls `UI.Working()` instead of
+  duplicating the static-line format string (the two had already drifted a
+  hair). `InterruptedNote` / `TimeoutNote` were already gone (folded into
+  `TurnDone` in 0.8.0); this removes the last of that duplication.
+- Stale `"version":"0.3.0"` in the `--rpc` doc comment → `"X.Y.Z"`.
+
 ## 0.9.0 — correlation `id` on every call
 
 Each entry in `calls` may now carry a short `id` (`c1`, `c2`, …); the hands

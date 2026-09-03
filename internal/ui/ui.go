@@ -89,7 +89,7 @@ func (u *UI) sync(f func()) {
 // called (idempotent, safe from any goroutine). Non-tty: the old static line.
 func (u *UI) StartWorking() (stop func()) {
 	if !u.tty {
-		fmt.Fprintf(u.w, "%s   ⋯ working%s%s  ·  Ctrl+C to cancel%s\n", u.cAcc, u.cR, u.cDim, u.cR)
+		u.Working() // the plain static line; no goroutine, no repaint
 		return func() {}
 	}
 	u.mu.Lock()
