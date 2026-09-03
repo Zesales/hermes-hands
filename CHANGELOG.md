@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.2 — the prompt, rewritten for a fully-tooled Hermes
+
+The live gateway's brain has its **own** `terminal` / `read_file` / `write_file`
+/ `execute_code` tools (running in its `/root` sandbox). The old instructions
+just said "don't use your tools", and the model ignored that — it ran
+`read_file` / `terminal` in the sandbox, found nothing, and answered "the file
+doesn't exist". Rewritten so the model *understands the setup* instead of being
+forbidden things:
+
+- `share/instructions.md` and the per-turn frame now: you are Hermes, reached
+  **remotely**; the operator is at a Linux terminal, the worker holds a
+  persistent **bash shell** in a directory (Linux-only for now); every request
+  is about that directory; **for anything touching it, reply with the `calls`
+  envelope** — your own `terminal`/`read_file`/… run in your sandbox (`/root`),
+  not on the operator's machine, and will mislead you; keep using your memory /
+  web / reasoning normally. Names in `calls` are the *worker's* operations, not
+  your tools; don't route them through `tool_call`.
+- Tool results going back now carry a one-line reminder: this is what actually
+  ran in the operator's shell — empty / failing output means *try another
+  command*, not "I can't access it" / "it's only on your system".
+- Verified live: "what's in the readme?" and "list the service dirs" both
+  now delegate correctly (`read_file` / `shell` executed locally, answered from
+  the results) — no sandbox loop.
+- Hidden `_run '<json>'` inspector (POST a raw /v1/runs body, stream events).
+
 ## 0.6.1 — drop `/skills`
 
 Removed the `/skills` command (and `Client.Skills`). It was read-only so no
