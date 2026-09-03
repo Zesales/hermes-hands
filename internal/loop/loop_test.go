@@ -253,6 +253,7 @@ func TestRunResultsShape(t *testing.T) {
 	}
 	var payload struct {
 		Results []struct {
+			ID       string          `json:"id"`
 			Tool     string          `json:"tool"`
 			Args     json.RawMessage `json:"args"`
 			ExitCode int             `json:"exit_code"`
@@ -274,9 +275,56 @@ func TestRunResultsShape(t *testing.T) {
 		t.Fatalf("results len = %d", len(payload.Results))
 	}
 	r := payload.Results[0]
-	if r.Tool != "read_file" || r.ExitCode != 0 || r.Output != "filecontent" ||
+	if r.ID != "c1" || r.Tool != "read_file" || r.ExitCode != 0 || r.Output != "filecontent" ||
 		string(r.Args) != `{"path":"foo.txt"}` || r.Context != nil {
 		t.Errorf("result element = %+v (args %s)", r, r.Args)
+	}
+}
+
+func TestRunCallIDs(t *testing.T) {
+	// Hermes-sent ids are kept; missing / duplicate ones get positional c<N>.
+	env := `{"calls":[` +
+		`{"id":"read-a","tool":"read_file","args":{"path":"foo.txt"}},` +
+		`{"tool":"read_file","args":{"path":"foo.txt"}},` +
+		`{"id":"read-a","tool":"read_file","args":{"path":"foo.txt"}}` +
+		`],"final":null}`
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(env, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	out, _, s := run(t, sa, realDisp(t, prompt.AutoApprover{}), 8)
+	if !out.OK {
+		t.Fatalf("out = %+v", out)
+	}
+	var payload struct {
+		Results []struct {
+			ID string `json:"id"`
+		} `json:"results"`
+	}
+	m1 := s.msgs[1]
+	if i := strings.IndexByte(m1, '{'); i >= 0 {
+		m1 = m1[i:]
+	}
+	if err := json.Unmarshal([]byte(m1), &payload); err != nil {
+		t.Fatalf("bad payload: %v", err)
+	}
+	got := []string{payload.Results[0].ID, payload.Results[1].ID, payload.Results[2].ID}
+	want := []string{"read-a", "c2", "c3"} // kept / synthesized / dup-collapsed-to-positional
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("result[%d].id = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+	if seen := map[string]bool{}; func() bool {
+		for _, id := range got {
+			if seen[id] {
+				return true
+			}
+			seen[id] = true
+		}
+		return false
+	}() {
+		t.Errorf("ids not unique: %v", got)
 	}
 }
 
@@ -359,8 +407,9 @@ func TestRunFramesFirstMessage(t *testing.T) {
 		"PROBLEM — operator's working directory: cwd /home/me/proj (git branch: main)",
 		"was hälst du von der readme ?", // the message, verbatim, as the problem body
 		"reason it through, then ONE instruction",
+		`{"id":"c1","tool":"shell|read_file|write_file|edit_file"`,
 		`"final":null}`,
-		"Not a chat reply, not a description of yourself",
+		"not a description of yourself or your tools",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("framed round-1 message missing %q\n---\n%s", want, got)
