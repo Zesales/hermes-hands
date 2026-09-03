@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.9.4 — continuous releases; pre-public cleanup
+## 0.10.0 — continuous releases; pre-public cleanup
+
+(first public release — 0.9.x was never tagged; `MIN_VERSION` 0.9.4 + a
+`bump:minor` PR lands here.)
 
 **A bare `hermes-hands` now starts a fresh session** — no implicit resume of
 this repo's latest (that reverses 0.3.0's `5d657ea`). `--session` with no id
@@ -8,12 +11,29 @@ still continues the latest explicitly; `--session <id>` opens a specific one;
 `--new` is now just the same as a bare run. `--rpc` still defaults to continue
 (an editor holding the process wants session continuity across restarts).
 
-**Release on every merge to `main`.** `.github/workflows/release.yml` now
-triggers on any push to `main` (i.e. a merged PR), builds all targets via
-`./build.sh release`, and publishes **`v<VERSION>-<sha>`** — unique per commit,
-so it never collides. GitHub's "latest" follows the newest, so `install.sh`
-with no args always gets it; `install.sh --version <VERSION>-<sha>` pins one.
-(The old `paths: ['VERSION']` filter meant most merges built nothing.)
+**CI split into a gate and an auto-versioning shipper.**
+
+- `ci.yml` → **`test.yml`**: gofmt / `go vet` / `go test` + `./build.sh release`
+  (the full cross-compile, minus publish) on every branch push and PR — not on
+  `main`. The `test` job is the required status check for merging.
+- **`pr-label.yml`**: every PR must carry **exactly one** of `bump:patch` /
+  `bump:minor` / `bump:major` (`bump:none` = no version change, no release).
+  Make the `bump-label` job a required check — no bump decision, no merge.
+- **`release.yml`** now runs on `pull_request` → merged. **There is no
+  `VERSION` file** — git tags are the source of truth. It reads the label,
+  takes the highest existing `v*.*.*` tag (or `MIN_VERSION` before the first
+  release), bumps it, and puts an **annotated tag `vX.Y.Z` on the merge commit**
+  (message names the version + PR). It **pushes only that tag** — nothing lands
+  on the `main` branch — so branch protection needs no bypass, no deploy key,
+  no PAT. Then `./build.sh release` (`VERSION` comes from the tag it just cut;
+  `git describe` fills it in everywhere else) + `gh release create
+  --generate-notes` (auto "What's Changed" + full-changelog link), marked
+  *latest*. No re-test — the merge gate is `test.yml` + `bump-label` + "require
+  branches up to date". `workflow_dispatch` fires it by hand with an explicit
+  level. `install.sh --version X.Y.Z` pins a release. **One-time:** Settings →
+  Actions → Workflow permissions → "Read and write"; make `test` **and**
+  `bump-label` required checks; create the four `bump:*` labels. No `v*` tag
+  ruleset.
 
 - **`make dev [ARGS=…]`** — run straight from source (`go run`) as a
   self-contained dev instance out of `./.dev/` (gitignored): its own
@@ -48,7 +68,7 @@ with no args always gets it; `install.sh --version <VERSION>-<sha>` pins one.
 A push to `main` that changes `VERSION` now publishes a GitHub Release.
 
 - `.github/workflows/release.yml`: re-runs the checks, cross-compiles
-  `{linux,darwin}×{amd64,arm64}` + `windows/amd64` via `./build.sh all`, tags
+  `{linux,darwin}×{amd64,arm64}` via `./build.sh release`, tags
   `vX.Y.Z`, and uploads the binaries + `SHA256SUMS`. Idempotent — a tag that
   already exists is left alone, so pushing `main` without a version bump never
   re-releases. Actions pinned by commit, Go `1.26.7`, `-mod=vendor` (offline).
