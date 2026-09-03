@@ -87,15 +87,23 @@ func (c *Client) Ask(ctx context.Context, msg, sess, skey string) (AskResult, er
 	}
 
 	threaded := !dropSess
-	sd := sess
-	if sd == "" {
-		sd = "none"
-	}
-	if dropSess {
-		sd += " DROPPED"
-	}
-	c.vlogf("run %s (session=%s) - polling", runID, sd)
 
+	if c.wantStream() {
+		if res, serr := c.streamRun(ctx, base, runID, threaded); serr == nil {
+			return res, nil
+		} else if ctx.Err() != nil {
+			return AskResult{}, ctx.Err()
+		} else {
+			c.vlogf("run %s: SSE stream unusable (%v) - falling back to poll", runID, serr)
+		}
+	}
+	return c.pollRun(ctx, base, runID, threaded)
+}
+
+// pollRun rides GET /v1/runs/{id} to a terminal status (the pre-SSE path, and
+// the fallback when the event stream is unavailable).
+func (c *Client) pollRun(ctx context.Context, base, runID string, threaded bool) (AskResult, error) {
+	c.vlogf("run %s - polling", runID)
 	waited := time.Duration(0)
 	status := ""
 	for {
@@ -125,6 +133,8 @@ func (c *Client) Ask(ctx context.Context, msg, sess, skey string) (AskResult, er
 			default:
 				c.logf("unknown run status '%s' - still polling", status)
 			}
+		} else if ctx.Err() != nil {
+			return AskResult{}, ctx.Err()
 		} else {
 			c.logf("poll: HTTP %s %s - retrying", httpCode(code), errText(err))
 		}

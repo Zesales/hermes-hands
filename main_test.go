@@ -231,3 +231,31 @@ func TestRPCReqUnmarshal(t *testing.T) {
 		t.Errorf("rpcReq = %+v", r)
 	}
 }
+
+func TestFinalStreamer(t *testing.T) {
+	// a final-only round streamed char group by char group
+	var got strings.Builder
+	fs := &finalStreamer{emit: func(s string) { got.WriteString(s) }}
+	for _, ch := range []string{`{"cal`, `ls": [], "fin`, `al": "line one`, `\nline `, `two \"q\""`, `}`} {
+		fs.feed(ch)
+	}
+	if got.String() != "line one\nline two \"q\"" {
+		t.Errorf("streamed %q", got.String())
+	}
+
+	// a tool-call round emits nothing
+	got.Reset()
+	fs2 := &finalStreamer{emit: func(s string) { got.WriteString(s) }}
+	for _, ch := range []string{`{"calls": [{"tool":"shell"`, `,"args":{}}], "final": null}`} {
+		fs2.feed(ch)
+	}
+	if got.Len() != 0 {
+		t.Errorf("tool-call round should stream nothing, got %q", got.String())
+	}
+
+	// reset keeps the emit fn, drops state
+	fs.reset()
+	if fs.started || fs.done || fs.pos != 0 || fs.emit == nil {
+		t.Errorf("reset left state: %+v", fs)
+	}
+}
