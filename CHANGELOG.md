@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.7.1 — the prompt, again: vague asks are about the project too
+
+From a live trace: explicit file commands ("lies die readme") delegate
+correctly, but an open one ("was kannst du") sent the model on a 20-round
+detour through its **own** `tool_search` / `tool_describe` / `skill_view` /
+`cronjob` and its `/root` sandbox `terminal` / `read_file` (even with the
+operator's absolute path) — it never emitted the `calls` envelope, then
+answered from nothing.
+
+The per-turn frame and `share/instructions.md` now say it straight: **every**
+message this session is about the operator's directory, *including* "what can
+you do" / "what's here" / "help" — those ask what you can do with **their
+project**, so the first move is a `shell` / `read_file` look, not a
+description of yourself. Two explanations added (not prohibitions, per the
+"use your own tools, just define the setup" call): the operator's absolute
+paths don't resolve in your container either; `tool_search` / `skill_view` /
+`cronjob` describe *you*, not their project. New "was kannst du?" example
+(`ls` + `cat README*` + `git log`).
+
 ## 0.7.0 — one self-contained directory (`~/hermes-hands/`)
 
 The scattered XDG layout is gone. Everything hermes-hands reads and writes now

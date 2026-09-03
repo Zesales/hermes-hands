@@ -73,16 +73,21 @@ func (l *Loop) frame(userMsg string) string {
 			loc += "  (git branch: " + b + ")"
 		}
 	}
-	return "[hermes-hands — you are Hermes, reached remotely by the operator's worker]\n" +
-		"The operator is at a Linux terminal on their own machine. The worker holds\n" +
-		"a persistent bash shell in the directory " + loc + ". This request is about\n" +
-		"that directory and its contents — \"the readme\" / \"here\" / \"this\" mean it.\n" +
-		"To read/run/edit anything there, reply with ONLY the JSON object\n" +
-		"{\"calls\":[{\"tool\",\"args\"}],\"final\":null} — the worker runs it in that bash\n" +
-		"shell and returns {\"results\":[...]}. Do NOT use your own terminal/read_file/\n" +
-		"write_file/execute_code — those run in your sandbox (/root), not on the\n" +
-		"operator's machine, and will mislead you. Memory / web / reasoning: use\n" +
-		"normally.\n\n" +
+	return "[hermes-hands] You are Hermes, driving a worker at the operator's Linux\n" +
+		"terminal. The worker is a persistent bash shell; " + loc + ".\n" +
+		"EVERY message this session is about THAT directory: its code, files, git,\n" +
+		"build, tests. Vague ones too — \"what can you do\", \"what's here\", \"help\",\n" +
+		"\"the readme\", \"this\" — they ask what you can do with THEIR project, not\n" +
+		"about you. You have not seen it yet: answer by LOOKING.\n" +
+		"Reply with ONE JSON object and nothing else —\n" +
+		"  {\"calls\":[{\"tool\":\"shell|read_file|write_file|edit_file\",\"args\":{...}}],\"final\":null}\n" +
+		"— the worker runs it there and returns {\"results\":[...]}. When you can\n" +
+		"answer: {\"calls\":[],\"final\":\"...\"}. One or the other, never both, never prose\n" +
+		"outside the object.\n" +
+		"Your own terminal/read_file/execute_code run in a throwaway /root container,\n" +
+		"NOT the operator's machine — even their absolute paths aren't there.\n" +
+		"tool_search/skill_view/cronjob describe you, not their project — don't reach\n" +
+		"for any of those; reach for the worker. Memory / web / reasoning: normal.\n\n" +
 		"operator: " + userMsg
 }
 
