@@ -2,13 +2,21 @@
 
 ## Unreleased
 
-Tooling only — no `VERSION` bump, so no release.
+Tooling + docs only — no `VERSION` bump, so no release.
 
-- `make dev [ARGS=…]` — run straight from source (`go run`) against a
-  checkout-local dev state: session index under `./.dev/` (gitignored, not your
-  real `~/hermes-hands/sessions`), prompt read **live** from
-  `share/instructions.md` (edit + re-run, no rebuild). URL + key inherited from
-  `~/hermes-hands/` / the env. `make clean` now also removes `./.dev/`.
+- **`make dev [ARGS=…]`** — run straight from source (`go run`) as a
+  self-contained dev instance out of `./.dev/` (gitignored): its own
+  `HERMES_HANDS_HOME`, so sessions/config never touch your real
+  `~/hermes-hands/`. First run copies the machine-bound key over from there
+  (it's bound to machine-id + uid, not its path); `make dev-setup` instead
+  prompts for a separate key. The prompt is read **live** from
+  `share/instructions.md` — edit, `make dev` again, no rebuild. `make clean`
+  wipes `./.dev/`.
+- Makefile reorganised: `make` (no target) lists everything grouped
+  **Develop / Build & install / Release**.
+- README **Install** section reworked — leads with the fast `curl … | sh`
+  (always latest, SHA-256 verified, no clone / Go / build), with a small table
+  for `--version` / `--source` / `--local`.
 
 ## 0.9.3 — drop the stale repo `config/`; rename `build.sh` verb
 
