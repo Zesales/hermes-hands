@@ -20,7 +20,7 @@ func clearEnv(t *testing.T) {
 		"HERMES_API_RUN_TIMEOUT", "HERMES_API_RETRIES", "HERMES_HANDS_MAX_ROUNDS",
 		"HERMES_HANDS_RUN_TIMEOUT", "HERMES_HANDS_MAX_OUTPUT", "HERMES_HANDS_STREAM",
 		"HERMES_HANDS_RESPONSE_TIMEOUT", "HERMES_HANDS_WATCHDOG_INTERVAL",
-		"XDG_CONFIG_HOME", "XDG_STATE_HOME",
+		"HERMES_HANDS_HOME",
 	} {
 		t.Setenv(k, "")
 	}
@@ -49,13 +49,19 @@ func TestLoadDefaults(t *testing.T) {
 	if c.ResponseTimeout != 600*time.Second || c.WatchdogInterval != 200*time.Second {
 		t.Errorf("watchdog defaults wrong: ResponseTimeout=%v WatchdogInterval=%v", c.ResponseTimeout, c.WatchdogInterval)
 	}
+	if c.Home == "" || c.ConfigPath != c.Home+"/config" {
+		t.Errorf("Home/ConfigPath wrong: Home=%q ConfigPath=%q", c.Home, c.ConfigPath)
+	}
+	if c.StateDir != c.Home {
+		t.Errorf("StateDir default = %q, want Home %q", c.StateDir, c.Home)
+	}
 }
 
 func TestWatchdogKnobsFromConfigFile(t *testing.T) {
 	clearEnv(t)
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	mustWrite(t, filepath.Join(dir, "hermes-hands", "config"),
+	home := t.TempDir()
+	t.Setenv("HERMES_HANDS_HOME", home)
+	mustWrite(t, filepath.Join(home, "config"),
 		"HERMES_HANDS_RESPONSE_TIMEOUT=120\nHERMES_HANDS_WATCHDOG_INTERVAL=30\n")
 	t.Setenv("HERMES_API_URL", "https://x")
 	t.Setenv("HERMES_API_KEY", "k")
@@ -69,7 +75,7 @@ func TestWatchdogKnobsFromConfigFile(t *testing.T) {
 	}
 
 	// 0 disables the ceiling.
-	mustWrite(t, filepath.Join(dir, "hermes-hands", "config"), "HERMES_HANDS_RESPONSE_TIMEOUT=0\n")
+	mustWrite(t, filepath.Join(home, "config"), "HERMES_HANDS_RESPONSE_TIMEOUT=0\n")
 	c, _ = Load()
 	if c.ResponseTimeout != 0 {
 		t.Errorf("ResponseTimeout = %v, want 0 (disabled)", c.ResponseTimeout)
@@ -78,9 +84,9 @@ func TestWatchdogKnobsFromConfigFile(t *testing.T) {
 
 func TestConfigFileOverridesEnvForLiveKeys(t *testing.T) {
 	clearEnv(t)
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	mustWrite(t, filepath.Join(dir, "hermes-hands", "config"),
+	home := t.TempDir()
+	t.Setenv("HERMES_HANDS_HOME", home)
+	mustWrite(t, filepath.Join(home, "config"),
 		"HERMES_API_PROFILE=fromfile\nHERMES_HANDS_APPROVE=never\n")
 	t.Setenv("HERMES_API_PROFILE", "fromenv")
 	t.Setenv("HERMES_API_URL", "https://x") // non-empty so secrets file is not consulted
@@ -97,9 +103,9 @@ func TestConfigFileOverridesEnvForLiveKeys(t *testing.T) {
 
 func TestSecretsFileOnlyWhenURLorKeyEmpty(t *testing.T) {
 	clearEnv(t)
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	mustWrite(t, filepath.Join(dir, "hermes-hands", "secrets"),
+	home := t.TempDir()
+	t.Setenv("HERMES_HANDS_HOME", home)
+	mustWrite(t, filepath.Join(home, "secrets"),
 		"export HERMES_API_URL=\"https://from-secrets\"\nexport HERMES_API_KEY='sekret'\n")
 
 	// URL + KEY already present -> secrets file ignored.
@@ -116,6 +122,9 @@ func TestSecretsFileOnlyWhenURLorKeyEmpty(t *testing.T) {
 	if c.APIURL != "https://from-secrets" || c.APIKey != "sekret" {
 		t.Fatalf("secrets file not applied: %q / %q", c.APIURL, c.APIKey)
 	}
+	if c.SecretsSource != "secrets" {
+		t.Errorf("SecretsSource = %q, want secrets (plaintext fallback)", c.SecretsSource)
+	}
 
 	// A placeholder key counts as missing -> secrets file applied.
 	t.Setenv("HERMES_API_URL", "https://from-env")
@@ -128,13 +137,30 @@ func TestSecretsFileOnlyWhenURLorKeyEmpty(t *testing.T) {
 
 func TestStateDir(t *testing.T) {
 	clearEnv(t)
-	t.Setenv("XDG_STATE_HOME", "/xdg/state")
-	if c, _ := Load(); c.StateDir != "/xdg/state/hermes-hands" {
-		t.Errorf("StateDir = %q", c.StateDir)
+	t.Setenv("HERMES_HANDS_HOME", "/app/hh")
+	if c, _ := Load(); c.StateDir != "/app/hh" {
+		t.Errorf("StateDir default = %q, want the home dir /app/hh", c.StateDir)
 	}
 	t.Setenv("HERMES_HANDS_STATE", "/literal/dir")
 	if c, _ := Load(); c.StateDir != "/literal/dir" {
 		t.Errorf("HERMES_HANDS_STATE must be used literally, got %q", c.StateDir)
+	}
+}
+
+func TestHomeAndPathOverrides(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("HERMES_HANDS_HOME", "/app/hh")
+	c, _ := Load()
+	if c.Home != "/app/hh" || c.ConfigPath != "/app/hh/config" ||
+		c.SecretsPath != "/app/hh/secrets" || c.InstrPath != "/app/hh/instructions.md" {
+		t.Fatalf("home-derived paths wrong: %+v", c)
+	}
+	// per-path overrides still win over the home default
+	t.Setenv("HERMES_HANDS_CONFIG", "/etc/hh.conf")
+	t.Setenv("HERMES_HANDS_INSTRUCTIONS", "/etc/hh.md")
+	c, _ = Load()
+	if c.ConfigPath != "/etc/hh.conf" || c.InstrPath != "/etc/hh.md" {
+		t.Errorf("per-path override ignored: ConfigPath=%q InstrPath=%q", c.ConfigPath, c.InstrPath)
 	}
 }
 

@@ -4,6 +4,12 @@ Walked at M9 against the Go implementation. `✅` = behaviour matches the bash
 source; `➕` = deliberate, documented divergence (a fix or an unavoidable
 transport change); nothing is an accidental regression.
 
+> **Superseded since 0.7.0:** the on-disk layout no longer mirrors bash's XDG
+> paths. Config, the secrets store, the session index and the optional
+> `instructions.md` all live in one directory, `$HERMES_HANDS_HOME` (default
+> `~/hermes-hands/`); the per-path overrides still apply. Rows 9 / 15 below
+> describe the pre-0.7.0 XDG paths.
+
 | # | §3 item | verdict | notes |
 |---|---|---|---|
 | 1 | Run submit + poll | ✅ (➕ transport text) | `internal/api.Ask`: `POST {base}/v1/runs` then poll `GET .../v1/runs/{id}`; `Authorization: Bearer`, `Content-Type: application/json`, `Idempotency-Key: hh-<epoch>-<RANDOM><RANDOM>` minted once, `X-Hermes-Session-Id` / `-Key` iff the record has them (kept on the post-reject retry). Per-request connect/total timeouts via `NewHTTPClient`. POST non-2xx → fixed `sleep 2`, up to `HERMES_API_RETRIES` (4 attempts); 2xx w/o `.run_id` → fail. Poll interval `HERMES_API_POLL_INTERVAL`; terminal `completed` (non-empty `.output`) / `failed`\|`cancelled` (`.output // .error // "no detail"`, trunc 400) / non-terminal keep polling / unknown → log + poll; whole loop bounded by `HERMES_API_RUN_TIMEOUT`; poll HTTP errors logged, not fatal. `.usage` not read. **➕** the "unreachable / cannot reach" strings say the Go HTTP error instead of `curl <rc> <err>` — no curl to quote; structure (`… - <err>, last HTTP <code>`) preserved. |
