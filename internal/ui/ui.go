@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Zesales/hermes-hands/internal/ttyio"
 )
@@ -24,6 +26,9 @@ type UI struct {
 
 	cDim, cB, cR                   string
 	cYou, cHermes, cOK, cBad, cAcc string
+
+	mu       sync.Mutex // serialises every write vs. the spinner goroutine
+	spinning bool
 }
 
 // New builds a UI writing to stderr, matching lib/ui.sh's colour gate:
@@ -69,21 +74,77 @@ func (u *UI) cols() int {
 	return c
 }
 
+// sync runs f as the sole writer, wiping the spinner's line first (if one is
+// running) so f's output doesn't collide with it.
+func (u *UI) sync(f func()) {
+	u.mu.Lock()
+	if u.spinning {
+		fmt.Fprint(u.w, "\r\x1b[K")
+	}
+	f()
+	u.mu.Unlock()
+}
+
+// StartWorking shows an animated "…working" line until the returned stop is
+// called (idempotent, safe from any goroutine). Non-tty: the old static line.
+func (u *UI) StartWorking() (stop func()) {
+	if !u.tty {
+		fmt.Fprintf(u.w, "%s   ⋯ working%s%s  ·  Ctrl+C to cancel%s\n", u.cAcc, u.cR, u.cDim, u.cR)
+		return func() {}
+	}
+	u.mu.Lock()
+	u.spinning = true
+	u.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		frames := []string{".  ", ".. ", "...", " ..", "  .", "   "}
+		tk := time.NewTicker(220 * time.Millisecond)
+		defer tk.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			case <-tk.C:
+				u.mu.Lock()
+				if u.spinning {
+					fmt.Fprintf(u.w, "\r%s   %s%sworking%s%s  ·  Ctrl+C to cancel%s\x1b[K",
+						u.cDim, u.cAcc, frames[i%len(frames)], u.cR, u.cDim, u.cR)
+				}
+				u.mu.Unlock()
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(done)
+			u.mu.Lock()
+			u.spinning = false
+			fmt.Fprint(u.w, "\r\x1b[K")
+			u.mu.Unlock()
+		})
+	}
+}
+
 // Rule ports ui_rule: a full-width dim horizontal rule.
 func (u *UI) Rule() {
-	fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, strings.Repeat("─", u.cols()), u.cR)
+	u.sync(func() { fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, strings.Repeat("─", u.cols()), u.cR) })
 }
 
 // You ports ui_you: a bold cyan "you" label, then the message indented 3.
 func (u *UI) You(msg string) {
-	fmt.Fprintf(u.w, "%s%syou%s\n", u.cB, u.cYou, u.cR)
-	io.WriteString(u.w, indentLines(msg, "   "))
+	u.sync(func() {
+		fmt.Fprintf(u.w, "%s%syou%s\n", u.cB, u.cYou, u.cR)
+		io.WriteString(u.w, indentLines(msg, "   "))
+	})
 }
 
-// Working ports ui_working.
+// Working is the pre-animation static line — non-tty and tests use it.
 func (u *UI) Working() {
-	fmt.Fprintf(u.w, "%s   %s⋯ working%s%s  ·  Ctrl+C to cancel%s\n",
-		u.cDim, u.cAcc, u.cR, u.cDim, u.cR)
+	u.sync(func() {
+		fmt.Fprintf(u.w, "%s   %s⋯ working%s%s  ·  Ctrl+C to cancel%s\n",
+			u.cDim, u.cAcc, u.cR, u.cDim, u.cR)
+	})
 }
 
 // Call ports ui_call: a per-tool progress line. The exit code is green when 0,
@@ -96,15 +157,16 @@ func (u *UI) Call(tool, preview string, exit int) {
 	if len(preview) > 72 {
 		preview = preview[:72]
 	}
-	fmt.Fprintf(u.w, "%s   ⟩ %-7s%s %s%s%s  %sexit %d%s\n",
-		u.cDim, tool, u.cR, u.cDim, preview, u.cR, ec, exit, u.cR)
+	u.sync(func() {
+		fmt.Fprintf(u.w, "%s   ⟩ %-7s%s %s%s%s  %sexit %d%s\n",
+			u.cDim, tool, u.cR, u.cDim, preview, u.cR, ec, exit, u.cR)
+	})
 }
 
 // Answer ports ui_answer: a bold green "hermes" label, then the answer rendered
 // through glow / bat (only on a tty) or fmt if present, else raw — every line
 // indented 3.
 func (u *UI) Answer(text string) {
-	fmt.Fprintf(u.w, "%s%shermes%s\n", u.cB, u.cHermes, u.cR)
 	w := strconv.Itoa(u.cols() - 3)
 	var rendered string
 	switch {
@@ -117,7 +179,10 @@ func (u *UI) Answer(text string) {
 	default:
 		rendered = text + "\n"
 	}
-	io.WriteString(u.w, indentLines(strings.TrimSuffix(rendered, "\n"), "   "))
+	u.sync(func() {
+		fmt.Fprintf(u.w, "%s%shermes%s\n", u.cB, u.cHermes, u.cR)
+		io.WriteString(u.w, indentLines(strings.TrimSuffix(rendered, "\n"), "   "))
+	})
 }
 
 // Banner is the REPL header: name + version + cwd, then the hermes-agent-side
@@ -146,13 +211,15 @@ func (u *UI) SessionPrompt(id string) string {
 // NewSessionNote is the `/new` line: "— new session <id> —" (dim), then a
 // blank line, with any leading "hh_" stripped from the id.
 func (u *UI) NewSessionNote(id string) {
-	fmt.Fprintf(u.w, "%s— new session %s —%s\n\n", u.cDim, strings.TrimPrefix(id, "hh_"), u.cR)
+	u.sync(func() {
+		fmt.Fprintf(u.w, "%s— new session %s —%s\n\n", u.cDim, strings.TrimPrefix(id, "hh_"), u.cR)
+	})
 }
 
 // InterruptedNote marks a turn cancelled by Ctrl-C (no bash equivalent — bash
 // dies on SIGINT; the Go REPL returns to the prompt).
 func (u *UI) InterruptedNote() {
-	fmt.Fprintf(u.w, "%s— interrupted —%s\n\n", u.cDim, u.cR)
+	u.sync(func() { fmt.Fprintf(u.w, "%s— interrupted —%s\n\n", u.cDim, u.cR) })
 }
 
 // DimLine writes one dim line (used for HERMES_HANDS_VERBOSE chatter, matching
@@ -164,12 +231,16 @@ func (u *UI) DimLine(msg string) {
 // Delta streams one answer-text chunk during a turn (dim, no newline) — a live
 // preview; the clean final still renders via Answer afterwards.
 func (u *UI) Delta(s string) {
-	if u.cDim != "" {
-		fmt.Fprintf(u.w, "%s%s%s", u.cDim, s, u.cR)
-	} else {
-		fmt.Fprint(u.w, s)
-	}
+	u.sync(func() {
+		if u.cDim != "" {
+			fmt.Fprintf(u.w, "%s%s%s", u.cDim, s, u.cR)
+		} else {
+			fmt.Fprint(u.w, s)
+		}
+	})
 }
+
+// InterruptedNote and NewSessionNote also coordinate with the spinner.
 
 // Help is the REPL `/help` block: what typing does, then the slash commands.
 func (u *UI) Help(cwd string) {

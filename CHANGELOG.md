@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.3 — animated "working" line
+
+`⋯ working` is now an animated line (`.` → `..` → `...` pulsing, `· Ctrl+C to
+cancel` alongside) that runs from your message until the answer starts — so
+during the dead air between tool rounds (Hermes thinking for 30s+) it's obvious
+the turn is still alive. Tool lines and the streamed answer clear it and print
+above/over it cleanly; the first streamed chunk retires it. Non-tty keeps the
+old static line.
+
 ## 0.6.2 — the prompt, rewritten for a fully-tooled Hermes
 
 The live gateway's brain has its **own** `terminal` / `read_file` / `write_file`
