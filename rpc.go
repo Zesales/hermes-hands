@@ -28,7 +28,7 @@ import (
 //
 // Responses:
 //
-//	{"type":"ready","session":"hh_...","cwd":"/repo","version":"0.3.0","approvals":"off"}
+//	{"type":"ready","session":"hh_...","cwd":"/repo","version":"X.Y.Z","approvals":"off"}
 //	{"type":"tool","id":1,"tool":"shell","preview":"npm test","exit":0}
 //	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"..."}
 //	{"type":"session","id":2,"session":"hh_...","hermes_session":"..."}
