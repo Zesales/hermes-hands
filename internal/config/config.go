@@ -35,9 +35,18 @@ type Config struct {
 	Stream                                string // HERMES_HANDS_STREAM: "" / auto | on | off
 	Deny                                  []string
 	MaxRounds, RunTimeout, MaxOutput      int
-	AllowHTTP, Verbose                    bool
-	StateDir                              string
-	ConfigPath, SecretsPath, InstrPath    string
+
+	// ResponseTimeout is how long hermes-agent may go silent within one turn
+	// before the REPL's watchdog cancels it (HERMES_HANDS_RESPONSE_TIMEOUT,
+	// 0 = no limit). WatchdogInterval is how often, in the meantime, the
+	// watchdog probes the server run out-of-band so a legitimately long
+	// "thinking" phase keeps pushing that deadline back
+	// (HERMES_HANDS_WATCHDOG_INTERVAL). Both hand-tunable in the config file.
+	ResponseTimeout                    time.Duration
+	WatchdogInterval                   time.Duration
+	AllowHTTP, Verbose                 bool
+	StateDir                           string
+	ConfigPath, SecretsPath, InstrPath string
 }
 
 // Load resolves configuration. It reads the config file (overriding the
@@ -77,9 +86,14 @@ func Load() (*Config, error) {
 		Approve:    firstNonEmpty(merged["HERMES_HANDS_APPROVE"], "ask"),
 		Stream:     merged["HERMES_HANDS_STREAM"],
 		Deny:       splitDeny(merged["HERMES_HANDS_DENY"]),
-		AllowHTTP:  merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
-		Verbose:    merged["HERMES_HANDS_VERBOSE"] != "",
-		InstrPath:  firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], xdgConfigHome(merged)+"/hermes-hands/instructions.md"),
+
+		// hand-tunable in the config file (like APPROVE / STREAM), not an
+		// env-only tuning knob — an operator adjusts these by editing config.
+		ResponseTimeout:  secondsOr(merged["HERMES_HANDS_RESPONSE_TIMEOUT"], 600*time.Second),
+		WatchdogInterval: secondsOr(merged["HERMES_HANDS_WATCHDOG_INTERVAL"], 200*time.Second),
+		AllowHTTP:        merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
+		Verbose:          merged["HERMES_HANDS_VERBOSE"] != "",
+		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], xdgConfigHome(merged)+"/hermes-hands/instructions.md"),
 
 		ConnectTimeout: secondsOr(proc["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
 		MaxTime:        secondsOr(proc["HERMES_API_MAX_TIME"], 30*time.Second),
