@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Zesales/hermes-hands/internal/config"
 )
@@ -229,6 +230,33 @@ func TestRPCReqUnmarshal(t *testing.T) {
 	}
 	if r.Type != "turn" || r.Text != "hi" || string(r.ID) != "7" {
 		t.Errorf("rpcReq = %+v", r)
+	}
+}
+
+func TestFormatConfig(t *testing.T) {
+	cfg := &config.Config{
+		ConfigPath: "/cfg/hermes-hands/config", SecretsPath: "/cfg/hermes-hands/secrets.enc",
+		InstrPath: "/nope/instructions.md", StateDir: "/state/hermes-hands",
+		APIURL: "https://hermes-api.example.net", APIKey: "sk-should-not-appear",
+		Approve: "ask", Stream: "auto",
+		ResponseTimeout: 600 * time.Second, WatchdogInterval: 200 * time.Second,
+		APIRunTimeout: 600 * time.Second, MaxRounds: 8, RunTimeout: 120, MaxOutput: 20000,
+	}
+	out := formatConfig(cfg)
+
+	for _, want := range []string{
+		"/cfg/hermes-hands/config", "/cfg/hermes-hands/secrets.enc", "(built-in default)",
+		"hermes-hands never writes these",
+		"HERMES_HANDS_RESPONSE_TIMEOUT", "600s",
+		"HERMES_HANDS_WATCHDOG_INTERVAL", "200s",
+		"https://hermes-api.example.net",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("formatConfig missing %q\n---\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "sk-should-not-appear") {
+		t.Errorf("formatConfig leaked the API key:\n%s", out)
 	}
 }
 

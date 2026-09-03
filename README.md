@@ -201,7 +201,12 @@ is the fallback when no `secrets.enc` exists. See [`docs/secrets.md`](docs/secre
 | `HERMES_HANDS_MAX_ROUNDS` | `8` | delegation rounds per turn |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
 | `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`shell` keeps 2×) |
+| `HERMES_HANDS_RESPONSE_TIMEOUT` | `600` | seconds hermes-agent may go silent in a turn before it is cancelled; pushed back by any token / tool round / a live server-run probe (`0` = no limit) |
+| `HERMES_HANDS_WATCHDOG_INTERVAL` | `200` | seconds between those out-of-band "still working?" probes (floored at 15) |
 | `HERMES_API_*` | — | `CONNECT_TIMEOUT` 5, `MAX_TIME` 30, `POLL_INTERVAL` 2, `RETRIES` 3, `RUN_TIMEOUT` 600 |
+
+`/config` (alias `/hh-settings`) in-session prints these paths and effective
+values; it never writes anything — edit `~/.config/hermes-hands/config` by hand.
 
 The per-run `instructions` block sent to Hermes is baked into the binary (source:
 `share/instructions.md`). Drop a `~/.config/hermes-hands/instructions.md` to

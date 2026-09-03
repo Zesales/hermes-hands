@@ -4,8 +4,29 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
+
+// lockedBuf is a strings.Builder safe for the spinner goroutine to write to
+// while the test reads it.
+type lockedBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuf) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
 
 func TestColorEnvGate(t *testing.T) {
 	for _, tc := range []struct {
@@ -106,7 +127,7 @@ func TestHelpByteExact(t *testing.T) {
 	for _, want := range []string{
 		"Type a message to your Hermes brain",
 		"in /home/x/repo,",
-		"/new", "/session <id>", "/sessions", "/fork", "/yolo", "/setup", "/check", "/help", "/exit",
+		"/new", "/session <id>", "/sessions", "/fork", "/yolo", "/setup", "/config", "/check", "/help", "/exit",
 		"Ctrl-C cancels the running turn",
 	} {
 		if !strings.Contains(got, want) {
@@ -149,6 +170,26 @@ func TestSessionPromptHasNoControlRunes(t *testing.T) {
 		if p != "hermes-hands - session 20260902T160152_8fcc06 > " {
 			t.Errorf("SessionPrompt = %q", p)
 		}
+	}
+}
+
+func TestStartWorking_AnimatedLineShowsElapsedAndHint(t *testing.T) {
+	var b lockedBuf
+	u := newUI(&b, true, true) // tty -> animated
+	stop := u.StartWorking()
+	time.Sleep(350 * time.Millisecond) // a few 220ms ticks
+	stop()
+	stop() // idempotent
+
+	got := b.String()
+	if !strings.Contains(got, "working") || !strings.Contains(got, "Ctrl+C to cancel") {
+		t.Errorf("animated line missing label/hint: %q", got)
+	}
+	if !strings.Contains(got, " 0s ") {
+		t.Errorf("animated line should carry an elapsed-seconds counter, got %q", got)
+	}
+	if !strings.HasSuffix(got, "\r\x1b[K") {
+		t.Errorf("stop() must wipe the line, got tail %q", got[max(0, len(got)-8):])
 	}
 }
 

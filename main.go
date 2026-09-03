@@ -493,18 +493,65 @@ func runREPL(smode string) int {
 	// The first streamed chunk means output is flowing — retire the spinner.
 	fs := &finalStreamer{emit: func(s string) { stopWork(); streamBuf.WriteString(s); a.ui.Delta(s) }}
 
+	// Silence watchdog: cancel a turn if hermes-agent goes quiet past
+	// HERMES_HANDS_RESPONSE_TIMEOUT, but keep pushing that deadline back while
+	// there are signs of life (streamed text, tool rounds, fresh sub-runs) or a
+	// periodic out-of-band probe still finds the server run running.
+	wd := &watchdog{timeout: a.cfg.ResponseTimeout, interval: a.cfg.WatchdogInterval}
+
+	// abortTurn is what Ctrl-C does: cancel the turn context, kill the shell
+	// child, stop the server run. Shared by the SIGINT handler and the watchdog.
+	abortTurn := func() {
+		turnMu.Lock()
+		rid := runID
+		if cancelTurn != nil {
+			cancelTurn()
+			a.shell.Kill()
+		}
+		turnMu.Unlock()
+		if rid != "" { // stop the server run too, not just the local wait
+			go a.client.StopRun(context.Background(), rid)
+		}
+	}
+	wd.onFire = abortTurn
+	wd.check = func(ctx context.Context) bool {
+		turnMu.Lock()
+		rid := runID
+		turnMu.Unlock()
+		if rid == "" {
+			return true // between rounds: local dispatch is the holdup, not the brain
+		}
+		st, err := a.client.RunState(ctx, rid)
+		if err != nil {
+			return false // can't confirm it's alive — let the deadline run down
+		}
+		switch st {
+		case "completed", "failed", "cancelled":
+			return false
+		default: // "", queued, started, running, stopping, or anything unknown
+			return true
+		}
+	}
+
 	// Per-app wiring that must be redone when /setup swaps `a`:
 	//  - the approval gate reads its answer through liner (one terminal owner;
 	//    a separate /dev/tty reader deadlocks against liner's input goroutine),
-	//  - OnRunStart records the run id so Ctrl-C can stop the server run.
+	//  - OnRunStart records the run id so Ctrl-C / the watchdog can stop the
+	//    server run; every run/delta/tool event bumps the watchdog.
 	wireApp := func() {
 		if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
 			ta.Out = os.Stderr
 			ta.AskLine = func(q string) (string, error) { return ln.Prompt(q) }
 			ta.Pause = a.ui.Hold
 		}
-		a.client.OnRunStart = func(id string) { turnMu.Lock(); runID = id; turnMu.Unlock() }
-		a.client.OnDelta = fs.feed // extracts + previews just the `final` text
+		a.client.OnRunStart = func(id string) {
+			turnMu.Lock()
+			runID = id
+			turnMu.Unlock()
+			wd.bump()
+		}
+		a.client.OnDelta = func(s string) { wd.bump(); fs.feed(s) } // previews the `final` text; any token = progress
+		a.loop.OnTool = func(string, string, int) { wd.bump() }     // a completed tool round = progress
 	}
 	wireApp()
 
@@ -516,16 +563,7 @@ func runREPL(smode string) int {
 	defer signal.Stop(sigCh)
 	go func() {
 		for range sigCh {
-			turnMu.Lock()
-			rid := runID
-			if cancelTurn != nil {
-				cancelTurn()
-				a.shell.Kill()
-			}
-			turnMu.Unlock()
-			if rid != "" { // stop the server run too, not just the local wait
-				go a.client.StopRun(context.Background(), rid)
-			}
+			abortTurn()
 		}
 	}()
 
@@ -559,6 +597,8 @@ func runREPL(smode string) int {
 					a.shell.Stop()
 					a = na
 					wireApp()
+					wd.timeout = a.cfg.ResponseTimeout
+					wd.interval = a.cfg.WatchdogInterval
 					configured = !notConfigured(a.cfg)
 					if _, e2 := a.client.Check(context.Background()); e2 != nil {
 						fmt.Fprintf(os.Stderr, "BLOCKED: %v\n", e2)
@@ -669,6 +709,12 @@ func runREPL(smode string) int {
 			}
 			fmt.Fprintln(os.Stderr)
 			continue
+		case "/config", "/hh-settings":
+			// Read-only on purpose: hermes-hands never writes settings back —
+			// edit the file by hand (see the header this prints).
+			fmt.Fprint(os.Stderr, formatConfig(a.cfg))
+			fmt.Fprintln(os.Stderr)
+			continue
 		}
 
 		if !configured {
@@ -688,10 +734,16 @@ func runREPL(smode string) int {
 		ctx, cancel := context.WithCancel(context.Background())
 		turnMu.Lock()
 		cancelTurn = cancel
+		runID = "" // no in-flight run yet this turn (the watchdog probe / Ctrl-C read this)
 		turnMu.Unlock()
+
+		wdStop := make(chan struct{})
+		go wd.guard(wdStop)
 
 		out := a.loop.Run(ctx, input, rec, func(runID, sid string, tok int) { _ = a.store.BumpTurn(rec, runID, sid, tok) })
 
+		close(wdStop)
+		timedOut := wd.disarm() // barrier: authoritative "did the watchdog fire?"
 		stopWork()
 		turnMu.Lock()
 		cancelTurn = nil
@@ -699,6 +751,10 @@ func runREPL(smode string) int {
 		interrupted := ctx.Err() != nil
 		cancel()
 
+		if timedOut {
+			a.ui.TimeoutNote(int(a.cfg.ResponseTimeout / time.Second))
+			continue
+		}
 		if interrupted {
 			a.ui.InterruptedNote()
 			continue
@@ -790,6 +846,52 @@ func formatSrvList(ss []api.SrvSession) string {
 	return b.String()
 }
 
+// formatConfig renders the read-only `/config` view: the files hermes-hands
+// reads, and the effective value of every hand-tunable knob with its env-var
+// name. It never offers to write anything — the operator edits the config file
+// directly, so a fat-fingered `/config KEY=value` can't wedge the install.
+func formatConfig(cfg *config.Config) string {
+	none := func(s string) string {
+		if s == "" {
+			return "(none)"
+		}
+		return s
+	}
+	secs := func(d time.Duration) string {
+		if d <= 0 {
+			return "off"
+		}
+		return strconv.Itoa(int(d/time.Second)) + "s"
+	}
+	instr := "(built-in default)"
+	if b, err := os.ReadFile(cfg.InstrPath); err == nil && strings.TrimSpace(string(b)) != "" {
+		instr = cfg.InstrPath
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "  config file  : %s\n", cfg.ConfigPath)
+	fmt.Fprintf(&b, "  secrets      : %s\n", cfg.SecretsPath)
+	fmt.Fprintf(&b, "  instructions : %s\n", instr)
+	fmt.Fprintf(&b, "  state dir    : %s\n", cfg.StateDir)
+	b.WriteString("\n  effective settings — edit the config file by hand; hermes-hands never writes these:\n")
+	for _, r := range [][2]string{
+		{"HERMES_API_URL", none(cfg.APIURL)},
+		{"HERMES_API_PROFILE", none(cfg.APIProfile)},
+		{"HERMES_HANDS_APPROVE", cfg.Approve},
+		{"HERMES_HANDS_STREAM", none(cfg.Stream)},
+		{"HERMES_HANDS_RESPONSE_TIMEOUT", secs(cfg.ResponseTimeout)},
+		{"HERMES_HANDS_WATCHDOG_INTERVAL", secs(cfg.WatchdogInterval)},
+		{"HERMES_HANDS_MAX_ROUNDS", strconv.Itoa(cfg.MaxRounds)},
+		{"HERMES_HANDS_RUN_TIMEOUT", strconv.Itoa(cfg.RunTimeout) + "s"},
+		{"HERMES_API_RUN_TIMEOUT", secs(cfg.APIRunTimeout)},
+		{"HERMES_HANDS_MAX_OUTPUT", strconv.Itoa(cfg.MaxOutput)},
+		{"HERMES_HANDS_DENY", none(strings.Join(cfg.Deny, " | "))},
+	} {
+		fmt.Fprintf(&b, "    %-30s %s\n", r[0], r[1])
+	}
+	return b.String()
+}
+
 // runEventsDump is the hidden `_events` command: start a run and copy its raw
 // SSE event stream to stdout, verbatim, so the wire shape can be inspected.
 func runEventsDump(input string) int {
@@ -877,9 +979,12 @@ func runSessionNew() int {
 
 // --- setup (bash hh_setup) ---
 
-const setupConfigBody = "# hermes-hands config\n" +
-	"# HERMES_API_PROFILE=coder   # optional /p/<profile>/ prefix\n" +
-	"# HERMES_HANDS_APPROVE=ask    # ask | auto | never\n"
+const setupConfigBody = "# hermes-hands config  —  edit by hand; `/config` shows what is in effect\n" +
+	"# HERMES_API_PROFILE=coder             # optional /p/<profile>/ prefix\n" +
+	"# HERMES_HANDS_APPROVE=ask              # ask | auto | never\n" +
+	"# HERMES_HANDS_STREAM=auto              # auto | on | off\n" +
+	"# HERMES_HANDS_RESPONSE_TIMEOUT=600     # seconds hermes-agent may go silent in a turn before it is cancelled (0 = no limit)\n" +
+	"# HERMES_HANDS_WATCHDOG_INTERVAL=200    # seconds between server-side 'still working?' checks that push that limit back\n"
 
 func runSetup() int {
 	plaintext := false
