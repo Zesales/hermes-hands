@@ -55,6 +55,14 @@ type Loop struct {
 // frame wraps the operator's message so every turn re-establishes that Hermes
 // is remote, must answer with the tool-call envelope, and what "here" / "the
 // repo" resolves to. Without a RepoRoot it is a passthrough.
+// locNote is " at <cwd>" for the results reminder ("" when RepoRoot is unset).
+func (l *Loop) locNote() string {
+	if l.RepoRoot == "" {
+		return ""
+	}
+	return " at " + l.RepoRoot
+}
+
 func (l *Loop) frame(userMsg string) string {
 	if l.RepoRoot == "" {
 		return userMsg
@@ -65,16 +73,16 @@ func (l *Loop) frame(userMsg string) string {
 			loc += "  (git branch: " + b + ")"
 		}
 	}
-	return "[hermes-hands — remote worker session; you are NOT local]\n" +
-		"This message is the operator at a terminal on their own machine. The\n" +
-		"{\"calls\":[{\"tool\",\"args\"}],\"final\":null} envelope delegates work to me,\n" +
-		"but ONLY into the git repo at " + loc + ".\n" +
-		"\"the readme\" / \"this repo\" / \"here\" mean that directory — reach for\n" +
-		"read_file or shell there instead of saying you can't see it.\n" +
-		"Everything else you answer directly from your own context: what you know\n" +
-		"about the operator, your memory, our earlier conversation, general\n" +
-		"knowledge. Never delegate a read of your own files (SOUL.md, memory,\n" +
-		"~/.hermes/*, /root/.hermes/*) — those are on your side, not in the repo.\n\n" +
+	return "[hermes-hands — you are Hermes, reached remotely by the operator's worker]\n" +
+		"The operator is at a Linux terminal on their own machine. The worker holds\n" +
+		"a persistent bash shell in the directory " + loc + ". This request is about\n" +
+		"that directory and its contents — \"the readme\" / \"here\" / \"this\" mean it.\n" +
+		"To read/run/edit anything there, reply with ONLY the JSON object\n" +
+		"{\"calls\":[{\"tool\",\"args\"}],\"final\":null} — the worker runs it in that bash\n" +
+		"shell and returns {\"results\":[...]}. Do NOT use your own terminal/read_file/\n" +
+		"write_file/execute_code — those run in your sandbox (/root), not on the\n" +
+		"operator's machine, and will mislead you. Memory / web / reasoning: use\n" +
+		"normally.\n\n" +
 		"operator: " + userMsg
 }
 
@@ -229,7 +237,9 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 		}
 
 		payload, _ := marshalNoHTML(resultsPayload{Results: elems})
-		send = string(payload)
+		send = "[worker results — this is what actually ran in the operator's bash shell" + l.locNote() +
+			". Read it and continue. Empty or failing output means try another command, " +
+			"not that you \"can't access\" it — this is not your sandbox.]\n" + string(payload)
 		round++
 	}
 }

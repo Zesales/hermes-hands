@@ -93,6 +93,11 @@ func parseArgs(args []string) parsed {
 		p.smode = args[1] // an API path, e.g. /v1/capabilities
 		return p
 	}
+	if len(args) >= 2 && args[0] == "_run" {
+		p.action = "run"
+		p.smode = args[1] // a raw JSON body for POST /v1/runs
+		return p
+	}
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "-h", "--help":
@@ -168,6 +173,8 @@ func main() {
 		os.Exit(runEventsDump(p.smode))
 	case "raw":
 		os.Exit(runRawGet(p.smode))
+	case "run":
+		os.Exit(runRawRun(p.smode))
 	}
 	if p.errMsg != "" {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %s\n", p.errMsg)
@@ -819,6 +826,29 @@ func runRawGet(path string) int {
 		return 1
 	}
 	fmt.Println(body)
+	return 0
+}
+
+// runRawRun is the hidden `_run '<json>'` command: POST /v1/runs with a raw
+// body and stream the events — for probing run params (toolsets, etc.).
+func runRawRun(body string) int {
+	cfg := loadCfgOrExit()
+	if notConfigured(cfg) {
+		fmt.Fprintln(os.Stderr, "not configured")
+		return 1
+	}
+	cl := checkClient(cfg)
+	rid, sid, err := cl.RawRunBody(context.Background(), []byte(body))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "run_id=%s session_id=%s\n--- events ---\n", rid, sid)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	if err := cl.RawEvents(ctx, rid, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "\n[events: %v]\n", err)
+	}
 	return 0
 }
 
