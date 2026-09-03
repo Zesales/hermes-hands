@@ -126,6 +126,24 @@ func (u *UI) StartWorking() (stop func()) {
 	}
 }
 
+// Hold suspends the spinner's repaint (wiping its current line) until the
+// returned resume runs. Wrap it around a foreground prompt that owns the line
+// — e.g. the approval y/n/a/q gate — so the spinner can't overwrite it.
+func (u *UI) Hold() (resume func()) {
+	u.mu.Lock()
+	was := u.spinning
+	u.spinning = false
+	if was {
+		fmt.Fprint(u.w, "\r\x1b[K")
+	}
+	u.mu.Unlock()
+	return func() {
+		u.mu.Lock()
+		u.spinning = was
+		u.mu.Unlock()
+	}
+}
+
 // Rule ports ui_rule: a full-width dim horizontal rule.
 func (u *UI) Rule() {
 	u.sync(func() { fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, strings.Repeat("─", u.cols()), u.cR) })
