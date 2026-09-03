@@ -488,8 +488,10 @@ func runREPL(smode string) int {
 		cancelTurn context.CancelFunc
 		runID      string          // in-flight Hermes run, for POST /v1/runs/{id}/stop
 		streamBuf  strings.Builder // this turn's live-previewed answer text (dedupes the final render)
+		stopWork   = func() {}     // stops this turn's animated "working" line (set per turn)
 	)
-	fs := &finalStreamer{emit: func(s string) { streamBuf.WriteString(s); a.ui.Delta(s) }}
+	// The first streamed chunk means output is flowing — retire the spinner.
+	fs := &finalStreamer{emit: func(s string) { stopWork(); streamBuf.WriteString(s); a.ui.Delta(s) }}
 
 	// Per-app wiring that must be redone when /setup swaps `a`:
 	//  - the approval gate reads its answer through liner (one terminal owner;
@@ -678,7 +680,7 @@ func runREPL(smode string) int {
 		fmt.Fprintln(os.Stderr)
 		a.ui.Rule()
 		a.ui.You(input)
-		a.ui.Working()
+		stopWork = a.ui.StartWorking()
 
 		streamBuf.Reset()
 		fs.reset()
@@ -689,6 +691,7 @@ func runREPL(smode string) int {
 
 		out := a.loop.Run(ctx, input, rec, func(runID, sid string, tok int) { _ = a.store.BumpTurn(rec, runID, sid, tok) })
 
+		stopWork()
 		turnMu.Lock()
 		cancelTurn = nil
 		turnMu.Unlock()

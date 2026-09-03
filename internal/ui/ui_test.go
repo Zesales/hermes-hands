@@ -151,3 +151,29 @@ func TestSessionPromptHasNoControlRunes(t *testing.T) {
 		}
 	}
 }
+
+func TestStartWorking_NonTTYStaticAndIdempotent(t *testing.T) {
+	var b strings.Builder
+	u := newUI(&b, false, false) // non-tty
+	stop := u.StartWorking()
+	stop()
+	stop() // idempotent, must not panic
+	if !strings.Contains(b.String(), "working") {
+		t.Errorf("non-tty StartWorking should print the static line, got %q", b.String())
+	}
+}
+
+func TestSyncClearsSpinnerLine(t *testing.T) {
+	var b strings.Builder
+	u := newUI(&b, true, true)
+	u.mu.Lock()
+	u.spinning = true
+	u.mu.Unlock()
+	u.Call("shell", "ls", 0)
+	if !strings.HasPrefix(b.String(), "\r\x1b[K") {
+		t.Errorf("Call while spinning must clear the line first, got %q", b.String())
+	}
+	if !strings.Contains(b.String(), "shell") {
+		t.Errorf("Call content missing: %q", b.String())
+	}
+}
