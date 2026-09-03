@@ -193,7 +193,7 @@ func (d *Dispatcher) doEdit(args map[string]json.RawMessage) (Result, error) {
 	}
 	content := string(b)
 
-	// Literal, exactly-once replace (plan §2 #18 / decision #3): drop the bash
+	// Literal, exactly-once replace: drop the old regex-substitution
 	// `awk sub()` regex + `&` interpretation.
 	if n := strings.Count(content, old); n != 1 {
 		return Result{Exit: 1, Out: fmt.Sprintf("edit_file: 'old' matched %d times in %s (need exactly 1)", n, p)}, nil

@@ -1,14 +1,37 @@
 # Changelog
 
-## Unreleased
+## 0.9.4 — continuous releases; pre-public cleanup
 
-Tooling only — no `VERSION` bump, so no release.
+**A bare `hermes-hands` now starts a fresh session** — no implicit resume of
+this repo's latest (that reverses 0.3.0's `5d657ea`). `--session` with no id
+still continues the latest explicitly; `--session <id>` opens a specific one;
+`--new` is now just the same as a bare run. `--rpc` still defaults to continue
+(an editor holding the process wants session continuity across restarts).
 
-- `make dev [ARGS=…]` — run straight from source (`go run`) against a
-  checkout-local dev state: session index under `./.dev/` (gitignored, not your
-  real `~/hermes-hands/sessions`), prompt read **live** from
-  `share/instructions.md` (edit + re-run, no rebuild). URL + key inherited from
-  `~/hermes-hands/` / the env. `make clean` now also removes `./.dev/`.
+**Release on every merge to `main`.** `.github/workflows/release.yml` now
+triggers on any push to `main` (i.e. a merged PR), builds all targets via
+`./build.sh release`, and publishes **`v<VERSION>-<sha>`** — unique per commit,
+so it never collides. GitHub's "latest" follows the newest, so `install.sh`
+with no args always gets it; `install.sh --version <VERSION>-<sha>` pins one.
+(The old `paths: ['VERSION']` filter meant most merges built nothing.)
+
+- **`make dev [ARGS=…]`** — run straight from source (`go run`) as a
+  self-contained dev instance out of `./.dev/` (gitignored): its own
+  `HERMES_HANDS_HOME`, so sessions/config never touch your real
+  `~/hermes-hands/`. First run copies the machine-bound key over from there
+  (it's bound to machine-id + uid, not its path); `make dev-setup` instead
+  prompts for a separate key. The prompt is read **live** from
+  `share/instructions.md` — edit, `make dev` again, no rebuild. `make dev-setup`,
+  grouped `make help`, `make clean` wipes `./.dev/`.
+- README **Install** leads with the fast `curl … | sh` (always latest, SHA-256
+  verified, no clone / Go / build) + a table for `--version` / `--source` /
+  `--local`.
+- `ui.Answer` no longer routes through `fmt -s` when neither `glow` nor `bat`
+  is installed — `fmt` mangled code blocks and lists; the raw markdown reads
+  fine in a terminal.
+- Removed the stale `docs/go-port-{plan,parity}.md` (the bash→Go port is done)
+  and the orphaned `project.env`. Package doc comments no longer reference the
+  deleted bash sources.
 
 ## 0.9.3 — drop the stale repo `config/`; rename `build.sh` verb
 

@@ -4,8 +4,9 @@
 // read_file / write_file / edit_file so Hermes can see and act on the repo you
 // are standing in. Outbound only: nothing listens on your machine.
 //
-// This is the Go port of the original bash bundle. The wire contract and every
-// user-facing string are kept byte-identical; see docs/go-port-plan.md.
+// The tool-call envelope Hermes replies with is the same shape split-runtime
+// (NousResearch/hermes-agent#63966) expects, so the local dispatcher does not
+// change when that lands — only the transport.
 package main
 
 import (
@@ -50,12 +51,13 @@ const usageText = `hermes-hands - terminal chat with a central Hermes brain over
 Hermes holds the plan/memory; it drives a persistent local shell plus
 read_file / write_file / edit_file to see and act on the repo you're in.
 
-A session is one task. Continue it, or start a new one — there is no one-shot.
+A session is one task. There is no one-shot, and no auto-resume: a bare run
+starts a fresh session — continue an old one only when you ask.
 
-  hermes-hands                    continue this repo's latest session (main use)
-  hermes-hands --session          same, explicitly
+  hermes-hands                    start a fresh session here (main use)
+  hermes-hands --session          continue this repo's latest session
   hermes-hands --session <id>     open a specific session  (id from --session-list)
-  hermes-hands --new              start a fresh session (new task)
+  hermes-hands --new              start a fresh session  (same as a bare run)
   hermes-hands --rpc              JSON-lines session server for an editor/plugin
 
   hermes-hands --session-list     list sessions with id / turns / tokens
@@ -71,7 +73,7 @@ A session is one task. Continue it, or start a new one — there is no one-shot.
 type parsed struct {
 	action string // "" | help | version | check | sessions | sessionnew | setup
 	errMsg string // non-empty => fatal (unknown option / stray argument)
-	smode  string // "" (== continue) | new | continue | <id>
+	smode  string // "" (== new) | new | continue | <id>
 	rpc    bool
 	yolo   bool
 }
@@ -149,8 +151,7 @@ func parseArgs(args []string) parsed {
 func main() {
 	p := parseArgs(os.Args[1:])
 	if p.yolo {
-		// Exported before config.Load so nested config parsing sees it too
-		// (plan §2 #17).
+		// Exported before config.Load so nested config parsing sees it too.
 		_ = os.Setenv("HERMES_HANDS_APPROVE", "auto")
 	}
 
@@ -181,14 +182,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Every mode works ON a session: a bare run (or --session with no id)
-	// continues this repo's latest, --new starts one, --session <id> opens a
-	// specific one, --rpc lets a caller hold one. No throwaway session per
-	// invocation, so the central Hermes isn't fragmented.
+	// Every mode works ON a session. A bare REPL run starts a fresh one (a
+	// session is one task — no implicit resume); `--session` with no id
+	// continues this repo's latest, `--session <id>` opens a specific one.
+	// `--rpc` still defaults to continue: an editor/plugin holding the process
+	// wants the same session across restarts, and drives new/use over the pipe.
 	if p.rpc {
 		os.Exit(runRPC(orElse(p.smode, "continue")))
 	}
-	os.Exit(runREPL(orElse(p.smode, "continue")))
+	os.Exit(runREPL(orElse(p.smode, "new")))
 }
 
 func orElse(s, def string) string {
@@ -288,7 +290,7 @@ func splitCmd(s string) (cmd, rest string) {
 	return s, ""
 }
 
-// --- version strings (bash hh_version + HH_VERSION) ---
+// --- version strings ---
 
 func bareVersion() string {
 	if version != "0.0.0-dev" {
@@ -321,7 +323,7 @@ func versionString() string {
 	return "hermes-hands " + ver
 }
 
-// --- shared logging (bash hh_warn / hh_log) ---
+// --- shared logging ---
 
 func warnf(f string, a ...any) { fmt.Fprintf(os.Stderr, "hermes-hands: WARNING: "+f+"\n", a...) }
 func logf(f string, a ...any)  { fmt.Fprintf(os.Stderr, "hermes-hands: "+f+"\n", a...) }
@@ -401,7 +403,7 @@ func newApp() (*app, error) {
 	return &app{cfg, repoRoot, u, client, store, sh, disp, lp}, nil
 }
 
-// resolveInstructions ports the hh_api_ask instructions ladder:
+// resolveInstructions is the instructions ladder:
 // $HERMES_HANDS_INSTRUCTIONS | ~/hermes-hands/instructions.md (first readable
 // & non-empty) else the embedded share/instructions.md.
 func resolveInstructions(path string) string {
@@ -993,7 +995,7 @@ func runSessionNew() int {
 	return 0
 }
 
-// --- setup (bash hh_setup) ---
+// --- setup ---
 
 const setupConfigBody = "# hermes-hands config  —  edit by hand; `/config` shows what is in effect\n" +
 	"# HERMES_API_PROFILE=coder             # optional /p/<profile>/ prefix\n" +
@@ -1012,8 +1014,7 @@ func runSetup() int {
 	if code := doSetup(bufio.NewReader(os.Stdin), hermesHome(), plaintext); code != 0 {
 		return code
 	}
-	// bash re-execs `"$_self" check`; the Go port calls check directly
-	// (plan §2 #21 — $_self is unset in a released bundle).
+	// setup then runs check directly.
 	_ = runCheck()
 	return 0
 }
