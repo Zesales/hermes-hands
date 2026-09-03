@@ -236,19 +236,33 @@ func (u *UI) NewSessionNote(id string) {
 	})
 }
 
-// InterruptedNote marks a turn cancelled by Ctrl-C (no bash equivalent — bash
-// dies on SIGINT; the Go REPL returns to the prompt).
-func (u *UI) InterruptedNote() {
-	u.sync(func() { fmt.Fprintf(u.w, "%s— interrupted —%s\n\n", u.cDim, u.cR) })
+// TurnDone prints the one-line turn footer: how long the turn ran (from the
+// operator's message to the answer / cancel) and how it ended.
+//
+//	outcome ""          -> "— worked for 12s —"
+//	outcome "interrupted" -> "— interrupted after 8s —"  (Ctrl-C)
+//	outcome "timeout"     -> "— timeout after 603s — no reply from hermes-agent
+//	                          (HERMES_HANDS_RESPONSE_TIMEOUT=600) —"
+func (u *UI) TurnDone(d time.Duration, outcome string, limitSec int) {
+	var msg string
+	switch outcome {
+	case "interrupted":
+		msg = "interrupted after " + humanDur(d)
+	case "timeout":
+		msg = fmt.Sprintf("timeout after %s — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=%ds)", humanDur(d), limitSec)
+	default:
+		msg = "worked for " + humanDur(d)
+	}
+	u.sync(func() { fmt.Fprintf(u.w, "%s— %s —%s\n\n", u.cDim, msg, u.cR) })
 }
 
-// TimeoutNote marks a turn the silence watchdog cancelled: hermes-agent went
-// quiet for longer than HERMES_HANDS_RESPONSE_TIMEOUT (limitSec).
-func (u *UI) TimeoutNote(limitSec int) {
-	u.sync(func() {
-		fmt.Fprintf(u.w, "%s— timeout: no reply from hermes-agent in %ds — turn cancelled "+
-			"(raise HERMES_HANDS_RESPONSE_TIMEOUT to wait longer) —%s\n\n", u.cDim, limitSec, u.cR)
-	})
+// humanDur is a compact turn duration: "8s" under a minute, "3m07s" over.
+func humanDur(d time.Duration) string {
+	s := int(d.Round(time.Second) / time.Second)
+	if s < 60 {
+		return strconv.Itoa(s) + "s"
+	}
+	return fmt.Sprintf("%dm%02ds", s/60, s%60)
 }
 
 // DimLine writes one dim line (used for HERMES_HANDS_VERBOSE chatter, matching
@@ -269,7 +283,7 @@ func (u *UI) Delta(s string) {
 	})
 }
 
-// InterruptedNote and NewSessionNote also coordinate with the spinner.
+// TurnDone and NewSessionNote also coordinate with the spinner.
 
 // Help is the REPL `/help` block: what typing does, then the slash commands.
 func (u *UI) Help(cwd string) {
