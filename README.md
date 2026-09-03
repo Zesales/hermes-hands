@@ -74,14 +74,15 @@ hermes-hands check                 # preflight the connection
 Scripts drive `--rpc` (send one `turn`, read the `answer`, close stdin) rather
 than a per-call one-shot.
 
-REPL commands: `/help` `/new` `/session` (this session's detail) `/session <id>`
-(switch) `/sessions` `/compact [focus]` (ask Hermes to compact the context now)
-`/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits;
-`Ctrl-C` at the prompt just hints, during a turn it cancels the turn). `/setup`
-configures without leaving the session and the REPL starts even when
-unconfigured. Tool calls are shown as they run
-(`⟩ shell npm test… → exit 0`); the final answer renders through
-`glow`/`bat`/`fmt` if installed.
+REPL commands: `/help` `/new` `/session` (this session's detail — local + server
+numbers) `/session <id>` (switch) `/sessions` `/fork` (branch on the server)
+`/skills` `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits; `Ctrl-C` at
+the prompt just hints, during a turn it cancels the turn locally *and* stops the
+run on Hermes). `/setup` configures without leaving the session and the REPL
+starts even when unconfigured. When the gateway supports SSE the answer text
+previews live as it generates (`HERMES_HANDS_STREAM` = `auto`|`on`|`off`); tool
+calls are shown as they run (`⟩ shell npm test… → exit 0`); the final answer
+renders through `glow`/`bat`/`fmt` if installed.
 
 Hermes drives these tools, all in the directory you launched from:
 
@@ -195,6 +196,7 @@ is the fallback when no `secrets.enc` exists. See [`docs/secrets.md`](docs/secre
 | `HERMES_API_KEY` | — | `API_SERVER_KEY` (put this in `secrets`, `chmod 600`) |
 | `HERMES_API_PROFILE` | — | route to `/p/<profile>/` (needs that profile's own key) |
 | `HERMES_HANDS_APPROVE` | `ask` | `ask` \| `auto` \| `never` |
+| `HERMES_HANDS_STREAM` | `auto` | SSE answer streaming: `auto` (when advertised) \| `on` \| `off` |
 | `HERMES_HANDS_DENY` | — | extra denied `shell` commands, `\|`-separated shell globs |
 | `HERMES_HANDS_MAX_ROUNDS` | `8` | delegation rounds per turn |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |

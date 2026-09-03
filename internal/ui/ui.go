@@ -161,6 +161,16 @@ func (u *UI) DimLine(msg string) {
 	fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, msg, u.cR)
 }
 
+// Delta streams one answer-text chunk during a turn (dim, no newline) — a live
+// preview; the clean final still renders via Answer afterwards.
+func (u *UI) Delta(s string) {
+	if u.cDim != "" {
+		fmt.Fprintf(u.w, "%s%s%s", u.cDim, s, u.cR)
+	} else {
+		fmt.Fprint(u.w, s)
+	}
+}
+
 // Help is the REPL `/help` block: what typing does, then the slash commands.
 func (u *UI) Help(cwd string) {
 	fmt.Fprintf(u.w, "%s  Type a message to your Hermes brain. It works this directory through\n", u.cDim)
@@ -169,8 +179,9 @@ func (u *UI) Help(cwd string) {
 	io.WriteString(u.w, "    /new          start a fresh session in this directory\n")
 	io.WriteString(u.w, "    /session      show this session's detail (turns, tokens, splits)\n")
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
-	io.WriteString(u.w, "    /sessions     list this machine's sessions, newest first\n")
-	io.WriteString(u.w, "    /compact [x]  ask Hermes to compact this session's context now\n")
+	io.WriteString(u.w, "    /sessions     list this machine's + hermes-agent's sessions\n")
+	io.WriteString(u.w, "    /fork         branch this session on the server, switch to it\n")
+	io.WriteString(u.w, "    /skills       what skills the brain has\n")
 	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")
 	io.WriteString(u.w, "    /setup        (re)configure the gateway URL + key\n")
 	io.WriteString(u.w, "    /check        re-test the gateway connection\n")
