@@ -236,7 +236,7 @@ func TestRunRecapLatchesAfterUnthreadedRound(t *testing.T) {
 	if !strings.HasPrefix(s.msgs[2], "[conversation so far this turn]\n") {
 		t.Errorf("round 3 msg should be recapped: %q", s.msgs[2])
 	}
-	if !strings.Contains(s.msgs[2], "[latest tool results]\n[worker results") ||
+	if !strings.Contains(s.msgs[2], "[latest tool results]\n[hands results") ||
 		!strings.Contains(s.msgs[2], `{"results":`) {
 		t.Errorf("recap wrapper missing latest-results section: %q", s.msgs[2])
 	}
@@ -261,8 +261,8 @@ func TestRunResultsShape(t *testing.T) {
 		} `json:"results"`
 	}
 	m1 := s.msgs[1]
-	if !strings.HasPrefix(m1, "[worker results") {
-		t.Errorf("round 2 msg should lead with the worker-results reminder: %q", m1)
+	if !strings.HasPrefix(m1, "[hands results") {
+		t.Errorf("round 2 msg should lead with the hands-results reminder: %q", m1)
 	}
 	if i := strings.IndexByte(m1, '{'); i >= 0 {
 		m1 = m1[i:]
@@ -354,17 +354,20 @@ func TestRunFramesFirstMessage(t *testing.T) {
 	}
 	got := sa.msgs[0]
 	for _, want := range []string{
-		"You are Hermes, driving a worker", "persistent bash shell",
-		"cwd: /home/me/proj", "git branch: main",
+		"you are the brain", "hermes-hands is your hands",
+		"persistent bash shell",
+		"PROBLEM — operator's working directory: cwd /home/me/proj (git branch: main)",
+		"was hälst du von der readme ?", // the message, verbatim, as the problem body
+		"reason it through, then ONE instruction",
 		`"final":null}`,
-		"what can you do", // vague prompts are about the project too
-		"throwaway /root container",
-		"tool_search/skill_view/cronjob describe you",
-		"operator: was hälst du von der readme ?",
+		"Not a chat reply, not a description of yourself",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("framed round-1 message missing %q\n---\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "operator: was hälst") {
+		t.Errorf("message should stand as the PROBLEM body, not be prefixed 'operator:':\n%s", got)
 	}
 }
 

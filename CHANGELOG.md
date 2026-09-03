@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.8.0 — brain ↔ hands framing; turn timer footer
+
+**The prompt, rebuilt around a task contract.** Earlier passes told the model
+"every message is about the operator's directory" and it still answered "was
+kannst du?" by listing its own tools. 0.8.0 reframes the whole relationship:
+
+- `share/instructions.md` is now "**you are the brain; hermes-hands is your
+  hands**. Every turn you are handed a **problem**. Your reply is always the
+  same shape: reason it through, then **one instruction** — `{"calls":[…]}` or
+  `{"calls":[],"final":"…"}`. That is your only output contract: no chat, no
+  self-description." Verified against a live Bifrost trace: "lies die todo.md"
+  → clean `{"calls":[{"tool":"read_file",…}]}` on the first model call, correct
+  reasoning, zero `tool_search` / `skill_view` / sandbox detour.
+- `frame()` is now a thin **task wrapper** around the operator's message
+  (`PROBLEM — operator's working directory: <cwd>` / the message / the response
+  contract restated) instead of a rules recap. All behavioural rules live in
+  the cached `instructions` field.
+- The tool-results turn is re-worded so the model can't misread it: "**your
+  hands ran the instruction you just gave** … real output from the operator's
+  machine — the operator did NOT paste it, not from your sandbox … now answer
+  in `final`." (It had been prepending "I couldn't read it directly / you
+  provided the content" disclaimers.)
+
+**Turn timer footer.** Every turn now ends with a one-line footer:
+`— worked for 12s —`, `— interrupted after 8s —`, or `— timeout after 603s —
+no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=600s) —`. Timed from
+the operator's message to the answer / cancel. (`UI.TurnDone` replaces the bare
+`— interrupted —` / timeout notes.)
+
 ## 0.7.1 — the prompt, again: vague asks are about the project too
 
 From a live trace: explicit file commands ("lies die readme") delegate

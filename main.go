@@ -727,6 +727,7 @@ func runREPL(smode string) int {
 		fmt.Fprintln(os.Stderr)
 		a.ui.Rule()
 		a.ui.You(input)
+		turnStart := time.Now()
 		stopWork = a.ui.StartWorking()
 
 		streamBuf.Reset()
@@ -750,13 +751,14 @@ func runREPL(smode string) int {
 		turnMu.Unlock()
 		interrupted := ctx.Err() != nil
 		cancel()
+		turnDur := time.Since(turnStart)
 
 		if timedOut {
-			a.ui.TimeoutNote(int(a.cfg.ResponseTimeout / time.Second))
+			a.ui.TurnDone(turnDur, "timeout", int(a.cfg.ResponseTimeout/time.Second))
 			continue
 		}
 		if interrupted {
-			a.ui.InterruptedNote()
+			a.ui.TurnDone(turnDur, "interrupted", 0)
 			continue
 		}
 		if out.OK {
@@ -772,7 +774,7 @@ func runREPL(smode string) int {
 		} else {
 			a.ui.Answer(out.Answer)
 		}
-		fmt.Fprintln(os.Stderr)
+		a.ui.TurnDone(turnDur, "", 0)
 	}
 	return 0
 }
