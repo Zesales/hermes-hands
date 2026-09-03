@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.5 — turn timer, silence watchdog, read-only `/config`
+
+- **The `⋯ working` line now shows elapsed seconds** (`working · 47s · Ctrl+C to
+  cancel`), reset at the start of every turn — so the dead air between tool
+  rounds while Hermes thinks is visibly counting, not frozen.
+- **Silence watchdog.** A turn is cancelled if hermes-agent goes quiet for
+  longer than `HERMES_HANDS_RESPONSE_TIMEOUT` (default **600s**, fine for local
+  LLMs; `0` disables). It is *not* a hard wall: every sign of life — a streamed
+  token, a finished tool round, a fresh sub-run — pushes the deadline back, and
+  in the meantime a side check every `HERMES_HANDS_WATCHDOG_INTERVAL` (default
+  **200s**) probes `GET /v1/runs/{id}`; while it still reports the run running,
+  the deadline keeps resetting. Only a genuine stall (no tokens, and the probe
+  can't confirm the run is alive) trips it, printing `— timeout: no reply from
+  hermes-agent in 600s — turn cancelled —` and stopping the server run. This
+  closes the hole where a stalled SSE stream hung the REPL forever with only
+  Ctrl-C to break out.
+- **`/config` (alias `/hh-settings`)** — prints the config-file / secrets /
+  instructions / state paths and every hand-tunable knob's effective value with
+  its env-var name. **Read-only on purpose**: hermes-hands never writes settings
+  back — you edit the file. The API key is never shown.
+- Both new knobs are read from the config file (like `HERMES_HANDS_APPROVE`),
+  not env-only; `setup` writes them as commented examples.
+
 ## 0.6.4 — spinner vs. the approval prompt
 
 The animated line from 0.6.3 was repainting over the `[y]es [n]o [a]ll [q]uit`
