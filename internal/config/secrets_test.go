@@ -96,10 +96,9 @@ func TestWrongMachineIsCleanError(t *testing.T) {
 func TestMissingKeyseedIsCleanError(t *testing.T) {
 	quietWarn(t)
 	clearEnv(t)
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	conf := filepath.Join(dir, "hermes-hands")
-	mustWrite(t, filepath.Join(conf, "secrets.enc"), `{"v":1,"binds":["keyseed"],"nonce":"AAAAAAAAAAAAAAAA","ct":"AAAA"}`)
+	home := t.TempDir()
+	t.Setenv("HERMES_HANDS_HOME", home)
+	mustWrite(t, filepath.Join(home, "secrets.enc"), `{"v":1,"binds":["keyseed"],"nonce":"AAAAAAAAAAAAAAAA","ct":"AAAA"}`)
 	// no keyseed file
 
 	if _, err := Load(); err != ErrSecretsUndecryptable {
@@ -111,9 +110,9 @@ func TestLoadFromEncryptedStore(t *testing.T) {
 	quietWarn(t)
 	withMachineID(t, "test-machine-0002")
 	clearEnv(t)
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	conf := filepath.Join(dir, "hermes-hands")
+	home := t.TempDir()
+	t.Setenv("HERMES_HANDS_HOME", home)
+	conf := home
 	if err := os.MkdirAll(conf, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +126,9 @@ func TestLoadFromEncryptedStore(t *testing.T) {
 	}
 	if c.APIURL != "https://from-enc.example.net" || c.APIKey != "sk-fromenc" {
 		t.Errorf("encrypted store not applied: %q / %q", c.APIURL, c.APIKey)
+	}
+	if c.SecretsSource != "secrets.enc" {
+		t.Errorf("SecretsSource = %q, want secrets.enc", c.SecretsSource)
 	}
 
 	// files are 0600
@@ -149,9 +151,9 @@ func TestLoadFromEncryptedStore(t *testing.T) {
 func TestEncAbsentFallsBackToPlaintext(t *testing.T) {
 	quietWarn(t)
 	clearEnv(t)
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	mustWrite(t, filepath.Join(dir, "hermes-hands", "secrets"),
+	home := t.TempDir()
+	t.Setenv("HERMES_HANDS_HOME", home)
+	mustWrite(t, filepath.Join(home, "secrets"),
 		"export HERMES_API_URL=\"https://plain.example.net\"\nexport HERMES_API_KEY='sk-plain'\n")
 
 	c, err := Load()

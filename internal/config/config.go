@@ -16,16 +16,18 @@ var Warnf = func(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "hermes-hands: WARNING: "+format+"\n", a...)
 }
 
-// Config is the fully-resolved runtime configuration. Field groups differ in
-// where they are read from, matching the bash sourcing order:
+// Config is the fully-resolved runtime configuration.
 //
-//   - The API tuning knobs and the state dir are cached by lib/*.sh at
-//     source time, before hh_load_config runs, so the config file can never
-//     influence them — they come from the process environment only.
-//   - URL / key / profile / approve / deny / allow-http / verbose / the
-//     instructions path are read live by the bash functions after
-//     hh_load_config, so the config (and, conditionally, secrets) file wins
-//     over the environment for those.
+// Everything lives inside one self-contained directory, Home
+// (HERMES_HANDS_HOME, else $HOME/hermes-hands): config, the secrets store,
+// the session index and an optional instructions override — no scattered XDG
+// layout. Each path still has its own override (HERMES_HANDS_CONFIG /
+// _SECRETS / _STATE / _INSTRUCTIONS) which wins over the Home-derived default.
+//
+// The API tuning knobs come from the process environment only; URL / key /
+// profile / approve / stream / deny / allow-http / verbose / the watchdog
+// knobs are read after the config file so the file (and, conditionally, the
+// secrets store) wins over the environment for those.
 type Config struct {
 	APIURL, APIKey, APIProfile            string
 	ConnectTimeout, MaxTime, PollInterval time.Duration
@@ -46,7 +48,13 @@ type Config struct {
 	WatchdogInterval                   time.Duration
 	AllowHTTP, Verbose                 bool
 	StateDir                           string
+	Home                               string // HERMES_HANDS_HOME (else $HOME/hermes-hands)
 	ConfigPath, SecretsPath, InstrPath string
+
+	// SecretsSource records where the URL/key ultimately came from, for the
+	// read-only /config view: "secrets.enc" | "secrets" (plaintext fallback) |
+	// "" (nothing on disk contributed — env / config file, or unset).
+	SecretsSource string
 }
 
 // Load resolves configuration. It reads the config file (overriding the
@@ -56,8 +64,9 @@ type Config struct {
 func Load() (*Config, error) {
 	proc := environMap(os.Environ())
 
-	cfgPath := firstNonEmpty(proc["HERMES_HANDS_CONFIG"], xdgConfigHome(proc)+"/hermes-hands/config")
-	secPath := firstNonEmpty(proc["HERMES_HANDS_SECRETS"], xdgConfigHome(proc)+"/hermes-hands/secrets")
+	home := hermesHome(proc)
+	cfgPath := firstNonEmpty(proc["HERMES_HANDS_CONFIG"], home+"/config")
+	secPath := firstNonEmpty(proc["HERMES_HANDS_SECRETS"], home+"/secrets")
 
 	merged := cloneMap(proc)
 	if b, err := os.ReadFile(cfgPath); err == nil {
@@ -73,10 +82,13 @@ func Load() (*Config, error) {
 			merged[k] = ""
 		}
 	}
+	secSrc := ""
 	if merged["HERMES_API_URL"] == "" || merged["HERMES_API_KEY"] == "" {
-		if err := applyFallbackSecrets(merged, xdgConfigHome(proc)+"/hermes-hands", secPath); err != nil {
+		src, err := applyFallbackSecrets(merged, home, secPath)
+		if err != nil {
 			return nil, err
 		}
+		secSrc = src
 	}
 
 	return &Config{
@@ -93,7 +105,7 @@ func Load() (*Config, error) {
 		WatchdogInterval: secondsOr(merged["HERMES_HANDS_WATCHDOG_INTERVAL"], 200*time.Second),
 		AllowHTTP:        merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
 		Verbose:          merged["HERMES_HANDS_VERBOSE"] != "",
-		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], xdgConfigHome(merged)+"/hermes-hands/instructions.md"),
+		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], home+"/instructions.md"),
 
 		ConnectTimeout: secondsOr(proc["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
 		MaxTime:        secondsOr(proc["HERMES_API_MAX_TIME"], 30*time.Second),
@@ -103,50 +115,58 @@ func Load() (*Config, error) {
 		MaxRounds:      intOr(proc["HERMES_HANDS_MAX_ROUNDS"], 8),
 		RunTimeout:     intOr(proc["HERMES_HANDS_RUN_TIMEOUT"], 120),
 		MaxOutput:      intOr(proc["HERMES_HANDS_MAX_OUTPUT"], 20000),
-		StateDir:       firstNonEmpty(proc["HERMES_HANDS_STATE"], xdgStateHome(proc)+"/hermes-hands"),
+		StateDir:       firstNonEmpty(proc["HERMES_HANDS_STATE"], home),
 
-		ConfigPath:  cfgPath,
-		SecretsPath: secPath,
+		Home:          home,
+		ConfigPath:    cfgPath,
+		SecretsPath:   secPath,
+		SecretsSource: secSrc,
 	}, nil
 }
 
 // applyFallbackSecrets fills still-empty HERMES_API_* keys, only when a URL or
-// key is missing. The encrypted store (secrets.enc + keyseed, in confDir) is
+// key is missing. The encrypted store (secrets.enc + keyseed, in homeDir) is
 // authoritative for the fallback when present; a missing keyseed or a decrypt
 // failure is a hard error (never a silent fall-through). Only when there is no
 // secrets.enc at all does the narrowed-parser plaintext `secrets` file apply,
-// keeping pre-M10 installs working until they re-run setup.
-func applyFallbackSecrets(merged map[string]string, confDir, plainPath string) error {
-	encPath := confDir + "/secrets.enc"
-	seedPath := confDir + "/keyseed"
+// keeping old installs working until they re-run setup. The returned string
+// records which store contributed ("secrets.enc" | "secrets" | "").
+func applyFallbackSecrets(merged map[string]string, homeDir, plainPath string) (string, error) {
+	encPath := homeDir + "/secrets.enc"
+	seedPath := homeDir + "/keyseed"
 
 	blob, err := os.ReadFile(encPath)
 	if err != nil {
 		if b, perr := os.ReadFile(plainPath); perr == nil {
+			applied := false
 			for k, v := range parseAssignments(b) {
 				merged[k] = v
+				applied = true
+			}
+			if applied {
+				return "secrets", nil
 			}
 		}
-		return nil
+		return "", nil
 	}
 
 	warnIfLoose(encPath)
 	seed, serr := os.ReadFile(seedPath)
 	if serr != nil {
-		return ErrSecretsUndecryptable
+		return "", ErrSecretsUndecryptable
 	}
 	warnIfLoose(seedPath)
 
 	payload, derr := decryptBlob(blob, seed)
 	if derr != nil {
-		return ErrSecretsUndecryptable
+		return "", ErrSecretsUndecryptable
 	}
 	for k, v := range payload {
 		if merged[k] == "" {
 			merged[k] = v
 		}
 	}
-	return nil
+	return "secrets.enc", nil
 }
 
 // LooksUnset ports hh_looks_unset: empty, or carrying an obvious placeholder
@@ -214,20 +234,15 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// xdgConfigHome / xdgStateHome use plain "/"-concatenation (not filepath.Join)
-// so an empty $HOME yields "/.config" like bash, not a cleaned relative path.
-func xdgConfigHome(env map[string]string) string {
-	if v := env["XDG_CONFIG_HOME"]; v != "" {
+// hermesHome is the app's single self-contained data directory:
+// HERMES_HANDS_HOME, else $HOME/hermes-hands. Plain "/"-concatenation (not
+// filepath.Join) so an empty $HOME yields "/hermes-hands", not a cleaned
+// relative path.
+func hermesHome(env map[string]string) string {
+	if v := env["HERMES_HANDS_HOME"]; v != "" {
 		return v
 	}
-	return env["HOME"] + "/.config"
-}
-
-func xdgStateHome(env map[string]string) string {
-	if v := env["XDG_STATE_HOME"]; v != "" {
-		return v
-	}
-	return env["HOME"] + "/.local/state"
+	return env["HOME"] + "/hermes-hands"
 }
 
 func splitDeny(s string) []string {

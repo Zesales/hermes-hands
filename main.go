@@ -402,8 +402,8 @@ func newApp() (*app, error) {
 }
 
 // resolveInstructions ports the hh_api_ask instructions ladder:
-// $HERMES_HANDS_INSTRUCTIONS | ~/.config/hermes-hands/instructions.md (first
-// readable & non-empty) else the embedded share/instructions.md.
+// $HERMES_HANDS_INSTRUCTIONS | ~/hermes-hands/instructions.md (first readable
+// & non-empty) else the embedded share/instructions.md.
 func resolveInstructions(path string) string {
 	if b, err := os.ReadFile(path); err == nil {
 		if s := strings.TrimRight(string(b), "\n"); s != "" {
@@ -592,7 +592,7 @@ func runREPL(smode string) int {
 			fmt.Fprintln(os.Stderr)
 			continue
 		case "/setup":
-			if code := doSetup(bufio.NewReader(os.Stdin), xdgConfigHome()+"/hermes-hands", false); code == 0 {
+			if code := doSetup(bufio.NewReader(os.Stdin), hermesHome(), false); code == 0 {
 				if na, e := newApp(); e == nil {
 					a.shell.Stop()
 					a = na
@@ -867,12 +867,26 @@ func formatConfig(cfg *config.Config) string {
 	if b, err := os.ReadFile(cfg.InstrPath); err == nil && strings.TrimSpace(string(b)) != "" {
 		instr = cfg.InstrPath
 	}
+	var secrets string
+	switch cfg.SecretsSource {
+	case "secrets.enc":
+		secrets = filepath.Join(cfg.Home, "secrets.enc") + "  (encrypted, machine-bound)"
+	case "secrets":
+		secrets = cfg.SecretsPath + "  (plaintext fallback — run `setup` to encrypt)"
+	default:
+		if cfg.APIKey != "" {
+			secrets = "(from the environment / config file — no secrets file)"
+		} else {
+			secrets = "(none — run `hermes-hands setup`)"
+		}
+	}
 
 	var b strings.Builder
+	fmt.Fprintf(&b, "  home         : %s\n", cfg.Home)
 	fmt.Fprintf(&b, "  config file  : %s\n", cfg.ConfigPath)
-	fmt.Fprintf(&b, "  secrets      : %s\n", cfg.SecretsPath)
+	fmt.Fprintf(&b, "  secrets      : %s\n", secrets)
 	fmt.Fprintf(&b, "  instructions : %s\n", instr)
-	fmt.Fprintf(&b, "  state dir    : %s\n", cfg.StateDir)
+	fmt.Fprintf(&b, "  sessions     : %s\n", filepath.Join(cfg.StateDir, "sessions"))
 	b.WriteString("\n  effective settings — edit the config file by hand; hermes-hands never writes these:\n")
 	for _, r := range [][2]string{
 		{"HERMES_API_URL", none(cfg.APIURL)},
@@ -993,7 +1007,7 @@ func runSetup() int {
 			plaintext = true
 		}
 	}
-	if code := doSetup(bufio.NewReader(os.Stdin), xdgConfigHome()+"/hermes-hands", plaintext); code != 0 {
+	if code := doSetup(bufio.NewReader(os.Stdin), hermesHome(), plaintext); code != 0 {
 		return code
 	}
 	// bash re-execs `"$_self" check`; the Go port calls check directly
@@ -1058,7 +1072,7 @@ func offerBashrc(in *bufio.Reader) {
 	if !strings.EqualFold(promptLine(in, "Add the secrets-sourcing line to ~/.bashrc? [y/N] "), "y") {
 		return
 	}
-	line := `[ -f "$HOME/.config/hermes-hands/secrets" ] && . "$HOME/.config/hermes-hands/secrets"`
+	line := `hh_secrets="${HERMES_HANDS_HOME:-$HOME/hermes-hands}/secrets"; [ -f "$hh_secrets" ] && . "$hh_secrets"`
 	f, err := os.OpenFile(rc, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
@@ -1072,11 +1086,13 @@ func offerBashrc(in *bufio.Reader) {
 	fmt.Println("added.")
 }
 
-func xdgConfigHome() string {
-	if v := os.Getenv("XDG_CONFIG_HOME"); v != "" {
+// hermesHome mirrors config.hermesHome for the setup path: the single
+// self-contained data directory (HERMES_HANDS_HOME, else $HOME/hermes-hands).
+func hermesHome() string {
+	if v := os.Getenv("HERMES_HANDS_HOME"); v != "" {
 		return v
 	}
-	return os.Getenv("HOME") + "/.config"
+	return os.Getenv("HOME") + "/hermes-hands"
 }
 
 func promptLine(in *bufio.Reader, msg string) string {

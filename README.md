@@ -48,10 +48,10 @@ verify them, or build from source (below). Re-run the same `curl … | sh` any t
 to update; it prefers a released platform binary and only builds from source (Go
 required) when none is available.
 
-`setup` writes `~/.config/hermes-hands/{config,secrets}` (secrets `chmod 600`)
-and offers to source them from `~/.bashrc`. The key is your gateway's
-`API_SERVER_KEY`; the URL must be `https://…`. `hermes-hands --version` prints the
-version.
+`setup` writes into one self-contained directory, `~/hermes-hands/`
+(`$HERMES_HANDS_HOME` overrides): `config` + the machine-bound secrets store
+(`secrets.enc` + `keyseed`, `0600`). The key is your gateway's `API_SERVER_KEY`;
+the URL must be `https://…`. `hermes-hands --version` prints the version.
 
 ## Use
 
@@ -113,9 +113,10 @@ CLI adopts it. If the server ever rejects the id, the CLI retries fresh (keeping
 the headers) and falls back to a local transcript recap for that turn.
 
 The `/v1` API has no endpoint to *list* sessions, so a thin local index lives in
-`$XDG_STATE_HOME/hermes-hands/sessions/` purely to make a bare run (resume this
-repo's latest), `--session <id>`, and `sessions` work offline. Titles are also
-mirrored into Hermes via a best-effort `PATCH /api/sessions/{id}`.
+`~/hermes-hands/sessions/` (`$HERMES_HANDS_STATE` overrides) purely to make a
+bare run (resume this repo's latest), `--session <id>`, and `sessions` work
+offline. Titles are also mirrored into Hermes via a best-effort
+`PATCH /api/sessions/{id}`.
 
 `/session` (in-REPL) and `--session-list` show per-session **turns**, the last
 run's **tokens** (cumulative billing `usage`), and **splits** — the number of
@@ -171,10 +172,14 @@ Persist a session across editor restarts with `hermes-hands sessions new` (mint
 
 ## Config
 
-`~/.config/hermes-hands/config` — `KEY=value` / `export KEY=value`, values
-optionally `"…"`, `'…'` or `$'…'`-quoted. Anything else on a line is ignored (the
-old bash version `source`d the file; the Go port deliberately parses only
-assignments).
+Everything lives in one directory, `~/hermes-hands/` — set `HERMES_HANDS_HOME`
+to move it. Inside: `config`, `secrets.enc` + `keyseed`, `sessions/`, and an
+optional `instructions.md`. Each path also has its own override
+(`HERMES_HANDS_CONFIG` / `_SECRETS` / `_STATE` / `_INSTRUCTIONS`).
+
+`~/hermes-hands/config` — `KEY=value` / `export KEY=value`, values optionally
+`"…"`, `'…'` or `$'…'`-quoted. Anything else on a line is ignored (the old bash
+version `source`d the file; the Go port deliberately parses only assignments).
 
 **Secrets.** The URL + key are resolved in this order: the `HERMES_API_URL` /
 `HERMES_API_KEY` environment variables always win; then, only while one is still
@@ -186,14 +191,16 @@ be decrypted here (wrong machine, tampered, missing `keyseed`) the CLI says so
 and exits — re-run `hermes-hands setup`. This is **at-rest protection only**: it
 does not stop a program running as you (or an approved `shell`) from reading the
 key — the approval gate + denylist are the real boundary. `setup --plaintext`
-keeps the old 0600 `secrets` file (`export HERMES_API_URL=…` / `…KEY=…`) plus the
-`~/.bashrc` offer, for people who inject via env or a secrets manager; that file
-is the fallback when no `secrets.enc` exists. See [`docs/secrets.md`](docs/secrets.md).
+keeps a 0600 `~/hermes-hands/secrets` file (`export HERMES_API_URL=…` /
+`…KEY=…`) plus the `~/.bashrc` offer, for people who inject via env or a secrets
+manager; that file is the fallback when no `secrets.enc` exists. `/config` shows
+which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 
 | key | default | meaning |
 |---|---|---|
+| `HERMES_HANDS_HOME` | `~/hermes-hands` | the one directory holding config, secrets, sessions |
 | `HERMES_API_URL` | — | gateway base, `https://…` |
-| `HERMES_API_KEY` | — | `API_SERVER_KEY` (put this in `secrets`, `chmod 600`) |
+| `HERMES_API_KEY` | — | `API_SERVER_KEY` (goes in the machine-bound `secrets.enc`) |
 | `HERMES_API_PROFILE` | — | route to `/p/<profile>/` (needs that profile's own key) |
 | `HERMES_HANDS_APPROVE` | `ask` | `ask` \| `auto` \| `never` |
 | `HERMES_HANDS_STREAM` | `auto` | SSE answer streaming: `auto` (when advertised) \| `on` \| `off` |
@@ -206,12 +213,12 @@ is the fallback when no `secrets.enc` exists. See [`docs/secrets.md`](docs/secre
 | `HERMES_API_*` | — | `CONNECT_TIMEOUT` 5, `MAX_TIME` 30, `POLL_INTERVAL` 2, `RETRIES` 3, `RUN_TIMEOUT` 600 |
 
 `/config` (alias `/hh-settings`) in-session prints these paths and effective
-values; it never writes anything — edit `~/.config/hermes-hands/config` by hand.
+values; it never writes anything — edit `~/hermes-hands/config` by hand.
 
 The per-run `instructions` block sent to Hermes is baked into the binary (source:
-`share/instructions.md`). Drop a `~/.config/hermes-hands/instructions.md` to
-override it with repo-specific rules. Either way it's scoped to `hermes-hands`
-runs only — your phone and web UI never see it.
+`share/instructions.md`). Drop a `~/hermes-hands/instructions.md` to override it
+with repo-specific rules. Either way it's scoped to `hermes-hands` runs only —
+your phone and web UI never see it.
 
 ## Security model
 
