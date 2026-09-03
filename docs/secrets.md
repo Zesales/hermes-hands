@@ -14,7 +14,7 @@ your uid — including an approved `shell` command — reading the key. The
 approval gate + denylist remain the security boundary. No passphrase is asked
 for, on purpose.
 
-## Files (`$XDG_CONFIG_HOME/hermes-hands/`, both `0600`)
+## Files (`$HERMES_HANDS_HOME` — default `~/hermes-hands/`, both `0600`)
 
 | file | contents |
 |---|---|
@@ -37,7 +37,8 @@ from exactly that list: `["keyseed","machine-id","uid"]`, or
 ## Runtime load order (`internal/config.Load`)
 
 1. env `HERMES_API_URL` / `HERMES_API_KEY` — win (unchanged).
-2. `config` file — always applied (non-secret knobs; unchanged).
+2. `config` file (`$HERMES_HANDS_HOME/config`) — always applied (non-secret
+   knobs; unchanged).
 3. only if a URL or key is still empty:
    1. `secrets.enc` present → it is authoritative for the fallback. Read
       `keyseed`; a missing `keyseed` or any decrypt/auth failure →
@@ -57,11 +58,13 @@ paths); `Load` and the decrypt path emit nothing but the loose-perm warning.
 
 ## `setup`
 
-- default: prompt URL + key (key hidden), write `config` + `secrets.enc` +
-  `keyseed`. Nothing added to the shell env, no `~/.bashrc` offer.
+- default: prompt URL + key (key hidden), write `$HERMES_HANDS_HOME/{config,
+  secrets.enc, keyseed}`. Nothing added to the shell env, no `~/.bashrc` offer.
 - `hermes-hands setup --plaintext`: the pre-M10 behaviour — 0600 `secrets`
   file + the `~/.bashrc` source-line offer, no `.enc` / `keyseed`.
 - either way, `setup` then runs `check` as before.
+- `/config` (in-REPL) reports which store actually supplied the URL/key
+  (`secrets.enc` / plaintext `secrets` / environment).
 
 ## Tests (`internal/config/secrets_test.go`, `main_test.go`)
 
