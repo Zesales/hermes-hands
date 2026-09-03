@@ -478,38 +478,6 @@ func (c *Client) Fork(ctx context.Context, hermesSessionID string) (string, erro
 	return id, nil
 }
 
-// Skill is one entry of GET /v1/skills.
-type Skill struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Category    string `json:"category"`
-}
-
-// Skills lists the brain's skills (GET /v1/skills -> {"object":"list","data":[...]}).
-func (c *Client) Skills(ctx context.Context) ([]Skill, error) {
-	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	code, body, err := c.do(tctx, http.MethodGet, c.base()+"/v1/skills",
-		nil, map[string]string{"Accept": "application/json"})
-	if err != nil {
-		return nil, err
-	}
-	if !is2xx(code) {
-		return nil, fmt.Errorf("GET /v1/skills -> HTTP %s", httpCode(code))
-	}
-	var arr []Skill
-	if json.Unmarshal(body, &arr) == nil && len(arr) > 0 {
-		return arr, nil
-	}
-	var wrap struct {
-		Data []Skill `json:"data"`
-	}
-	if json.Unmarshal(body, &wrap) != nil {
-		return nil, fmt.Errorf("unparseable skills list")
-	}
-	return wrap.Data, nil
-}
-
 // parseCaps reads the feature map out of a /v1/capabilities body.
 func parseCaps(body []byte) Caps {
 	var top struct {
