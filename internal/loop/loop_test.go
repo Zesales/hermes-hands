@@ -354,10 +354,12 @@ func TestRunFramesFirstMessage(t *testing.T) {
 	}
 	got := sa.msgs[0]
 	for _, want := range []string{
-		"you are Hermes, reached remotely", "persistent bash shell",
+		"You are Hermes, driving a worker", "persistent bash shell",
 		"cwd: /home/me/proj", "git branch: main",
-		`{"calls":[{"tool","args"}],"final":null}`,
-		"Do NOT use your own terminal/read_file/",
+		`"final":null}`,
+		"what can you do", // vague prompts are about the project too
+		"throwaway /root container",
+		"tool_search/skill_view/cronjob describe you",
 		"operator: was hälst du von der readme ?",
 	} {
 		if !strings.Contains(got, want) {
