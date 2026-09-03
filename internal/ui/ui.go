@@ -1,6 +1,6 @@
-// Package ui ports lib/ui.sh plus the REPL banner/help strings from
-// bin/hermes-hands. Colour only on a tty (and not NO_COLOR / TERM=dumb); every
-// line goes to the writer it is handed (stderr in the REPL). No alt-screen.
+// Package ui is the framed conversation output plus the REPL banner / help
+// strings. Colour only on a tty (and not NO_COLOR / TERM=dumb); every line
+// goes to the writer it is handed (stderr in the REPL). No alt-screen.
 package ui
 
 import (
@@ -31,8 +31,8 @@ type UI struct {
 	spinning bool
 }
 
-// New builds a UI writing to stderr, matching lib/ui.sh's colour gate:
-// stderr is a tty, NO_COLOR is empty, and TERM (default "dumb") is not "dumb".
+// New builds a UI writing to stderr. Colour is on when stderr is a tty,
+// NO_COLOR is empty, and TERM (default "dumb") is not "dumb".
 func New(stderr *os.File) *UI {
 	return newUI(stderr, colorEnabled(stderr), ttyio.IsTerminal(stderr))
 }
@@ -41,8 +41,8 @@ func colorEnabled(stderr *os.File) bool {
 	return ttyio.IsTerminal(stderr) && colorEnvOK()
 }
 
-// colorEnvOK is the environment half of lib/ui.sh's colour gate: NO_COLOR empty
-// and TERM (default "dumb") not "dumb".
+// colorEnvOK is the environment half of the colour gate: NO_COLOR empty and
+// TERM (default "dumb") not "dumb".
 func colorEnvOK() bool {
 	return os.Getenv("NO_COLOR") == "" && envOr("TERM", "dumb") != "dumb"
 }
@@ -183,9 +183,10 @@ func (u *UI) Call(tool, preview string, exit int) {
 	})
 }
 
-// Answer ports ui_answer: a bold green "hermes" label, then the answer rendered
-// through glow / bat (only on a tty) or fmt if present, else raw — every line
-// indented 3.
+// Answer prints a bold green "hermes" label, then the answer indented 3. On a
+// tty it renders the markdown through `glow` or `bat` when either is installed;
+// otherwise the text is left exactly as Hermes sent it (raw markdown reads fine
+// in a terminal, and `fmt` mangled code blocks / lists so it was dropped).
 func (u *UI) Answer(text string) {
 	w := strconv.Itoa(u.cols() - 3)
 	var rendered string
@@ -194,8 +195,6 @@ func (u *UI) Answer(text string) {
 		rendered = pipe("glow", []string{"-w", w, "-"}, text+"\n")
 	case u.tty && have("bat"):
 		rendered = pipe("bat", []string{"-pp", "-l", "md", "--color=always"}, text+"\n")
-	case have("fmt"):
-		rendered = pipe("fmt", []string{"-s", "-w", w}, text+"\n")
 	default:
 		rendered = text + "\n"
 	}

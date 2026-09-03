@@ -4,8 +4,9 @@
 // read_file / write_file / edit_file so Hermes can see and act on the repo you
 // are standing in. Outbound only: nothing listens on your machine.
 //
-// This is the Go port of the original bash bundle. The wire contract and every
-// user-facing string are kept byte-identical; see docs/go-port-plan.md.
+// The tool-call envelope Hermes replies with is the same shape split-runtime
+// (NousResearch/hermes-agent#63966) expects, so the local dispatcher does not
+// change when that lands — only the transport.
 package main
 
 import (
@@ -149,8 +150,7 @@ func parseArgs(args []string) parsed {
 func main() {
 	p := parseArgs(os.Args[1:])
 	if p.yolo {
-		// Exported before config.Load so nested config parsing sees it too
-		// (plan §2 #17).
+		// Exported before config.Load so nested config parsing sees it too.
 		_ = os.Setenv("HERMES_HANDS_APPROVE", "auto")
 	}
 
@@ -288,7 +288,7 @@ func splitCmd(s string) (cmd, rest string) {
 	return s, ""
 }
 
-// --- version strings (bash hh_version + HH_VERSION) ---
+// --- version strings ---
 
 func bareVersion() string {
 	if version != "0.0.0-dev" {
@@ -321,7 +321,7 @@ func versionString() string {
 	return "hermes-hands " + ver
 }
 
-// --- shared logging (bash hh_warn / hh_log) ---
+// --- shared logging ---
 
 func warnf(f string, a ...any) { fmt.Fprintf(os.Stderr, "hermes-hands: WARNING: "+f+"\n", a...) }
 func logf(f string, a ...any)  { fmt.Fprintf(os.Stderr, "hermes-hands: "+f+"\n", a...) }
@@ -401,7 +401,7 @@ func newApp() (*app, error) {
 	return &app{cfg, repoRoot, u, client, store, sh, disp, lp}, nil
 }
 
-// resolveInstructions ports the hh_api_ask instructions ladder:
+// resolveInstructions is the instructions ladder:
 // $HERMES_HANDS_INSTRUCTIONS | ~/hermes-hands/instructions.md (first readable
 // & non-empty) else the embedded share/instructions.md.
 func resolveInstructions(path string) string {
@@ -993,7 +993,7 @@ func runSessionNew() int {
 	return 0
 }
 
-// --- setup (bash hh_setup) ---
+// --- setup ---
 
 const setupConfigBody = "# hermes-hands config  —  edit by hand; `/config` shows what is in effect\n" +
 	"# HERMES_API_PROFILE=coder             # optional /p/<profile>/ prefix\n" +
@@ -1012,8 +1012,7 @@ func runSetup() int {
 	if code := doSetup(bufio.NewReader(os.Stdin), hermesHome(), plaintext); code != 0 {
 		return code
 	}
-	// bash re-execs `"$_self" check`; the Go port calls check directly
-	// (plan §2 #21 — $_self is unset in a released bundle).
+	// setup then runs check directly.
 	_ = runCheck()
 	return 0
 }

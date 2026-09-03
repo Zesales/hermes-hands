@@ -1,5 +1,5 @@
-// Package prompt ports the approval gate lib/util.sh:hh_confirm. Three answers:
-// Approve, Deny, AbortTurn (bash return codes 0 / 1 / 2).
+// Package prompt is the approval gate for shell commands / file writes. Three
+// answers: Approve, Deny, AbortTurn.
 package prompt
 
 import (
