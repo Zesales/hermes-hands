@@ -76,7 +76,7 @@ than a per-call one-shot.
 
 REPL commands: `/help` `/new` `/session` (this session's detail — local + server
 numbers) `/session <id>` (switch) `/sessions` `/fork` (branch on the server)
-`/skills` `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits; `Ctrl-C` at
+`/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits; `Ctrl-C` at
 the prompt just hints, during a turn it cancels the turn locally *and* stops the
 run on Hermes). `/setup` configures without leaving the session and the REPL
 starts even when unconfigured. When the gateway supports SSE the answer text
