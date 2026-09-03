@@ -163,10 +163,10 @@ One request object per line on **stdin**; one response object per line on
 {"id":2,"type":"new"}                                   // start a fresh session, becomes current
 {"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
 {"id":4,"type":"check"}
-{"id":5,"type":"compact","text":"auth flow"}              // optional focus; asks Hermes to compact now
+{"id":5,"type":"compact","text":"auth flow"}              // no-op on this gateway (no REST compaction endpoint)
 
 // responses
-{"type":"ready","session":"hh_…","cwd":"/repo","version":"0.3.0","approvals":"off"}
+{"type":"ready","session":"hh_…","cwd":"/repo","version":"X.Y.Z","approvals":"off"}
 {"type":"tool","id":1,"tool":"shell","preview":"npm test","exit":0}
 {"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…"}
 {"type":"session","id":2,"session":"hh_…","hermes_session":"…"}
@@ -265,9 +265,6 @@ your phone and web UI never see it.
   `instructions.md`.
 - The delegation transcript accumulates in the Hermes session. Long sessions lean
   on Hermes' compaction; start a `/new` session for a new task.
-- No streaming of the final answer yet (the loop polls run status). The transport
-  is isolated behind one client so an SSE reader drops in when split-runtime
-  lands.
 - `shell` is POSIX-only; on Windows use WSL.
 
 ## Development

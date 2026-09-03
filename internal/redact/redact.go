@@ -1,8 +1,7 @@
 // Package redact removes credential-shaped substrings from tool output before
-// it is sent back to Hermes. It is a straight port of lib/util.sh:hh_scrub:
-// seven `sed -E` expressions, GNU flags `Ig` on the first three, applied in
-// source order (the output of each feeds the next). Guillemets in the
-// replacements are U+00AB / U+00BB, byte-for-byte as in the bash version.
+// it is sent back to Hermes: seven regexps (case-insensitive on the first
+// three), applied in order — the output of each feeds the next. Guillemets in
+// the replacements are U+00AB / U+00BB.
 package redact
 
 import "regexp"

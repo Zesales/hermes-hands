@@ -1,5 +1,5 @@
-// Package ttyio holds the two terminal primitives the bash version reached for
-// with `[[ -t FD ]]` and `</dev/tty` / `>/dev/tty`. Pure stdlib, no x/term.
+// Package ttyio holds two small terminal primitives: an is-a-tty check and
+// opening the controlling /dev/tty. Pure stdlib, no x/term.
 package ttyio
 
 import "os"
