@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 — drop `/skills`
+
+Removed the `/skills` command (and `Client.Skills`). It was read-only so no
+boundary issue, but a coding CLI listing the brain's ~100 skills is just noise —
+the brain uses them on its own. `run_steer` (mid-turn steering) was considered
+and left out: it needs async input during a turn, and in practice you either
+Ctrl-C and re-ask or recall + edit the last message (liner history), so the
+payoff is marginal.
+
 ## 0.6.0 — SSE streaming + more API (verified against a live gateway)
 
 The remaining API sweep, checked against a real Hermes (the SSE event shape and
@@ -18,7 +27,6 @@ every response schema below are the live ones, not guesses).
   cache_read_tokens`), model, `parent_session_id`, ended.
 - **`/fork`** — `POST /api/sessions/{id}/fork`: branch this session on the
   server and switch to the branch.
-- **`/skills`** — `GET /v1/skills`: how many skills the brain has, by category.
 - **`/compact` is honest now** — this gateway exposes no REST compaction
   endpoint (`/compress` is an internal chat command); the command says so.
 - Hidden dev inspectors: `hermes-hands _raw <path>` (GET a path, print the

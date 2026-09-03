@@ -181,7 +181,6 @@ func (u *UI) Help(cwd string) {
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
 	io.WriteString(u.w, "    /sessions     list this machine's + hermes-agent's sessions\n")
 	io.WriteString(u.w, "    /fork         branch this session on the server, switch to it\n")
-	io.WriteString(u.w, "    /skills       what skills the brain has\n")
 	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")
 	io.WriteString(u.w, "    /setup        (re)configure the gateway URL + key\n")
 	io.WriteString(u.w, "    /check        re-test the gateway connection\n")
