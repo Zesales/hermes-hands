@@ -1,7 +1,7 @@
-// Package loop ports lib/loop.sh: one user turn = N Hermes rounds. Send the
-// message; if Hermes replies with a directive envelope run the calls locally,
-// feed a {results:[...]} object back, repeat; stop on {final:"..."} or plain
-// prose. Envelope recovery (fenced / prose / botched) matches the bash ladder.
+// Package loop drives one user turn = N Hermes rounds. Send the message; if
+// Hermes replies with a directive envelope run the calls locally, feed a
+// {results:[...]} object back, repeat; stop on {final:"..."} or plain prose.
+// Envelope recovery handles fenced / prosey / botched JSON.
 package loop
 
 import (

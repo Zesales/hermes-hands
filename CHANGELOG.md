@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.9.4 — continuous releases; pre-public cleanup
 
-Tooling + docs only — no `VERSION` bump, so no release.
+**Release on every merge to `main`.** `.github/workflows/release.yml` now
+triggers on any push to `main` (i.e. a merged PR), builds all targets via
+`./build.sh release`, and publishes **`v<VERSION>-<sha>`** — unique per commit,
+so it never collides. GitHub's "latest" follows the newest, so `install.sh`
+with no args always gets it; `install.sh --version <VERSION>-<sha>` pins one.
+(The old `paths: ['VERSION']` filter meant most merges built nothing.)
 
 - **`make dev [ARGS=…]`** — run straight from source (`go run`) as a
   self-contained dev instance out of `./.dev/` (gitignored): its own
@@ -10,13 +15,17 @@ Tooling + docs only — no `VERSION` bump, so no release.
   `~/hermes-hands/`. First run copies the machine-bound key over from there
   (it's bound to machine-id + uid, not its path); `make dev-setup` instead
   prompts for a separate key. The prompt is read **live** from
-  `share/instructions.md` — edit, `make dev` again, no rebuild. `make clean`
-  wipes `./.dev/`.
-- Makefile reorganised: `make` (no target) lists everything grouped
-  **Develop / Build & install / Release**.
-- README **Install** section reworked — leads with the fast `curl … | sh`
-  (always latest, SHA-256 verified, no clone / Go / build), with a small table
-  for `--version` / `--source` / `--local`.
+  `share/instructions.md` — edit, `make dev` again, no rebuild. `make dev-setup`,
+  grouped `make help`, `make clean` wipes `./.dev/`.
+- README **Install** leads with the fast `curl … | sh` (always latest, SHA-256
+  verified, no clone / Go / build) + a table for `--version` / `--source` /
+  `--local`.
+- `ui.Answer` no longer routes through `fmt -s` when neither `glow` nor `bat`
+  is installed — `fmt` mangled code blocks and lists; the raw markdown reads
+  fine in a terminal.
+- Removed the stale `docs/go-port-{plan,parity}.md` (the bash→Go port is done)
+  and the orphaned `project.env`. Package doc comments no longer reference the
+  deleted bash sources.
 
 ## 0.9.3 — drop the stale repo `config/`; rename `build.sh` verb
 

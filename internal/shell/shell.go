@@ -1,8 +1,7 @@
-// Package shell ports the persistent-shell half of lib/dispatch.sh: one
-// `bash --login` kept alive over pipes so cd, exported vars, and ~/.bashrc
-// aliases/functions survive between calls in a turn. Commands are framed with a
-// random mark line that also carries the exit code; a per-read (idle) timeout
-// matches bash `read -t`, and a timeout or EOF recycles the shell.
+// Package shell is the persistent shell: one `bash --login` kept alive over
+// pipes so cd, exported vars, and ~/.bashrc aliases/functions survive between
+// calls in a turn. Commands are framed with a random mark line that also
+// carries the exit code; a per-read (idle) timeout or EOF recycles the shell.
 package shell
 
 import (

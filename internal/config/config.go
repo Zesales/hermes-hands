@@ -1,6 +1,6 @@
-// Package config ports the configuration half of lib/util.sh: the two-tier
-// config/secrets file load (hh_load_config), the placeholder sniffer
-// (hh_looks_unset) and the transport-security check (hh_require_https).
+// Package config resolves runtime configuration: the config-file / secrets-store
+// load, the placeholder sniffer (LooksUnset) and the transport-security check
+// (RequireHTTPS). It dials nothing.
 package config
 
 import (

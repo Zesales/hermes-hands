@@ -18,7 +18,7 @@ type runReq struct {
 	SessionID    string `json:"session_id,omitempty"`
 }
 
-// Ask ports hh_api_ask: submit a run, ride the POST retry / one-shot
+// Ask runs one turn: submit a run, ride the POST retry / one-shot
 // session-id-drop ladder, then poll to a terminal status. sess / skey are the
 // record's hermes_session_id / hermes_session_key ("" when none). On success
 // the caller adopts AskResult.SessionID + bumps the local index.
