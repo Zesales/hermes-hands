@@ -501,6 +501,7 @@ func runREPL(smode string) int {
 		if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
 			ta.Out = os.Stderr
 			ta.AskLine = func(q string) (string, error) { return ln.Prompt(q) }
+			ta.Pause = a.ui.Hold
 		}
 		a.client.OnRunStart = func(id string) { turnMu.Lock(); runID = id; turnMu.Unlock() }
 		a.client.OnDelta = fs.feed // extracts + previews just the `final` text

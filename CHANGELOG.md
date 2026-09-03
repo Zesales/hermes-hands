@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4 — spinner vs. the approval prompt
+
+The animated line from 0.6.3 was repainting over the `[y]es [n]o [a]ll [q]uit`
+prompt, so a `write_file` / `shell` approval looked frozen. The approval gate
+now freezes the spinner (`UI.Hold` via a new `TTYApprover.Pause` hook) while the
+prompt is up and un-freezes it after you answer.
+
 ## 0.6.3 — animated "working" line
 
 `⋯ working` is now an animated line (`.` → `..` → `...` pulsing, `· Ctrl+C to
