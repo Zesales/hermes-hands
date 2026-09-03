@@ -51,12 +51,13 @@ const usageText = `hermes-hands - terminal chat with a central Hermes brain over
 Hermes holds the plan/memory; it drives a persistent local shell plus
 read_file / write_file / edit_file to see and act on the repo you're in.
 
-A session is one task. Continue it, or start a new one — there is no one-shot.
+A session is one task. There is no one-shot, and no auto-resume: a bare run
+starts a fresh session — continue an old one only when you ask.
 
-  hermes-hands                    continue this repo's latest session (main use)
-  hermes-hands --session          same, explicitly
+  hermes-hands                    start a fresh session here (main use)
+  hermes-hands --session          continue this repo's latest session
   hermes-hands --session <id>     open a specific session  (id from --session-list)
-  hermes-hands --new              start a fresh session (new task)
+  hermes-hands --new              start a fresh session  (same as a bare run)
   hermes-hands --rpc              JSON-lines session server for an editor/plugin
 
   hermes-hands --session-list     list sessions with id / turns / tokens
@@ -72,7 +73,7 @@ A session is one task. Continue it, or start a new one — there is no one-shot.
 type parsed struct {
 	action string // "" | help | version | check | sessions | sessionnew | setup
 	errMsg string // non-empty => fatal (unknown option / stray argument)
-	smode  string // "" (== continue) | new | continue | <id>
+	smode  string // "" (== new) | new | continue | <id>
 	rpc    bool
 	yolo   bool
 }
@@ -181,14 +182,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Every mode works ON a session: a bare run (or --session with no id)
-	// continues this repo's latest, --new starts one, --session <id> opens a
-	// specific one, --rpc lets a caller hold one. No throwaway session per
-	// invocation, so the central Hermes isn't fragmented.
+	// Every mode works ON a session. A bare REPL run starts a fresh one (a
+	// session is one task — no implicit resume); `--session` with no id
+	// continues this repo's latest, `--session <id>` opens a specific one.
+	// `--rpc` still defaults to continue: an editor/plugin holding the process
+	// wants the same session across restarts, and drives new/use over the pipe.
 	if p.rpc {
 		os.Exit(runRPC(orElse(p.smode, "continue")))
 	}
-	os.Exit(runREPL(orElse(p.smode, "continue")))
+	os.Exit(runREPL(orElse(p.smode, "new")))
 }
 
 func orElse(s, def string) string {
