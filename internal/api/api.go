@@ -335,6 +335,31 @@ func (c *Client) StopRun(ctx context.Context, runID string) {
 	_, _, _ = c.do(tctx, http.MethodPost, c.base()+"/v1/runs/"+runID+"/stop", nil, nil)
 }
 
+// RunState returns a run's current status string from GET /v1/runs/{id} ("" if
+// the field is absent). The REPL's silence watchdog uses it as an out-of-band
+// "is hermes-agent still working?" probe between token deltas. A transport or
+// non-2xx error is returned as-is so the caller can treat "couldn't ask" as
+// "not confirmed alive" rather than assuming the run is fine.
+func (c *Client) RunState(ctx context.Context, runID string) (string, error) {
+	if runID == "" {
+		return "", fmt.Errorf("no run id")
+	}
+	if c.BaseURL == "" || c.Key == "" {
+		return "", fmt.Errorf("client not configured")
+	}
+	tctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodGet, c.base()+"/v1/runs/"+runID,
+		nil, map[string]string{"Accept": "application/json"})
+	if err != nil {
+		return "", err
+	}
+	if !is2xx(code) {
+		return "", fmt.Errorf("GET /v1/runs/%s -> HTTP %s", runID, httpCode(code))
+	}
+	return jsonStringOr(body, "status", ""), nil
+}
+
 // SessionInfo reads a server-side session record (GET /api/sessions/{id}).
 // The response schema is not published, so parsing is lenient; a non-2xx or an
 // unparseable body returns an error and the caller falls back to the local

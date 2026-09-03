@@ -18,7 +18,8 @@ func clearEnv(t *testing.T) {
 		"HERMES_HANDS_ALLOW_HTTP", "HERMES_HANDS_VERBOSE",
 		"HERMES_API_CONNECT_TIMEOUT", "HERMES_API_MAX_TIME", "HERMES_API_POLL_INTERVAL",
 		"HERMES_API_RUN_TIMEOUT", "HERMES_API_RETRIES", "HERMES_HANDS_MAX_ROUNDS",
-		"HERMES_HANDS_RUN_TIMEOUT", "HERMES_HANDS_MAX_OUTPUT",
+		"HERMES_HANDS_RUN_TIMEOUT", "HERMES_HANDS_MAX_OUTPUT", "HERMES_HANDS_STREAM",
+		"HERMES_HANDS_RESPONSE_TIMEOUT", "HERMES_HANDS_WATCHDOG_INTERVAL",
 		"XDG_CONFIG_HOME", "XDG_STATE_HOME",
 	} {
 		t.Setenv(k, "")
@@ -44,6 +45,34 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.AllowHTTP || c.Verbose || c.Deny != nil {
 		t.Errorf("bool/slice defaults wrong: %+v", c)
+	}
+	if c.ResponseTimeout != 600*time.Second || c.WatchdogInterval != 200*time.Second {
+		t.Errorf("watchdog defaults wrong: ResponseTimeout=%v WatchdogInterval=%v", c.ResponseTimeout, c.WatchdogInterval)
+	}
+}
+
+func TestWatchdogKnobsFromConfigFile(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	mustWrite(t, filepath.Join(dir, "hermes-hands", "config"),
+		"HERMES_HANDS_RESPONSE_TIMEOUT=120\nHERMES_HANDS_WATCHDOG_INTERVAL=30\n")
+	t.Setenv("HERMES_API_URL", "https://x")
+	t.Setenv("HERMES_API_KEY", "k")
+
+	c, _ := Load()
+	if c.ResponseTimeout != 120*time.Second {
+		t.Errorf("ResponseTimeout = %v, want 120s (config file wins)", c.ResponseTimeout)
+	}
+	if c.WatchdogInterval != 30*time.Second {
+		t.Errorf("WatchdogInterval = %v, want 30s", c.WatchdogInterval)
+	}
+
+	// 0 disables the ceiling.
+	mustWrite(t, filepath.Join(dir, "hermes-hands", "config"), "HERMES_HANDS_RESPONSE_TIMEOUT=0\n")
+	c, _ = Load()
+	if c.ResponseTimeout != 0 {
+		t.Errorf("ResponseTimeout = %v, want 0 (disabled)", c.ResponseTimeout)
 	}
 }
 
