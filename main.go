@@ -642,26 +642,6 @@ func runREPL(smode string) int {
 			rec = nr
 			fmt.Fprintf(os.Stderr, "  forked → hermes-agent session %s (local %s)\n\n", newID, rec.ID)
 			continue
-		case "/skills":
-			sk, e := a.client.Skills(context.Background())
-			if e != nil {
-				fmt.Fprintf(os.Stderr, "  %v\n\n", e)
-				continue
-			}
-			byCat := map[string]int{}
-			for _, s := range sk {
-				c := s.Category
-				if c == "" {
-					c = "(uncategorised)"
-				}
-				byCat[c]++
-			}
-			fmt.Fprintf(os.Stderr, "  %d skills on the brain, across %d categories:\n", len(sk), len(byCat))
-			for c, n := range byCat {
-				fmt.Fprintf(os.Stderr, "    %-28s %d\n", c, n)
-			}
-			fmt.Fprintln(os.Stderr)
-			continue
 		case "/new":
 			nr, e := a.store.Resolve("new", a.repoRoot)
 			if e != nil {
