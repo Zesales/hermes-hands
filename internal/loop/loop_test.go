@@ -236,7 +236,8 @@ func TestRunRecapLatchesAfterUnthreadedRound(t *testing.T) {
 	if !strings.HasPrefix(s.msgs[2], "[conversation so far this turn]\n") {
 		t.Errorf("round 3 msg should be recapped: %q", s.msgs[2])
 	}
-	if !strings.Contains(s.msgs[2], "[latest tool results]\n{\"results\":") {
+	if !strings.Contains(s.msgs[2], "[latest tool results]\n[worker results") ||
+		!strings.Contains(s.msgs[2], `{"results":`) {
 		t.Errorf("recap wrapper missing latest-results section: %q", s.msgs[2])
 	}
 }
@@ -259,7 +260,14 @@ func TestRunResultsShape(t *testing.T) {
 			Context  *string         `json:"context"`
 		} `json:"results"`
 	}
-	if err := json.Unmarshal([]byte(s.msgs[1]), &payload); err != nil {
+	m1 := s.msgs[1]
+	if !strings.HasPrefix(m1, "[worker results") {
+		t.Errorf("round 2 msg should lead with the worker-results reminder: %q", m1)
+	}
+	if i := strings.IndexByte(m1, '{'); i >= 0 {
+		m1 = m1[i:]
+	}
+	if err := json.Unmarshal([]byte(m1), &payload); err != nil {
 		t.Fatalf("round 2 msg is not a results payload: %v (%q)", err, s.msgs[1])
 	}
 	if len(payload.Results) != 1 {
@@ -346,9 +354,10 @@ func TestRunFramesFirstMessage(t *testing.T) {
 	}
 	got := sa.msgs[0]
 	for _, want := range []string{
-		"remote worker session", "you are NOT local",
+		"you are Hermes, reached remotely", "persistent bash shell",
 		"cwd: /home/me/proj", "git branch: main",
 		`{"calls":[{"tool","args"}],"final":null}`,
+		"Do NOT use your own terminal/read_file/",
 		"operator: was hälst du von der readme ?",
 	} {
 		if !strings.Contains(got, want) {
