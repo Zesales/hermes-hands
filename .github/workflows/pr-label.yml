@@ -1,0 +1,28 @@
+name: pr-label
+
+# Enforces the version bump for release.yml: every PR must carry exactly one of
+#   bump:patch  bump:minor  bump:major   -> that bump, then a release on merge
+#   bump:none                            -> no version change, no release
+# Make the `bump-label` job a required status check so a PR can't merge without
+# a decision. Re-runs when labels change (labeled / unlabeled).
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+jobs:
+  bump-label:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: exactly one bump label
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          n=0; found=
+          for l in patch minor major none; do
+            case " $LABELS " in *" bump:$l "*) n=$((n + 1)); found="$found bump:$l" ;; esac
+          done
+          if [ "$n" != 1 ]; then
+            echo "::error::this PR needs exactly one of: bump:patch  bump:minor  bump:major  bump:none  (found:$found)"
+            exit 1
+          fi
+          echo "ok ->$found"
