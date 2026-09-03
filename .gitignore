@@ -1,5 +1,6 @@
 *.tmp
 /dist/
 /local/
+/.dev/          # `make dev` checkout-local session state
 # `go build ./...` drops the module binary here; the real build target is dist/
 /hermes-hands
