@@ -54,9 +54,11 @@ mkdir -p "$BIN"
 
 build_and_install() { # $1 = directory holding the go module
   have go || die "'go' is required for a source build"
-  ( cd "$1" && CGO_ENABLED=0 go build -trimpath \
-      -ldflags "-s -w -X main.version=$(tr -d '[:space:]' < VERSION) -X main.commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
-      -o "$TARGET" . )
+  ( cd "$1"
+    v=$({ git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --dirty 2>/dev/null || echo 0.0.0-dev; } | sed 's/^v//')
+    sha=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+    CGO_ENABLED=0 go build -trimpath \
+      -ldflags "-s -w -X main.version=$v -X main.commit=$sha" -o "$TARGET" . )
 }
 
 if [ "$mode" = local ]; then

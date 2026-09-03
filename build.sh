@@ -16,7 +16,9 @@ case "${1:-host}" in
     make build
     ;;
   release)
-    make clean release
+    # honour VERSION from the env (release.yml sets it to the tag it is cutting);
+    # otherwise the Makefile derives it from `git describe`.
+    make clean release ${VERSION:+VERSION="$VERSION"}
     ( cd dist && sha256 hermes-hands_* > SHA256SUMS )
     echo
     echo "dist/:"

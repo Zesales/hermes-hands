@@ -1,11 +1,19 @@
 # Dev helpers for the Go build. End users install via install.sh (see README);
 # `make` is only for working ON hermes-hands.
-VERSION  := $(shell tr -d '[:space:]' < VERSION)
+#
+# There is no VERSION file — git tags are the source of truth. `git describe`
+# (restricted to real vX.Y.Z tags) gives `0.10.0` on a release,
+# `0.10.0-3-gabc123` in between; a checkout with no such tag yet falls back to
+# `0.0.0-dev`. release.yml overrides with the tag it is about to cut:
+#   make VERSION=0.10.0 release
+VERSION  ?= $(shell { git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --dirty 2>/dev/null || echo 0.0.0-dev; } | sed 's/^v//')
 GIT_SHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(GIT_SHA)
 PREFIX   ?= $(HOME)/.local
 BINDIR   ?= $(PREFIX)/bin
-GOOSARCH := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+# Linux + macOS only. On Windows hermes-hands runs inside WSL (a Linux binary):
+# native Windows has no `bash` for the `shell` tool, no /dev/tty, no $HOME.
+GOOSARCH := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 # `make dev` runs a self-contained dev instance out of ./.dev/ (gitignored):
 # its own HERMES_HANDS_HOME, so sessions/config never touch your real
