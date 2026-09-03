@@ -2,6 +2,12 @@
 
 ## 0.9.4 — continuous releases; pre-public cleanup
 
+**A bare `hermes-hands` now starts a fresh session** — no implicit resume of
+this repo's latest (that reverses 0.3.0's `5d657ea`). `--session` with no id
+still continues the latest explicitly; `--session <id>` opens a specific one;
+`--new` is now just the same as a bare run. `--rpc` still defaults to continue
+(an editor holding the process wants session continuity across restarts).
+
 **Release on every merge to `main`.** `.github/workflows/release.yml` now
 triggers on any push to `main` (i.e. a merged PR), builds all targets via
 `./build.sh release`, and publishes **`v<VERSION>-<sha>`** — unique per commit,
