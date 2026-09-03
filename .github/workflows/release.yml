@@ -1,22 +1,42 @@
 name: release
 
-# Every push to `main` — i.e. every merged PR — builds all targets and
-# publishes a GitHub Release  v<VERSION>-<sha>  (unique per commit). GitHub's
-# "latest" follows the newest, so `install.sh` with no args always gets it;
-# `install.sh --version <VERSION>-<sha>` pins one exactly.
+# When a PR is merged into `main` this cuts a release: compute the next
+# version, put an annotated tag vX.Y.Z on the merge commit, build every target,
+# publish. There is NO VERSION file and NOTHING is pushed to the `main` branch
+# — only a tag — so branch protection needs no bypass. No re-test either: the
+# merge gate is test.yml + bump-label on the PR + "require branches up to date".
+#
+# Next version = the highest existing v*.*.* tag (or MIN_VERSION before the
+# first release), bumped by the merged PR's label — exactly one of
+#   bump:patch | bump:minor | bump:major   (bump:none = no release).
+# pr-label.yml makes that a required check; a missing/ambiguous label still
+# fails this job as a backstop. A manual workflow_dispatch picks the level.
 on:
-  push:
-    branches: [main]
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: bump level (pick one — 'choose' fails on purpose)
+        type: choice
+        required: true
+        options: [choose, patch, minor, major]
 
 permissions:
-  contents: write
+  contents: write   # create the tag + the release
 
 concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  # Floor used only until the first v*.*.* tag exists. Then tag history wins and
+  # this is dead. Bump it here only for the very first release's baseline.
+  MIN_VERSION: 0.9.4
+
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-24.04
     env:
       GOFLAGS: -mod=vendor   # deps are vendored; CI never touches the network
@@ -24,44 +44,81 @@ jobs:
       # actions/checkout v4.2.2, pinned by commit
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 0   # full history + tags, for `git tag -l` / describe
       # actions/setup-go v7.0.0, pinned by commit
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.26.7'   # exact, must equal go.mod
           check-latest: false
 
-      - name: Version + tag
-        id: v
+      - name: Decide bump level
+        id: lvl
+        env:
+          EVENT: ${{ github.event_name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+          DISPATCH: ${{ inputs.bump }}
         run: |
-          v=$(tr -d '[:space:]' < VERSION)
-          case "$v" in ''|*[!0-9.]*) echo "::error::VERSION '$v' is not X.Y.Z"; exit 1 ;; esac
-          sha=$(git rev-parse --short=7 HEAD)
-          echo "tag=v$v-$sha" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = workflow_dispatch ]; then
+            level="$DISPATCH"
+            [ "$level" = choose ] && { echo "::error::pick a real bump level (patch | minor | major)"; exit 1; }
+          else
+            level=; n=0
+            for l in patch minor major none; do
+              case " $LABELS " in *" bump:$l "*) n=$((n + 1)); level="$l" ;; esac
+            done
+            [ "$n" = 1 ] || { echo "::error::PR needs exactly one label: bump:patch | bump:minor | bump:major | bump:none  (found $n)"; exit 1; }
+          fi
+          if [ "$level" = none ]; then
+            echo "::notice::bump:none — no release"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "level=$level" >> "$GITHUB_OUTPUT"
 
-      - name: Verify
+      - name: Compute next version + annotated tag
+        id: v
+        if: steps.lvl.outputs.skip != 'true'
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          bad=$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))
-          test -z "$bad" || { echo "gofmt needed on:"; echo "$bad"; exit 1; }
-          go vet ./...
-          go test ./...
+          # strict vX.Y.Z only — ignore any lightweight / describe-style junk tags
+          latest=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1)
+          base=${latest:-$MIN_VERSION}
+          IFS=. read -r a b c <<< "$base"
+          : "${a:=0}" "${b:=0}" "${c:=0}"
+          case "${{ steps.lvl.outputs.level }}" in
+            major) new="$((a + 1)).0.0" ;;
+            minor) new="$a.$((b + 1)).0" ;;
+            *)     new="$a.$b.$((c + 1))" ;;
+          esac
+          if git rev-parse -q --verify "refs/tags/v$new" >/dev/null; then
+            echo "::error::v$new already exists"; exit 1
+          fi
+          ref="${PR:+ (#$PR)}"; [ -z "$PR" ] && ref=" (manual)"
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "tag=v$new" >> "$GITHUB_OUTPUT"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$new" -m "hermes-hands $new$ref${PR_TITLE:+ — $PR_TITLE}"
+          git push origin "v$new"   # a tag, not a branch update
 
       - name: Build
+        if: steps.lvl.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: ./build.sh release
 
       - name: Publish
+        if: steps.lvl.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag='${{ steps.v.outputs.tag }}'
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "::notice::$tag already released — nothing to do"
-            exit 0
-          fi
-          git tag "$tag"
-          git push origin "$tag"
-          gh release create "$tag" \
-            --title "$tag" \
+          # --generate-notes: GitHub's "What's Changed" from the PRs since the
+          # previous tag, plus a full-changelog compare link.
+          gh release create "${{ steps.v.outputs.tag }}" \
+            --title "${{ steps.v.outputs.tag }}" \
             --latest \
-            --notes "Automated build of \`main\` @ $(git rev-parse --short HEAD). Changes: see CHANGELOG.md." \
+            --generate-notes \
             dist/hermes-hands_* dist/SHA256SUMS
