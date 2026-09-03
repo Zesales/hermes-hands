@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0 — correlation `id` on every call
+
+Each entry in `calls` may now carry a short `id` (`c1`, `c2`, …); the hands
+echo it on the matching `results` entry. Same role as OpenAI's `tool_call_id`
+and split-runtime's `tool_call.request` id — with more than one call in a turn,
+Hermes can now map each output to the instruction it asked for instead of
+relying on array position.
+
+- `calls[].id` is **optional**. Hermes sends it (the instructions and the frame
+  now show `{"id":"c1",…}`); if it's missing or a duplicate within the batch,
+  the hands assign a positional `c<N>`. `call_id` is accepted as an alias.
+- `results[].id` is **always present**, echoing the (possibly synthesized) id.
+- Everything else in the wire shape is unchanged (`tool`, `args`, `exit_code`,
+  `output`, `context?`), so a model that ignores `id` still works by position.
+- The per-turn transcript line gained the id: `shell [c1](…) -> exit 0`.
+
 ## 0.8.0 — brain ↔ hands framing; turn timer footer
 
 **The prompt, rebuilt around a task contract.** Earlier passes told the model
