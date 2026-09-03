@@ -95,6 +95,7 @@ func (u *UI) StartWorking() (stop func()) {
 	u.mu.Lock()
 	u.spinning = true
 	u.mu.Unlock()
+	start := time.Now()
 	done := make(chan struct{})
 	go func() {
 		frames := []string{".  ", ".. ", "...", " ..", "  .", "   "}
@@ -105,10 +106,11 @@ func (u *UI) StartWorking() (stop func()) {
 			case <-done:
 				return
 			case <-tk.C:
+				el := int(time.Since(start).Seconds())
 				u.mu.Lock()
 				if u.spinning {
-					fmt.Fprintf(u.w, "\r%s   %s%sworking%s%s  ·  Ctrl+C to cancel%s\x1b[K",
-						u.cDim, u.cAcc, frames[i%len(frames)], u.cR, u.cDim, u.cR)
+					fmt.Fprintf(u.w, "\r%s   %s%sworking%s%s  ·  %ds  ·  Ctrl+C to cancel%s\x1b[K",
+						u.cDim, u.cAcc, frames[i%len(frames)], u.cR, u.cDim, el, u.cR)
 				}
 				u.mu.Unlock()
 			}
@@ -240,6 +242,15 @@ func (u *UI) InterruptedNote() {
 	u.sync(func() { fmt.Fprintf(u.w, "%s— interrupted —%s\n\n", u.cDim, u.cR) })
 }
 
+// TimeoutNote marks a turn the silence watchdog cancelled: hermes-agent went
+// quiet for longer than HERMES_HANDS_RESPONSE_TIMEOUT (limitSec).
+func (u *UI) TimeoutNote(limitSec int) {
+	u.sync(func() {
+		fmt.Fprintf(u.w, "%s— timeout: no reply from hermes-agent in %ds — turn cancelled "+
+			"(raise HERMES_HANDS_RESPONSE_TIMEOUT to wait longer) —%s\n\n", u.cDim, limitSec, u.cR)
+	})
+}
+
 // DimLine writes one dim line (used for HERMES_HANDS_VERBOSE chatter, matching
 // hh_vlog's dim wrapping).
 func (u *UI) DimLine(msg string) {
@@ -272,6 +283,7 @@ func (u *UI) Help(cwd string) {
 	io.WriteString(u.w, "    /fork         branch this session on the server, switch to it\n")
 	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")
 	io.WriteString(u.w, "    /setup        (re)configure the gateway URL + key\n")
+	io.WriteString(u.w, "    /config       config file path + effective settings (read-only; edit by hand)\n")
 	io.WriteString(u.w, "    /check        re-test the gateway connection\n")
 	io.WriteString(u.w, "    /help         show this\n")
 	fmt.Fprintf(u.w, "    /exit         quit  (Ctrl-D too; Ctrl-C cancels the running turn)%s\n", u.cR)

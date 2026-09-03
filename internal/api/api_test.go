@@ -282,6 +282,44 @@ func TestStopRun_FiresPOST(t *testing.T) {
 	}
 }
 
+func TestRunState(t *testing.T) {
+	var status string
+	code := 200
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runs/run_7" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		if code != 200 {
+			w.WriteHeader(code)
+			return
+		}
+		writeTestJSON(w, 200, status)
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+
+	status = `{"status":"running"}`
+	if st, err := c.RunState(context.Background(), "run_7"); err != nil || st != "running" {
+		t.Errorf("RunState running = %q, %v", st, err)
+	}
+	status = `{"status":"completed","output":"hi"}`
+	if st, err := c.RunState(context.Background(), "run_7"); err != nil || st != "completed" {
+		t.Errorf("RunState completed = %q, %v", st, err)
+	}
+	status = `{"output":"hi"}` // no status field
+	if st, err := c.RunState(context.Background(), "run_7"); err != nil || st != "" {
+		t.Errorf("RunState missing = %q, %v (want empty, nil)", st, err)
+	}
+	code = 404
+	if st, err := c.RunState(context.Background(), "run_7"); err == nil || st != "" {
+		t.Errorf("RunState 404 = %q, %v (want error)", st, err)
+	}
+	// empty run id -> error, no request
+	if _, err := c.RunState(context.Background(), ""); err == nil {
+		t.Error("RunState('') should error")
+	}
+}
+
 func TestSessionInfo_LenientParse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/sessions/hh-x" {
