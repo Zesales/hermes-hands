@@ -68,15 +68,15 @@ the URL must be `https://…`. `hermes-hands --version` prints the version.
 
 ## Use
 
-**A session is one task.** You continue it or start a new one — there is no
-one-shot, so the central Hermes never fills up with throwaway sessions. When a
-task is done, consciously `--new` (or `/new`) for the next one.
+**A session is one task.** There is no one-shot and no implicit resume: a bare
+run starts a fresh session. Continue an old one only when you ask (`--session`,
+or `/session <id>` in the REPL).
 
 ```sh
-hermes-hands                       # continue this repo's latest session (main use)
-hermes-hands --session             # same, explicitly
+hermes-hands                       # start a fresh session here (main use)
+hermes-hands --session             # continue this repo's latest session
 hermes-hands --session <id>        # open a specific session  (id from --session-list)
-hermes-hands --new                 # start a fresh session (new task)
+hermes-hands --new                 # start a fresh session  (same as a bare run)
 hermes-hands --rpc                 # JSON-lines session server for an editor/plugin
 
 hermes-hands --session-list        # list sessions: id / turns / tokens / dir / title
