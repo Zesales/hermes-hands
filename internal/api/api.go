@@ -262,6 +262,25 @@ func (c *Client) RawRun(ctx context.Context, input string) (runID, sessionID str
 	return jsonString(resp, "run_id"), jsonString(resp, "session_id"), nil
 }
 
+// RawRunBody POSTs a caller-supplied /v1/runs body verbatim — for probing run
+// parameters. Returns the run + session ids.
+func (c *Client) RawRunBody(ctx context.Context, body []byte) (runID, sessionID string, err error) {
+	if err := c.preflight(); err != nil {
+		return "", "", err
+	}
+	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	code, resp, err := c.do(tctx, http.MethodPost, c.base()+"/v1/runs", body,
+		map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return "", "", err
+	}
+	if !is2xx(code) {
+		return "", "", fmt.Errorf("POST /v1/runs -> HTTP %s: %s", httpCode(code), trunc(stripNL(string(resp)), 400))
+	}
+	return jsonString(resp, "run_id"), jsonString(resp, "session_id"), nil
+}
+
 // RawEvents copies the /v1/runs/{id}/events SSE stream to w verbatim, for
 // inspecting the wire shape. Stops on stream end, ctx, or ~256KB.
 func (c *Client) RawEvents(ctx context.Context, runID string, w io.Writer) error {
