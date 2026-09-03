@@ -56,7 +56,7 @@ jobs:
 
       - name: Build
         if: steps.gate.outputs.go == 'true'
-        run: ./build.sh all
+        run: ./build.sh release
 
       - name: Tag + release
         if: steps.gate.outputs.go == 'true'

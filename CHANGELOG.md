@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.3 — drop the stale repo `config/`; rename `build.sh` verb
+
+- **Removed `config/`** (`config.example` + `secrets.example`) — a bash-era
+  leftover: it pointed at the pre-0.7.0 `~/.config/hermes-hands/` path, was
+  missing the current knobs (`STREAM`, `RESPONSE_TIMEOUT`, `WATCHDOG_INTERVAL`),
+  and described the plaintext secrets file that `setup` no longer writes by
+  default. Nothing referenced it — `setup` templates from an inline constant.
+- `./build.sh all` → **`./build.sh release`**; a bare `./build.sh` now builds
+  just this machine's binary (the common case). `all` said nothing.
+
 ## 0.9.2 — automated releases
 
 A push to `main` that changes `VERSION` now publishes a GitHub Release.
