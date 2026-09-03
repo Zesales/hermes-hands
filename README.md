@@ -282,15 +282,15 @@ has its own in-process mock (`internal/hermesmock`) and needs no `python3`.
 
 **Automated.** A push to `main` that changes `VERSION` triggers
 `.github/workflows/release.yml`: it re-runs the checks, cross-compiles
-`{linux,darwin}×{amd64,arm64}` + `windows/amd64` via `./build.sh all`, then
+`{linux,darwin}×{amd64,arm64}` + `windows/amd64` via `./build.sh release`, then
 publishes a GitHub Release **`vX.Y.Z`** with the binaries and `SHA256SUMS`. The
 step is idempotent — if the tag already exists it does nothing, so re-pushing
 `main` without a `VERSION` bump never re-releases.
 
 So the release flow is just the normal one: bump `VERSION`, land it on `main`.
 
-`./build.sh` locally produces the exact same `dist/` (`./build.sh host` for
-just this machine's binary). `install.sh`:
+`./build.sh` builds this machine's binary into `dist/`; `./build.sh release`
+produces the exact set of artifacts the workflow publishes. `install.sh`:
 
 - default — latest release, SHA-256 verified;
 - `--version X.Y.Z` — pin to `vX.Y.Z`;
