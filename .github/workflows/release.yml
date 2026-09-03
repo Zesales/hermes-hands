@@ -1,0 +1,72 @@
+name: release
+
+# One release per version bump: whenever a push to main changes the VERSION
+# file, cross-compile every target and publish a GitHub Release vX.Y.Z with the
+# binaries + SHA256SUMS. Idempotent — if the tag already exists, it does nothing.
+on:
+  push:
+    branches: [main]
+    paths: ['VERSION']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    env:
+      GOFLAGS: -mod=vendor   # deps are vendored; CI never touches the network
+    steps:
+      # actions/checkout v4.2.2, pinned by commit
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      # actions/setup-go v7.0.0, pinned by commit
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.26.7'   # exact, must equal go.mod
+          check-latest: false
+
+      - name: Resolve version
+        id: v
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          case "$v" in ''|*[!0-9.]*) echo "::error::VERSION '$v' is not X.Y.Z"; exit 1 ;; esac
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+      - name: Already released?
+        id: gate
+        run: |
+          tag='${{ steps.v.outputs.tag }}'
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+             || git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::notice::$tag already exists — nothing to release"
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify tree
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          bad=$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))
+          test -z "$bad" || { echo "gofmt needed on:"; echo "$bad"; exit 1; }
+          go vet ./...
+          go test ./...
+
+      - name: Build
+        if: steps.gate.outputs.go == 'true'
+        run: ./build.sh all
+
+      - name: Tag + release
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag='${{ steps.v.outputs.tag }}'
+          git tag "$tag"
+          git push origin "$tag"
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes "Automated release from \`main\` @ $(git rev-parse --short HEAD). Changes: see CHANGELOG.md." \
+            dist/hermes-hands_* dist/SHA256SUMS
