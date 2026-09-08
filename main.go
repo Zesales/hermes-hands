@@ -753,7 +753,10 @@ func runREPL(smode string) int {
 		turnMu.Unlock()
 		interrupted := ctx.Err() != nil
 		cancel()
-		turnDur := time.Since(turnStart)
+		// Exclude time spent waiting on the operator's y/n/a/q answer at an
+		// approval prompt — that is the operator deciding, not hermes-agent
+		// working, and shouldn't inflate "worked for Xs".
+		turnDur := time.Since(turnStart) - a.ui.Paused()
 
 		if timedOut {
 			a.ui.TurnDone(turnDur, "timeout", int(a.cfg.ResponseTimeout/time.Second))

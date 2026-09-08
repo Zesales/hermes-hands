@@ -32,7 +32,7 @@ type server struct {
 }
 
 // New starts a mock server for one of: plain, prose, badjson, delegate,
-// shellstate. Close it with (*httptest.Server).Close.
+// shellstate, starved. Close it with (*httptest.Server).Close.
 func New(mode string) *httptest.Server {
 	s := &server{mode: mode, runs: map[string]runRec{}}
 	return httptest.NewServer(s)
@@ -116,6 +116,21 @@ func (s *server) output(input string, seenResults, gotFixup bool) string {
 			return `{"calls": [{"tool": "shell", "args": {"cmd": "mkdir -p sub && cd sub"}}, {"tool": "shell", "args": {"cmd": "pwd"}}], "final": null}`
 		}
 		return "{\"calls\": [], \"final\": \"cwd_persisted=" + pyBool(strings.Contains(input, "/sub")) + "\"}"
+	case "starved":
+		// A gateway that accepts our session_id (so the client believes
+		// Threaded=true and never falls back to a local recap) yet does not
+		// actually replay the turn's transcript to the model - the model sees
+		// exactly the bytes in this POST's `input`, nothing more. Round 2 only
+		// answers correctly if the operator's question rode along in that
+		// literal payload; this is the failure mode observed against the real
+		// gateway (a starved round 2 fell back to a generic repo description).
+		if !seenResults {
+			return `{"calls": [{"tool": "shell", "args": {"cmd": "git describe --tags"}}], "final": null}`
+		}
+		if strings.Contains(input, "what version is this, in one sentence") {
+			return `{"calls": [], "final": "answered: saw the operator's question."}`
+		}
+		return `{"calls": [], "final": "generic repo description (never saw what was asked)."}`
 	default:
 		return `{"calls": [], "final": "?"}`
 	}
