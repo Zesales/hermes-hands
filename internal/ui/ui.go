@@ -29,6 +29,7 @@ type UI struct {
 
 	mu       sync.Mutex // serialises every write vs. the spinner goroutine
 	spinning bool
+	paused   time.Duration // accumulated Hold() time this turn (approval waits) — reset by StartWorking
 }
 
 // New builds a UI writing to stderr. Colour is on when stderr is a tty,
@@ -94,6 +95,7 @@ func (u *UI) StartWorking() (stop func()) {
 	}
 	u.mu.Lock()
 	u.spinning = true
+	u.paused = 0 // fresh turn: no approval waits counted against it yet
 	u.mu.Unlock()
 	start := time.Now()
 	done := make(chan struct{})
@@ -106,8 +108,8 @@ func (u *UI) StartWorking() (stop func()) {
 			case <-done:
 				return
 			case <-tk.C:
-				el := int(time.Since(start).Seconds())
 				u.mu.Lock()
+				el := int((time.Since(start) - u.paused).Seconds())
 				if u.spinning {
 					fmt.Fprintf(u.w, "\r%s   %s%sworking%s%s  ·  %ds  ·  Ctrl+C to cancel%s\x1b[K",
 						u.cDim, u.cAcc, frames[i%len(frames)], u.cR, u.cDim, el, u.cR)
@@ -130,20 +132,37 @@ func (u *UI) StartWorking() (stop func()) {
 
 // Hold suspends the spinner's repaint (wiping its current line) until the
 // returned resume runs. Wrap it around a foreground prompt that owns the line
-// — e.g. the approval y/n/a/q gate — so the spinner can't overwrite it.
+// — e.g. the approval y/n/a/q gate — so the spinner can't overwrite it. The
+// held interval is excluded from the elapsed counter (both the live spinner
+// and the turn's final "worked for Xs", via Paused()): waiting on the
+// operator's y/n/a/q answer is not hermes-agent taking time to work.
 func (u *UI) Hold() (resume func()) {
 	u.mu.Lock()
 	was := u.spinning
 	u.spinning = false
+	heldSince := time.Now()
 	if was {
 		fmt.Fprint(u.w, "\r\x1b[K")
 	}
 	u.mu.Unlock()
+	var once sync.Once
 	return func() {
-		u.mu.Lock()
-		u.spinning = was
-		u.mu.Unlock()
+		once.Do(func() {
+			u.mu.Lock()
+			u.paused += time.Since(heldSince)
+			u.spinning = was
+			u.mu.Unlock()
+		})
 	}
+}
+
+// Paused reports how long the current turn has spent held (approval prompts)
+// so far. Subtract it from a wall-clock turn duration to get actual working
+// time, e.g. before TurnDone.
+func (u *UI) Paused() time.Duration {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.paused
 }
 
 // Rule ports ui_rule: a full-width dim horizontal rule.

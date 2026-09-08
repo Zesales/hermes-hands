@@ -133,6 +133,27 @@ func TestIntegration_ShellCwdPersists(t *testing.T) {
 	}
 }
 
+// TestIntegration_OperatorQuestionSurvivesStarvedGateway is the full-stack
+// (real HTTP, api.Client + loop.Loop) version of the bug found in production:
+// a gateway can accept our session_id — so the client sees Threaded:true on
+// every round and never falls back to a local recap — without actually
+// replaying the transcript to the model, which then only ever sees the
+// literal bytes of the latest POST. Before the fix, round 2's "[hands
+// results]" message carried no trace of the operator's question and the mock
+// (standing in for the underpowered real model) fell back to a generic
+// answer; after the fix it always restates the question, so the mock answers
+// it correctly.
+func TestIntegration_OperatorQuestionSurvivesStarvedGateway(t *testing.T) {
+	requireBash(t)
+	out, _ := newHarness(t, "starved").turn(t, "new", "what version is this, in one sentence?")
+	if !out.OK {
+		t.Fatalf("out = %+v", out)
+	}
+	if !strings.Contains(out.Answer, "answered: saw the operator's question") {
+		t.Errorf("out.Answer = %q, want the mock to have seen the operator's question on round 2", out.Answer)
+	}
+}
+
 func TestIntegration_SessionContinuity(t *testing.T) {
 	h := newHarness(t, "plain")
 

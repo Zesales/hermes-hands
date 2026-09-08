@@ -98,6 +98,15 @@ type Outcome struct {
 const (
 	fixupMsg = `{"error":"your previous message was not a single valid JSON object of the form {\"calls\":[...],\"final\":null}. Resend ONLY that object, no prose, no code fences."}`
 	emptyMsg = `{"error":"empty envelope. Either put tool calls in .calls or your answer in .final."}`
+
+	// maxFixups bounds the botched-envelope / empty-envelope recovery nudges
+	// per turn. Seen against a real gateway: a model can spend its first
+	// couple of attempts on genuinely malformed JSON (missing a closing
+	// bracket, a stray trailing tag) while a large write_file call's content
+	// grows, then land a good one on the next try - now that questionNote
+	// keeps the task in view across nudges (see below), an extra attempt is
+	// usually productive rather than wasted.
+	maxFixups = 3
 )
 
 var botchedRe = regexp.MustCompile(`(?i)"(calls|tool)"[[:space:]]*:`)
@@ -173,10 +182,16 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 		}
 
 		if !parsed {
-			if botchedRe.MatchString(reply) && fixups < 2 {
+			if botchedRe.MatchString(reply) && fixups < maxFixups {
 				fixups++
 				l.warnf("reply was not a valid envelope - asking Hermes to resend just the JSON")
-				send = fixupMsg
+				// fixupMsg alone is a bare format complaint with no task in
+				// it — a model that only sees this has no way to know it was
+				// ever asked to do anything, and (correctly, given what it
+				// was shown) just apologizes for the formatting and asks what
+				// to do. Restate the question so fixing the envelope doesn't
+				// also mean abandoning the task.
+				send = fixupMsg + "\n" + questionNote(userMsg)
 				turnlog += fmt.Sprintf("[round %d] (invalid envelope, requested resend)\n", round)
 				round++
 				continue
@@ -191,9 +206,9 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			if final != "" {
 				return Outcome{Answer: final, OK: true}
 			}
-			if fixups < 2 {
+			if fixups < maxFixups {
 				fixups++
-				send = emptyMsg
+				send = emptyMsg + "\n" + questionNote(userMsg) // same reasoning as the fixupMsg case above
 				round++
 				continue
 			}
@@ -259,15 +274,23 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			}
 			elems = append(elems, e)
 
-			turnlog += fmt.Sprintf("[round %d]   %s [%s](%s) -> exit %d\n", round, tool, id, trunc(string(args), 120), result.Exit)
+			turnlog += fmt.Sprintf("[round %d]   %s [%s](%s) -> exit %d: %s\n",
+				round, tool, id, trunc(string(args), 120), result.Exit, trunc(oneLine(e.Output), 160))
 		}
 
 		payload, _ := marshalNoHTML(resultsPayload{Results: elems})
+		// The operator's question is restated on every round, not just round 1.
+		// A gateway can accept our session_id (Threaded=true) without actually
+		// replaying the transcript to the model - in that case this is the ONLY
+		// place downstream of round 1 where the model still sees what was asked.
+		// Cheap even when the server does thread it correctly: one restated
+		// sentence, no meaningful token cost.
 		send = "[hands results] Your hands ran the instruction you just gave, in the operator's" +
 			" working directory" + l.locNote() + ". This is real output from the operator's" +
 			" machine — the operator did NOT paste it, and it is NOT from your sandbox. Each" +
 			" result's output is the actual file contents / command output; exit_code 0 means" +
 			" it worked (empty or non-zero: try another instruction, never \"I can't read it\")." +
+			questionNote(userMsg) +
 			" Now give the operator your answer in final — or another instruction if you need" +
 			" more.\n" + string(payload)
 		round++
@@ -402,6 +425,23 @@ func trunc(s string, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+// oneLine collapses newlines to spaces so a tool result or question can sit
+// on a single turnlog/reminder line without breaking its shape.
+func oneLine(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
+}
+
+// questionNote restates the operator's original question. Appended to every
+// message sent after round 1 - including the terse fixupMsg/emptyMsg recovery
+// nudges, which otherwise carry no task context at all, so fixing the
+// envelope format also means the model has no idea what it was doing and
+// answers "what can I do for you?" instead of finishing the task.
+func questionNote(userMsg string) string {
+	return " The operator's question this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\"."
 }
 
 func compact(raw json.RawMessage) json.RawMessage {
