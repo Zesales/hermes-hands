@@ -1,11 +1,17 @@
-# Dev helpers for the Go build. End users install via install.sh (see README);
-# `make` is only for working ON hermes-hands.
+# Build / test / lint tasks for working ON hermes-hands. End users install via
+# install.sh (see README); this Makefile is for maintainers.
+#
+# CI never calls `make` directly — it calls ./build.sh. But `build.sh release`
+# runs `make clean dist` internally, so the `dist` target IS on the release
+# path: the published binaries are cross-compiled by it. What is NOT here is
+# the GitHub-specific release logic (compute the next version, tag it, generate
+# notes, publish) — that lives entirely in .github/workflows/release.yml.
 #
 # There is no VERSION file — git tags are the source of truth. `git describe`
 # (restricted to real vX.Y.Z tags) gives `0.10.0` on a release,
 # `0.10.0-3-gabc123` in between; a checkout with no such tag yet falls back to
-# `0.0.0-dev`. release.yml overrides with the tag it is about to cut:
-#   make VERSION=0.10.0 release
+# `0.0.0-dev`. release.yml overrides via the environment with the tag it cuts:
+#   make VERSION=0.10.0 dist
 VERSION  ?= $(shell { git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --dirty 2>/dev/null || echo 0.0.0-dev; } | sed 's/^v//')
 GIT_SHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(GIT_SHA)
@@ -25,28 +31,17 @@ DEV_HOME  ?= $(CURDIR)/.dev
 REAL_HOME ?= $(or $(HERMES_HANDS_HOME),$(HOME)/hermes-hands)
 ARGS      ?=
 
-.PHONY: help dev dev-setup test lint staticcheck build dev-install uninstall release clean
+.PHONY: help dev dev-setup dev-install uninstall test lint ci build dist clean
+.DEFAULT_GOAL := help
 
-help:
-	@echo "Develop:"
-	@echo "  make dev [ARGS=…]   run from source out of ./.dev/  (live share/instructions.md)"
-	@echo "  make dev-setup      prompt for a separate key for ./.dev/  (else it reuses ~/hermes-hands/)"
-	@echo "  make test           go test ./..."
-	@echo "  make lint           gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)"
-	@echo
-	@echo "Build & install:"
-	@echo "  make build          dist/hermes-hands for this host  (VERSION + git sha baked in)"
-	@echo "  make dev-install    build, then copy it into $(BINDIR)"
-	@echo "  make uninstall      remove $(BINDIR)/hermes-hands"
-	@echo
-	@echo "Release:"
-	@echo "  make release        cross-compile $(words $(GOOSARCH)) targets into dist/"
-	@echo
-	@echo "  make clean          remove dist/ and ./.dev/"
+help:  ## this list
+	@awk 'BEGIN{FS = ":.*## "} \
+	     /^##@/               {printf "\n%s\n", substr($$0, 5); next} \
+	     /^[a-zA-Z_-]+:.*## /  {printf "  %-13s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# --- develop ---------------------------------------------------------------
+##@ Develop  (local only — writes ./.dev/ or your PATH)
 
-dev:
+dev:  ## run from source out of ./.dev/  (live share/instructions.md; ARGS= forwards CLI flags)
 	@mkdir -p $(DEV_HOME)
 	@if [ ! -e "$(DEV_HOME)/secrets.enc" ] && [ -f "$(REAL_HOME)/secrets.enc" ] && [ -f "$(REAL_HOME)/keyseed" ]; then \
 	  install -m 0600 "$(REAL_HOME)/secrets.enc" "$(DEV_HOME)/secrets.enc"; \
@@ -57,14 +52,26 @@ dev:
 	HERMES_HANDS_INSTRUCTIONS=$(CURDIR)/share/instructions.md \
 	go run -ldflags '$(LDFLAGS)' . $(ARGS)
 
-dev-setup:
+dev-setup:  ## prompt for a separate key for ./.dev/  (else `make dev` reuses ~/hermes-hands/)
 	@mkdir -p $(DEV_HOME)
 	HERMES_HANDS_HOME=$(DEV_HOME) go run -ldflags '$(LDFLAGS)' . setup
 
-test:
+dev-install: build  ## build, then copy the binary onto your PATH  (PREFIX=/BINDIR= override)
+	@mkdir -p $(BINDIR)
+	install -m 0755 dist/hermes-hands $(BINDIR)/hermes-hands
+	@echo "installed $(BINDIR)/hermes-hands"
+	@echo "next: hermes-hands setup"
+
+uninstall:  ## remove the installed binary from your PATH
+	rm -f $(BINDIR)/hermes-hands
+	@echo "removed $(BINDIR)/hermes-hands"
+
+##@ Verify  (the same checks the PR gate runs)
+
+test:  ## go test ./...
 	CGO_ENABLED=0 go test ./...
 
-lint:
+lint:  ## gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
 	@bad=$$(gofmt -l $$(find . -name '*.go' -not -path './vendor/*')); \
 	 test -z "$$bad" || { echo "gofmt needs a run on:"; echo "$$bad"; exit 1; }
 	go vet ./...
@@ -72,24 +79,15 @@ ifdef STATICCHECK
 	go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 ./...
 endif
 
-# --- build & install -----------------------------------------------------
+ci: lint test dist  ## the PR gate, locally: lint + test + release cross-build + a windows compile
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
 
-build:
+##@ Artifacts
+
+build:  ## dist/hermes-hands for this host  (VERSION + git sha baked in)
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/hermes-hands .
 
-dev-install: build
-	@mkdir -p $(BINDIR)
-	install -m 0755 dist/hermes-hands $(BINDIR)/hermes-hands
-	@echo "installed $(BINDIR)/hermes-hands"
-	@echo "next: hermes-hands setup"
-
-uninstall:
-	rm -f $(BINDIR)/hermes-hands
-	@echo "removed $(BINDIR)/hermes-hands"
-
-# --- release -----------------------------------------------------------------
-
-release:
+dist:  ## cross-compile every target into dist/  (build.sh + release.yml call this; does NOT publish)
 	@set -e; for t in $(GOOSARCH); do \
 	  os=$${t%/*}; arch=$${t#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
 	  echo "building dist/hermes-hands_$${os}_$${arch}$$ext"; \
@@ -97,5 +95,5 @@ release:
 	    -o dist/hermes-hands_$${os}_$${arch}$$ext . ; \
 	done
 
-clean:
+clean:  ## remove dist/ and ./.dev/
 	rm -rf dist $(DEV_HOME)
