@@ -1,6 +1,7 @@
 *.tmp
 /dist/
 /local/
-/.dev/          # `make dev` checkout-local session state
-# `go build ./...` drops the module binary here; the real build target is dist/
+# `make dev` writes checkout-local session state + a copied key here
+/.dev/
+# `go build ./...` drops the module binary here; the real target is dist/
 /hermes-hands

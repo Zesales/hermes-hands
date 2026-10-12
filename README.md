@@ -287,11 +287,12 @@ your phone and web UI never see it.
 
 ```sh
 git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
-make                 # list targets, grouped (Develop / Build & install / Release)
+make                 # list targets, grouped (Develop / Verify / Artifacts)
 make dev             # go run from source out of ./.dev/ — live share/instructions.md
 make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
+make ci              # the PR gate locally: lint + test + release cross-build
 make dev-install     # go build + copy dist/hermes-hands onto your PATH
 ```
 
