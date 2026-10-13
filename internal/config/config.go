@@ -25,7 +25,7 @@ var Warnf = func(format string, a ...any) {
 // _SECRETS / _STATE / _INSTRUCTIONS) which wins over the Home-derived default.
 //
 // The API tuning knobs come from the process environment only; URL / key /
-// profile / approve / stream / deny / allow-http / verbose / the watchdog
+// profile / approve / stream / deny / allow-http / verbose / reasoning / the watchdog
 // knobs are read after the config file so the file (and, conditionally, the
 // secrets store) wins over the environment for those.
 type Config struct {
@@ -47,6 +47,7 @@ type Config struct {
 	ResponseTimeout                    time.Duration
 	WatchdogInterval                   time.Duration
 	AllowHTTP, Verbose                 bool
+	Reasoning                          bool // HERMES_HANDS_REASONING / /reasoning: capture the model's reasoning events
 	StateDir                           string
 	Home                               string // HERMES_HANDS_HOME (else $HOME/hermes-hands)
 	ConfigPath, SecretsPath, InstrPath string
@@ -105,6 +106,7 @@ func Load() (*Config, error) {
 		WatchdogInterval: secondsOr(merged["HERMES_HANDS_WATCHDOG_INTERVAL"], 200*time.Second),
 		AllowHTTP:        merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
 		Verbose:          merged["HERMES_HANDS_VERBOSE"] != "",
+		Reasoning:        merged["HERMES_HANDS_REASONING"] != "",
 		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], home+"/instructions.md"),
 
 		ConnectTimeout: secondsOr(proc["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
@@ -112,7 +114,7 @@ func Load() (*Config, error) {
 		PollInterval:   secondsOr(proc["HERMES_API_POLL_INTERVAL"], 2*time.Second),
 		APIRunTimeout:  secondsOr(proc["HERMES_API_RUN_TIMEOUT"], 600*time.Second),
 		APIRetries:     intOr(proc["HERMES_API_RETRIES"], 3),
-		MaxRounds:      intOr(proc["HERMES_HANDS_MAX_ROUNDS"], 8),
+		MaxRounds:      intOr(proc["HERMES_HANDS_MAX_ROUNDS"], 25),
 		RunTimeout:     intOr(proc["HERMES_HANDS_RUN_TIMEOUT"], 120),
 		MaxOutput:      intOr(proc["HERMES_HANDS_MAX_OUTPUT"], 20000),
 		StateDir:       firstNonEmpty(proc["HERMES_HANDS_STATE"], home),

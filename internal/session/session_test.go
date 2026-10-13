@@ -50,6 +50,126 @@ func TestNewMintsIDs(t *testing.T) {
 	}
 }
 
+func TestMigrateFromFlatLayout(t *testing.T) {
+	// Build the pre-directory state by hand: <id>.json + transcripts/<id>.jsonl
+	state := t.TempDir()
+	sessDir := state + "/sessions"
+	if err := os.MkdirAll(sessDir+"/transcripts", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "hh_20260902T101112_deadbe"
+	recJSON := `{"id":"` + id + `","hermes_session_id":"hh-abcd-20260902T101112","hermes_session_key":"k","cwd":"/home/x/repo","title":"alter chat","created":"2026-09-02T10:11:12Z","updated":"2026-09-02T10:12:00Z","turns":2}` + "\n"
+	if err := os.WriteFile(sessDir+"/"+id+".json", []byte(recJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	jsonl := `{"at":"2026-09-02T10:11:20Z","user":"alte frage","answer":"alte antwort"}` + "\n"
+	if err := os.WriteFile(sessDir+"/transcripts/"+id+".jsonl", []byte(jsonl), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// flat files are gone; the session lives in <id>/
+	if _, err := os.Stat(sessDir + "/" + id + ".json"); !os.IsNotExist(err) {
+		t.Error("flat <id>.json should be migrated away")
+	}
+	if _, err := os.Stat(sessDir + "/transcripts/" + id + ".jsonl"); !os.IsNotExist(err) {
+		t.Error("flat transcript should be migrated away")
+	}
+	for _, want := range []string{"session.json", "transcript.jsonl", "session-history.md"} {
+		if _, err := os.Stat(sessDir + "/" + id + "/" + want); err != nil {
+			t.Errorf("migrated session missing %s: %v", want, err)
+		}
+	}
+	// the record and its history are readable through the normal API
+	rec, err := st.Load(id)
+	if err != nil || rec.Title != "alter chat" || rec.Turns != 2 {
+		t.Fatalf("Load after migrate: %v %+v", err, rec)
+	}
+	turns, _ := st.LoadTranscript(rec)
+	if len(turns) != 1 || turns[0].User != "alte frage" {
+		t.Errorf("transcript after migrate: %+v", turns)
+	}
+	md, err := os.ReadFile(st.HistoryPath(id))
+	if err != nil || !strings.Contains(string(md), "alte frage") || !strings.Contains(string(md), "# alter chat") {
+		t.Errorf("session-history.md after migrate:\n%s (%v)", md, err)
+	}
+	// idempotent: a second Open must not touch the migrated layout
+	if _, err := Open(state); err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := st.List()
+	if len(recs) != 1 || recs[0].ID != id {
+		t.Errorf("List after migrate: %+v", recs)
+	}
+}
+
+func TestAppendTurnWritesSessionHistoryMD(t *testing.T) {
+	st := newStore(t)
+	rec, err := st.New("/home/x/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendTurn(rec, "erste frage", "erste antwort"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendTurn(rec, "zweite frage", "zweite antwort"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(st.HistoryPath(rec.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := string(b)
+	for _, want := range []string{
+		"# (untitled)",
+		"- hermes-hands session: " + rec.ID,
+		"## 1. ", "erste frage", "erste antwort",
+		"## 2. ", "zweite frage", "zweite antwort",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("session-history.md missing %q\n---\n%s", want, md)
+		}
+	}
+	if strings.Index(md, "erste frage") > strings.Index(md, "zweite frage") {
+		t.Error("history must be oldest first")
+	}
+}
+
+func TestHistoryIsPureRenderingAndReplaceSyncs(t *testing.T) {
+	st := newStore(t)
+	rec, err := st.New("/home/x/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendTurn(rec, "lokal", "lokal antwort"); err != nil {
+		t.Fatal(err)
+	}
+	// resume sync: the server copy is larger -> it replaces the local mirror
+	// wholesale (the .md never keeps stale fragments).
+	server := []Turn{{At: rec.Created, User: "remote frage", Answer: "remote antwort"}}
+	if err := st.ReplaceTranscript(rec, server); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := st.LoadTranscript(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].User != "remote frage" {
+		t.Fatalf("ReplaceTranscript did not adopt the server copy: %+v", turns)
+	}
+	b, err := os.ReadFile(st.HistoryPath(rec.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := string(b)
+	if !strings.Contains(md, "remote frage") || strings.Contains(md, "lokal") {
+		t.Errorf("session-history.md not re-rendered from replaced transcript:\n%s", md)
+	}
+}
+
 func TestSha1HexNoTrailingNewline(t *testing.T) {
 	// bash: printf '%s' "$1" | sha1sum  -- no trailing newline
 	want := "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33" // sha1("foo")
@@ -58,46 +178,39 @@ func TestSha1HexNoTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestNewWritesFileAndPointer(t *testing.T) {
+func TestNewWritesSessionDir(t *testing.T) {
 	st := newStore(t)
-	cwd := "/some/dir"
-	rec, _ := st.New(cwd)
+	rec, _ := st.New("/some/dir")
 
 	if _, err := os.Stat(rec.path); err != nil {
 		t.Errorf("session file missing: %v", err)
 	}
-	ptr := st.cwdPtr(cwd)
-	if !strings.HasSuffix(ptr, "/by-cwd/"+sha1hex(cwd)+".id") {
-		t.Errorf("cwdPtr = %q", ptr)
+	if _, err := os.Stat(st.sessionDir(rec.ID)); err != nil {
+		t.Errorf("session dir missing: %v", err)
 	}
-	b, err := os.ReadFile(ptr)
-	if err != nil {
-		t.Fatalf("pointer missing: %v", err)
-	}
-	if string(b) != rec.ID {
-		t.Errorf("pointer content = %q, want %q (no newline)", string(b), rec.ID)
+	// sessions are addressed by id only — no per-directory pointer exists
+	if _, err := os.Stat(st.dir + "/by-cwd"); !os.IsNotExist(err) {
+		t.Errorf("by-cwd pointer dir must not exist")
 	}
 }
 
-func TestLatestForCwd(t *testing.T) {
-	st := newStore(t)
-	cwd := "/repo/a"
-
-	if _, ok := st.LatestForCwd(cwd); ok {
-		t.Errorf("absent pointer should not resolve")
+func TestOpenDropsLegacyByCwd(t *testing.T) {
+	state := t.TempDir()
+	if err := os.MkdirAll(state+"/sessions/by-cwd", 0o755); err != nil {
+		t.Fatal(err)
 	}
-	rec, _ := st.New(cwd)
-	if id, ok := st.LatestForCwd(cwd); !ok || id != rec.ID {
-		t.Errorf("LatestForCwd = %q,%v want %q,true", id, ok, rec.ID)
+	if err := os.WriteFile(state+"/sessions/by-cwd/deadbeef.id", []byte("hh_x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	// dangling: pointer present, session file gone
-	os.Remove(rec.path)
-	if _, ok := st.LatestForCwd(cwd); ok {
-		t.Errorf("dangling pointer should not resolve")
+	if _, err := Open(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(state + "/sessions/by-cwd"); !os.IsNotExist(err) {
+		t.Errorf("legacy by-cwd dir should be dropped on Open")
 	}
 }
 
-func TestResolve(t *testing.T) {
+func TestResolveIsExplicit(t *testing.T) {
 	st := newStore(t)
 	cwd := "/resolve/dir"
 
@@ -105,28 +218,42 @@ func TestResolve(t *testing.T) {
 	if err != nil || r1 == nil {
 		t.Fatalf("Resolve(new): %v", err)
 	}
-
-	var warned int
-	st.Warnf = func(string, ...any) { warned++ }
-	// continue with a DIFFERENT dir that has no session -> quietly starts one
-	r2, err := st.Resolve("continue", "/resolve/other")
-	if err != nil || r2 == nil {
-		t.Fatalf("Resolve(continue, none): %v", err)
+	// the exact id resolves to itself (the plugin pattern)
+	got, err := st.Resolve(r1.ID, cwd)
+	if err != nil || got.ID != r1.ID {
+		t.Errorf("Resolve(id) = %v / %v, want %s", got, err, r1.ID)
 	}
-	if warned != 0 {
-		t.Errorf("continue-with-none should be silent now, got %d warnings", warned)
-	}
-
 	// explicit missing id -> error
 	if _, err := st.Resolve("hh_does_not_exist", cwd); err == nil ||
 		err.Error() != "no such session: hh_does_not_exist" {
 		t.Errorf("explicit-missing err = %v", err)
 	}
+	// "continue" is gone — it is not an id, so it errors like one
+	if _, err := st.Resolve("continue", cwd); err == nil {
+		t.Errorf("Resolve(continue) must error now")
+	}
+	// no id in any directory: just a fresh session
+	r2, err := st.Resolve("", "/resolve/other")
+	if err != nil || r2 == nil || r2.ID == r1.ID {
+		t.Errorf("Resolve('', other dir): %v %+v", err, r2)
+	}
+}
 
-	// continue now finds r1 for its dir
-	got, err := st.Resolve("continue", cwd)
-	if err != nil || got.ID != r1.ID {
-		t.Errorf("Resolve(continue) = %v / %v, want %s", got, err, r1.ID)
+func TestIdleForAndStale(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	fresh := &Record{Updated: "2026-09-02T11:30:00Z"}
+	if d := IdleFor(fresh, now); d != 30*time.Minute {
+		t.Errorf("IdleFor fresh = %v, want 30m", d)
+	}
+	if IdleFor(fresh, now) > StaleAfter {
+		t.Error("30m idle must not count as stale")
+	}
+	old := &Record{Updated: "2026-09-02T10:00:00Z"}
+	if IdleFor(old, now) <= StaleAfter {
+		t.Error("2h idle must count as stale")
+	}
+	if d := IdleFor(&Record{Updated: "garbage"}, now); d != 0 {
+		t.Errorf("unparseable timestamp should idle 0, got %v", d)
 	}
 }
 
@@ -217,7 +344,7 @@ func TestListOrderAndFallback(t *testing.T) {
 
 	out := FormatList(recs)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if !strings.HasPrefix(lines[0], "ID") || !strings.Contains(lines[0], "DIR") || !strings.HasSuffix(lines[0], "TITLE") {
+	if !strings.HasPrefix(lines[0], "ID") || !strings.Contains(lines[0], "IDLE") || !strings.Contains(lines[0], "DIR") || !strings.HasSuffix(lines[0], "TITLE") {
 		t.Errorf("header = %q", lines[0])
 	}
 	// newest row: no title -> the TITLE column is blank, and the DIR column
@@ -233,5 +360,10 @@ func TestListOrderAndFallback(t *testing.T) {
 	}
 	if strings.Contains(lines[1], "Z ") {
 		t.Errorf("updated should be clipped to 19 chars (no trailing Z): %q", lines[1])
+	}
+	// both sessions are long idle vs. real wall-clock now -> idle marker * +
+	// the informational legend must be present
+	if !strings.Contains(lines[1], "*") || !strings.Contains(out, "idle >1h") {
+		t.Errorf("stale rows must carry the idle * marker and the legend: %q", out)
 	}
 }

@@ -5,3 +5,4 @@
 /.dev/
 # `go build ./...` drops the module binary here; the real target is dist/
 /hermes-hands
+.hermes-review/

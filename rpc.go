@@ -30,6 +30,7 @@ import (
 //
 //	{"type":"ready","session":"hh_...","cwd":"/repo","version":"X.Y.Z","approvals":"off"}
 //	{"type":"tool","id":1,"tool":"shell","preview":"npm test","exit":0}
+//	{"type":"reasoning","id":1,"text":"..."}   (while reasoning capture is on)
 //	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"..."}
 //	{"type":"session","id":2,"session":"hh_...","hermes_session":"..."}
 //	{"type":"check","id":4,"ok":true,"model":"...","base":"..."}
@@ -82,6 +83,7 @@ func runRPC(smode string) int {
 		emit(map[string]any{"type": "error", "message": err.Error()})
 		return 1
 	}
+	prepareResume(a, rec)
 
 	emit(map[string]any{
 		"type": "ready", "session": rec.ID, "cwd": a.repoRoot,
@@ -107,6 +109,8 @@ func runRPC(smode string) int {
 			turnMu.Unlock()
 		}
 	}()
+
+	reasoningOn := a.cfg.Reasoning
 
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -135,6 +139,11 @@ func runRPC(smode string) int {
 				emit(map[string]any{"type": "tool", "id": id, "tool": tool, "preview": preview, "exit": exit})
 			}
 			a.client.OnDelta = func(t string) { emit(map[string]any{"type": "delta", "id": id, "text": t}) }
+			a.client.OnReasoning = func(t string) {
+				if reasoningOn {
+					emit(map[string]any{"type": "reasoning", "id": id, "text": t})
+				}
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			turnMu.Lock()
 			cancelTurn = cancel
@@ -149,6 +158,7 @@ func runRPC(smode string) int {
 			cancel()
 			a.loop.OnTool = nil
 			a.client.OnDelta = nil
+			a.client.OnReasoning = nil
 
 			if interrupted {
 				emit(map[string]any{"type": "error", "id": id, "message": "turn interrupted"})
@@ -158,10 +168,27 @@ func runRPC(smode string) int {
 				if changed, _ := a.store.SetTitleLocal(rec, req.Text); changed && rec.HermesSessionID != "" {
 					a.client.SetTitle(context.Background(), rec.HermesSessionID, rec.Title)
 				}
+				// Keep the local transcript copy current (resume replay source).
+				if err := a.store.AppendTurn(rec, req.Text, out.Answer); err != nil {
+					warnf("transcript: %v", err)
+				}
 			}
 			emit(map[string]any{
 				"type": "answer", "id": id, "ok": out.OK, "text": out.Answer,
 				"session": rec.ID, "hermes_session": rec.HermesSessionID,
+			})
+
+		case "history":
+			turns, e := a.store.LoadTranscript(rec)
+			if e != nil {
+				emit(map[string]any{"type": "error", "id": id, "message": e.Error()})
+				continue
+			}
+			emit(map[string]any{
+				"type": "history", "id": id, "session": rec.ID,
+				"hermes_session": rec.HermesSessionID,
+				"turns":          turns,
+				"history_file":   a.store.HistoryPath(rec.ID),
 			})
 
 		case "new":
@@ -184,7 +211,19 @@ func runRPC(smode string) int {
 				continue
 			}
 			rec = nr
+			prepareResume(a, rec)
 			emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
+
+		case "reasoning":
+			switch req.Text {
+			case "on", "true":
+				reasoningOn = true
+			case "off", "false":
+				reasoningOn = false
+			default:
+				reasoningOn = !reasoningOn
+			}
+			emit(map[string]any{"type": "reasoning", "id": id, "on": reasoningOn})
 
 		case "check":
 			res, e := a.client.Check(context.Background())

@@ -385,6 +385,8 @@ func TestStreamRun_RealShape(t *testing.T) {
 	c := testClient(srv.URL)
 	var deltas []string
 	c.OnDelta = func(s string) { deltas = append(deltas, s) }
+	var reasoning []string
+	c.OnReasoning = func(s string) { reasoning = append(reasoning, s) }
 	res, err := c.streamRun(context.Background(), srv.URL, "run_x", true)
 	if err != nil {
 		t.Fatal(err)
@@ -394,6 +396,9 @@ func TestStreamRun_RealShape(t *testing.T) {
 	}
 	if strings.Join(deltas, "") != "Hi there" {
 		t.Errorf("deltas = %q", deltas)
+	}
+	if strings.Join(reasoning, "") != "thinking" {
+		t.Errorf("reasoning = %q, want the reasoning.available text forwarded to OnReasoning", reasoning)
 	}
 }
 

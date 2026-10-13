@@ -267,6 +267,32 @@ func TestRunEmptyEnvelopeNudgeThenBlocked(t *testing.T) {
 	}
 }
 
+func TestRoundBudgetNotes(t *testing.T) {
+	callEnv := reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true)
+	sa := &scriptAsker{replies: []api.AskResult{callEnv}}
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 7}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if out.OK {
+		t.Fatalf("want the capped BLOCKED outcome, got %+v", out)
+	}
+	// Ask 6 (5 rounds ran): inside the last-5 window — soft countdown.
+	if !strings.Contains(sa.msgs[5], "5/7 rounds used, 2 left") {
+		t.Errorf("ask 6 should carry the countdown, got: %q", trunc(sa.msgs[5], 300))
+	}
+	// Ask 7 (6 rounds ran): the last executable round — hard final demand.
+	if !strings.Contains(sa.msgs[6], "LAST round (7/7)") {
+		t.Errorf("ask 7 should demand a final after the last round, got: %q", trunc(sa.msgs[6], 300))
+	}
+	// Ask 8 (7 rounds ran): nothing left — final only (a final here still
+	// lands, it is only a calls envelope that gets capped).
+	if !strings.Contains(sa.msgs[7], "no tool rounds remain") {
+		t.Errorf("ask 8 should allow only a final, got: %q", trunc(sa.msgs[7], 300))
+	}
+	if !strings.Contains(l.PendingNote, "round budget (7 rounds)") {
+		t.Errorf("a capped turn should leave a resume note, got: %q", l.PendingNote)
+	}
+}
+
 func TestRunRoundsCap(t *testing.T) {
 	callEnv := reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true)
 	sa := &scriptAsker{replies: []api.AskResult{callEnv}} // repeats forever

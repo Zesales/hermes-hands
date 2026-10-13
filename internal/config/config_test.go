@@ -36,7 +36,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.Approve != "ask" {
 		t.Errorf("Approve = %q, want ask", c.Approve)
 	}
-	if c.MaxRounds != 8 || c.RunTimeout != 120 || c.MaxOutput != 20000 || c.APIRetries != 3 {
+	if c.MaxRounds != 25 || c.RunTimeout != 120 || c.MaxOutput != 20000 || c.APIRetries != 3 {
 		t.Errorf("int defaults wrong: %+v", c)
 	}
 	if c.ConnectTimeout != 5*time.Second || c.MaxTime != 30*time.Second ||
