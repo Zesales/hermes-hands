@@ -289,6 +289,9 @@ func (u *UI) DimLine(msg string) {
 	fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, msg, u.cR)
 }
 
+// (No UI.Reasoning on purpose: reasoning is file-only — it belongs in the
+// verbose/ md log and must never clutter the terminal answer output.)
+
 // Delta streams one answer-text chunk during a turn (dim, no newline) — a live
 // preview; the clean final still renders via Answer afterwards.
 func (u *UI) Delta(s string) {
@@ -312,8 +315,10 @@ func (u *UI) Help(cwd string) {
 	io.WriteString(u.w, "    /session      show this session's detail (turns, tokens, splits)\n")
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
 	io.WriteString(u.w, "    /sessions     list this machine's + hermes-agent's sessions\n")
+	io.WriteString(u.w, "    /history      show this session's full chat history (/history <n> = last n)\n")
 	io.WriteString(u.w, "    /fork         branch this session on the server, switch to it\n")
 	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")
+	io.WriteString(u.w, "    /reasoning      toggle reasoning capture (verbose/ log file only)\n")
 	io.WriteString(u.w, "    /setup        (re)configure the gateway URL + key\n")
 	io.WriteString(u.w, "    /config       config file path + effective settings (read-only; edit by hand)\n")
 	io.WriteString(u.w, "    /check        re-test the gateway connection\n")

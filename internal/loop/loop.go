@@ -28,8 +28,12 @@ type Asker interface {
 
 // Loop drives the delegation rounds for one turn.
 type Loop struct {
-	API       Asker
-	Dispatch  *dispatch.Dispatcher
+	API      Asker
+	Dispatch *dispatch.Dispatcher
+
+	// OnResult sees each dispatched tool result (tool, raw output, exit code).
+	// The knowsystem learner uses it to catch 127 "command not found" facts.
+	OnResult  func(tool, output string, exit int)
 	UI        *ui.UI
 	MaxRounds int
 	Scrub     func(string) string
@@ -47,6 +51,11 @@ type Loop struct {
 	// PendingNote carries a one-off line to prepend to the next turn's message
 	// (e.g. "the previous turn was cancelled"). Set by Run, consumed by Run.
 	PendingNote string
+
+	// ResumeNote carries a one-off block to prepend to the FIRST turn of a
+	// resumed session whose server-side transcript was lost (the local replay,
+	// see session.ResumeRecap). Set by the caller, consumed by Run.
+	ResumeNote string
 
 	Vlogf func(string, ...any)
 	Warnf func(string, ...any)
@@ -85,7 +94,17 @@ func (l *Loop) frame(userMsg string) string {
 		"output to call) — or {\"calls\":[],\"final\":\"...\"} once it is solved. Not a\n" +
 		"chat reply, not a description of yourself or your tools. If you do not know\n" +
 		"the directory yet, your instruction is a look — `shell` (ls / git / rg) or\n" +
-		"`read_file`."
+		"`read_file`." + l.budgetNote()
+}
+
+// budgetNote is the round-budget line of the task frame: the model plans
+// against a known ceiling instead of discovering it as a BLOCKED wall. One
+// sentence — it must not crowd out the task it wraps.
+func (l *Loop) budgetNote() string {
+	if l.MaxRounds <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n\nThis turn has a tool-round budget of %d envelopes with calls; batch several calls per envelope and plan before large writes — a final that says what is unfinished beats being stopped at the limit.", l.MaxRounds)
 }
 
 // Outcome is the turn result. OK == false means Answer is a "BLOCKED: ..."
@@ -129,6 +148,10 @@ func (c callSpec) id() string { return firstNonEmpty(c.ID, c.CallID) }
 func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string, tokens int)) Outcome {
 	round := 1
 	send := l.frame(userMsg)
+	if l.ResumeNote != "" { // resumed session, server history gone — replay local copy
+		send = l.ResumeNote + "\n\n" + send
+		l.ResumeNote = ""
+	}
 	if l.PendingNote != "" { // a prior turn was cancelled — tell Hermes now
 		send = l.PendingNote + "\n\n" + send
 		l.PendingNote = ""
@@ -216,6 +239,10 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 		}
 
 		if round > l.MaxRounds {
+			// Tell the NEXT turn where this one stopped: a capped turn is
+			// unfinished work, not a failed one — a "continue" should resume,
+			// not redo completed steps.
+			l.PendingNote = fmt.Sprintf("[the previous turn was stopped at its round budget (%d rounds) while still requesting tool calls — the work is unfinished. If the operator asks to continue, resume from where it stopped instead of re-doing completed steps.]", l.MaxRounds)
 			return Outcome{Answer: fmt.Sprintf("BLOCKED: Hermes still requesting data after %d rounds.", l.MaxRounds), OK: false}
 		}
 
@@ -261,6 +288,9 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			if l.OnTool != nil {
 				l.OnTool(tool, preview, result.Exit)
 			}
+			if l.OnResult != nil { // knowsystem learner: sees raw output + exit
+				l.OnResult(tool, result.Out, result.Exit)
+			}
 
 			e := resultElem{
 				ID:       id,
@@ -292,7 +322,7 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			" it worked (empty or non-zero: try another instruction, never \"I can't read it\")." +
 			questionNote(userMsg) +
 			" Now give the operator your answer in final — or another instruction if you need" +
-			" more.\n" + string(payload)
+			" more.\n" + string(payload) + l.roundBudgetNote(round+1)
 		round++
 	}
 }
@@ -433,6 +463,29 @@ func oneLine(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	return strings.TrimSpace(s)
+}
+
+// roundBudgetNote is the countdown to the round cap, appended to the results
+// payload when the ceiling gets close: a soft nudge for the last 5 rounds
+// (finish, or plan the continuation), and on the very last round a hard
+// instruction that the next reply must be a final. Making the ceiling visible
+// while rounds are still left is what turns the cap from a punishment into a
+// planning input — the model batches calls or lands a clean final instead of
+// burning a round to hit the wall.
+func (l *Loop) roundBudgetNote(nextRound int) string {
+	if l.MaxRounds <= 0 {
+		return ""
+	}
+	left := l.MaxRounds - nextRound + 1
+	switch {
+	case left <= 0:
+		return "\n[round budget: no tool rounds remain — your reply must be {\"calls\":[],\"final\":\"...\"} stating what is done and what a continuation must do.]"
+	case left == 1:
+		return fmt.Sprintf("\n[round budget: this is the LAST round (%d/%d). After these results, your next reply must be {\"calls\":[],\"final\":\"...\"} stating what is done and what a continuation must do.]", nextRound, l.MaxRounds)
+	case left > 1 && left <= 5:
+		return fmt.Sprintf("\n[round budget: %d/%d rounds used, %d left. Finish now, or batch the remaining calls and land a final that says what the continuation must do.]", nextRound-1, l.MaxRounds, left)
+	}
+	return ""
 }
 
 // questionNote restates the operator's original question. Appended to every

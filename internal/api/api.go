@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +53,11 @@ type Client struct {
 	// they arrive over the SSE stream.
 	StreamMode string
 	OnDelta    func(text string)
+
+	// OnReasoning, when set, receives the model's reasoning text from the SSE
+	// stream (`reasoning.available` / reasoning delta frames). Only the stream
+	// transport carries reasoning — poll mode has none.
+	OnReasoning func(text string)
 
 	Warnf func(string, ...any)
 	Vlogf func(string, ...any)
@@ -390,6 +396,76 @@ func (c *Client) SessionInfo(ctx context.Context, hermesSessionID string) (SrvSe
 		}
 	}
 	return srvSessionFrom(m), nil
+}
+
+// SessionMessage is one transcript entry of a server-side session record.
+type SessionMessage struct {
+	Role    string
+	Content string
+}
+
+// SessionMessages reads the server-side transcript of a session
+// (GET /api/sessions/{id}/messages). Lenient: accepts a bare array or an
+// object with a "data"/"messages"/"items" array; content that arrives as a
+// parts-array is flattened to its text. A non-2xx (e.g. 404
+// session_not_found) is an error — the caller then falls back to the local
+// transcript copy.
+func (c *Client) SessionMessages(ctx context.Context, hermesSessionID string, limit int) ([]SessionMessage, error) {
+	if hermesSessionID == "" {
+		return nil, fmt.Errorf("no hermes-agent session id yet")
+	}
+	if limit <= 0 {
+		limit = 40
+	}
+	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodGet,
+		c.titleBase()+"/api/sessions/"+hermesSessionID+"/messages?limit="+strconv.Itoa(limit)+"&order=oldest",
+		nil, map[string]string{"Accept": "application/json"})
+	if err != nil {
+		return nil, err
+	}
+	if !is2xx(code) {
+		return nil, fmt.Errorf("GET /api/sessions/%s/messages -> HTTP %s", hermesSessionID, httpCode(code))
+	}
+	var arr []map[string]json.RawMessage
+	if json.Unmarshal(body, &arr) != nil {
+		var top map[string]json.RawMessage
+		if json.Unmarshal(body, &top) != nil {
+			return nil, fmt.Errorf("unparseable messages body")
+		}
+		for _, k := range []string{"data", "messages", "items"} {
+			if raw, ok := top[k]; ok && json.Unmarshal(raw, &arr) == nil {
+				break
+			}
+		}
+	}
+	var out []SessionMessage
+	for _, m := range arr {
+		role := ""
+		if raw, ok := m["role"]; ok {
+			_ = json.Unmarshal(raw, &role)
+		}
+		content := ""
+		if raw, ok := m["content"]; ok {
+			if json.Unmarshal(raw, &content) != nil {
+				var parts []map[string]json.RawMessage // content-as-parts shape
+				if json.Unmarshal(raw, &parts) == nil {
+					for _, p := range parts {
+						var t string
+						if raw, ok := p["text"]; ok && json.Unmarshal(raw, &t) == nil {
+							content += t
+						}
+					}
+				}
+			}
+		}
+		if role == "" || content == "" {
+			continue
+		}
+		out = append(out, SessionMessage{Role: role, Content: content})
+	}
+	return out, nil
 }
 
 // ListSessions reads the server-side session list (GET /api/sessions). Lenient:
