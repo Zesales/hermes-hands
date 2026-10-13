@@ -98,6 +98,14 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 					c.OnDelta(t)
 				}
 			}
+		case "reasoning.available", "reasoning.delta", "response.reasoning.delta", "reasoning":
+			t := e.Text
+			if t == "" {
+				t = e.Delta
+			}
+			if t != "" && c.OnReasoning != nil {
+				c.OnReasoning(t)
+			}
 		case "run.completed", "response.completed", "done":
 			out := e.Output
 			if out == "" {

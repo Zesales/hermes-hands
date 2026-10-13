@@ -1,5 +1,98 @@
 # Changelog
 
+## Unreleased — session chat history
+
+- **Every session keeps its full chat history on disk.** Sessions now live
+  one directory each: `~/hermes-hands/sessions/<id>/` holds `session.json`,
+  `transcript.jsonl` (canonical, append-only) and **`session-history.md`** —
+  the whole conversation rendered as readable markdown, regenerated from the
+  transcript after every exchange (the .md is a pure rendering, so hand edits
+  there never leak into a resume replay). Existing state is migrated from the
+  old flat layout (`<id>.json` + `transcripts/<id>.jsonl`) automatically on
+  the next start.
+- **Resume syncs from the remote.** Opening an old session asks hermes-agent
+  for its transcript first; when the server holds more exchanges than the
+  local mirror, the local transcript + history are replaced with the server's
+  copy — the server is the source of truth, the local copy is its mirror.
+  Only when the server lost the history does the local transcript replay into
+  the first turn.
+- **Opening an old session shows the chat history**: at startup with
+  `--session <id>` and on `/session <id>` switches, plus `/history` on demand
+  (`/history <n>` = last n exchanges, `/history <id>` = another session's,
+  read-only — it never switches the session).
+- **`--rpc` gained a `history` request** (`{"type":"history"}`): answers with
+  the full turn list and the `session-history.md` path — the hook a future
+  hermes-remote uses to fetch a session's chat history.
+- **Sessions are addressed by id only.** The per-directory "last session"
+  pointer (`sessions/by-cwd/`) is gone — `--session` now requires an id,
+  `--rpc` defaults to a fresh session, and plugins keep the id from the
+  `ready` event (Claude-style editor integration pattern). `/session` shows
+  each session's **idle time** and, past 1 h, reminds the operator that the
+  gateway/model prompt caches (Bifrost, hermes-agent, Claude-style ~1h TTL)
+  have likely expired — the first resumed turn re-reads the full transcript and
+  can cost full-price input tokens. The chat history is re-synced from
+  hermes-agent on every open regardless of idle time. The `sessions` list
+  gained an **IDLE** column (`*` past 1 h + a one-line legend); all of it is
+  informational. Later, once hermes-agent reports a session's model +
+  provider, the provider's official prompt-cache TTL can replace the fixed 1 h.
+
+## Unreleased — known system
+
+- **The client tells Hermes what the machine has.** `internal/knowsystem`
+  probes the machine once per session start (OS/arch/kernel, cwd + git branch,
+  repo signals like Makefile/compose/manifests, Makefile targets, a fixed
+  tool list via `exec.LookPath`) and appends a compact ~8-line brief to the
+  instructions Hermes receives. The brain plans against known facts instead of
+  burning tool rounds rediscovering them every session.
+- The full record lives in `~/hermes-hands/known-system.json` (0600, written
+  by hermes-hands only — single writer; Hermes reads it, never edits it).
+- **Run-time learning:** a `shell` result with exit 127 records the tool as
+  learned-missing immediately in `known-system.json`; the next session's
+  brief carries it. Each session re-probes from scratch, so a stale
+  "missing" is dropped the moment the tool is actually installed —
+  freshness always beats memory.
+- Repo tooling outranks raw binaries: when a Makefile/compose exists, the
+  brief lists its targets so Hermes drives the repo through `make` instead of
+  hunting for individual binaries (installs stay the operator's call).
+
+## Unreleased — reasoning debug view
+
+- **Round budget is now visible to Hermes.** The task frame states the turn's
+  round ceiling up front; the results payload counts down during the last 5
+  rounds and, on the final round, requires a `final` that states what a
+  continuation must do. A capped turn leaves a PendingNote so "continue"
+  resumes instead of redoing finished steps. The model plans and batches
+  calls against a known ceiling instead of discovering it as a BLOCKED wall —
+  fewer round-trips, fewer re-sent tokens.
+- `HERMES_HANDS_MAX_ROUNDS` default raised 8 → 25: a multi-tool turn no longer
+  hits `BLOCKED: Hermes still requesting data after N rounds.` on ordinary
+  code-mode work; the cap stays as the runaway guard it was meant to be.
+
+The gateway's SSE stream carries the model's thinking as a
+`{"event":"reasoning.available","text":"…"}` frame. It was already on the wire
+but silently dropped by the stream dispatcher; `api.Client.OnReasoning` now
+forwards it.
+
+- **`/reasoning` (alias `/reasoning-show`)** in the REPL: `on` / `off` /
+  `true` / `false` or a bare toggle. While on, each reasoning block renders dim
+  (`⌁ reasoning`) on stderr and is appended to
+  `~/hermes-hands/verbose/hermes-hands-reasoning-<session-id>.md` (0600,
+  scrubbed through the same redactor as tool output).
+- `HERMES_HANDS_REASONING=1` in the config file starts a session with it on.
+- `--rpc`: a `{"type":"reasoning","text":"on"}` request toggles it; frames
+  arrive as `{"type":"reasoning","id":…, "text":"…"}`.
+- A reasoning frame is a sign of life: it bumps the silence watchdog even when
+  the view is off — a long thinking phase that emits reasoning no longer leans
+  on the interval probe alone.
+- Only the SSE transport carries reasoning: with `HERMES_HANDS_STREAM=off`
+  (poll mode) there is nothing to show.
+
+## Unreleased — REPL cleanup
+
+- **`/quit` and `/q` are gone.** The REPL exits with `/exit` (Ctrl-D too) —
+  the one exit command `/help` and the README actually show. Two hidden
+  aliases for a single action added nothing but inconsistency.
+
 ## 0.10.0 — continuous releases; pre-public cleanup
 
 (first public release — 0.9.x was never tagged; `MIN_VERSION` 0.9.4 + a

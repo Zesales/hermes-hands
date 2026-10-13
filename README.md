@@ -85,17 +85,22 @@ the URL must be `https://…`. `hermes-hands --version` prints the version.
 ## Use
 
 **A session is one task.** There is no one-shot and no implicit resume: a bare
-run starts a fresh session. Continue an old one only when you ask (`--session`,
-or `/session <id>` in the REPL).
+run starts a fresh session. Resume an old one only by its id (`--session <id>`,
+`/session <id>`, or an rpc `use`) — exactly how editor plugins work: they keep
+the id from the `ready` event. A session idle for over an hour is flagged in
+`/session`: the gateway/model prompt caches (Bifrost, hermes-agent,
+Claude-style ~1h TTL) have likely expired, so its first resumed turn re-reads
+the full transcript and can cost full-price **input tokens** — an information
+hint, not a hard expiry. Its chat history is re-synced from hermes-agent on
+open regardless.
 
 ```sh
 hermes-hands                       # start a fresh session here (main use)
-hermes-hands --session             # continue this repo's latest session
 hermes-hands --session <id>        # open a specific session  (id from --session-list)
 hermes-hands --new                 # start a fresh session  (same as a bare run)
 hermes-hands --rpc                 # JSON-lines session server for an editor/plugin
 
-hermes-hands --session-list        # list sessions: id / turns / tokens / dir / title
+hermes-hands --session-list        # list sessions: id / turns / tokens / idle / dir / title
 hermes-hands sessions new          # mint a session id (prints it; for --session / --rpc)
 hermes-hands check                 # preflight the connection
 ```
@@ -104,7 +109,12 @@ Scripts drive `--rpc` (send one `turn`, read the `answer`, close stdin) rather
 than a per-call one-shot.
 
 REPL commands: `/help` `/new` `/session` (this session's detail — local + server
-numbers) `/session <id>` (switch) `/sessions` `/fork` (branch on the server)
+numbers) `/session <id>` (switch, shows that session's chat history) `/sessions`
+`/history` (full chat history of the current session; `/history <n>` last n, `/history <id>`
+another session's — read-only, stored as `sessions/<id>/session-history.md`)
+`/fork` (branch on the server)
+`/reasoning` (toggle the model's reasoning view: dim on stderr + appended to
+`verbose/hermes-hands-reasoning-<session-id>.md`; SSE transport only)
 `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits; `Ctrl-C` at
 the prompt just hints, during a turn it cancels the turn locally *and* stops the
 run on Hermes). `/setup` configures without leaving the session and the REPL
@@ -132,6 +142,16 @@ model gets a clean diff and needn't fight shell quoting. `edit_file` replaces on
 change from the old bash version). `write_file`/`edit_file` need the target's
 parent directory to already exist.
 
+The hands also tell Hermes **what your machine has**: each session start probes
+the machine once (OS/arch/kernel, cwd + git branch, repo signals like
+Makefile/compose, `make` targets, a fixed tool list via `exec.LookPath`) and
+appends a compact ~8-line brief to the instructions Hermes receives — the brain
+plans against known facts instead of burning tool rounds rediscovering them.
+The full record is `~/hermes-hands/known-system.json` (0600, written by
+hermes-hands only). A `shell` result with exit 127 records the tool as missing
+for the next session's brief; every session re-probes from scratch, so a stale
+"missing" is dropped the moment the tool is actually installed.
+
 ## Sessions
 
 The conversation is threaded **server-side**: every `POST /v1/runs` carries a
@@ -141,10 +161,13 @@ stable `session_id` (Hermes loads that session's transcript as context), plus an
 CLI adopts it. If the server ever rejects the id, the CLI retries fresh (keeping
 the headers) and falls back to a local transcript recap for that turn.
 
-The `/v1` API has no endpoint to *list* sessions, so a thin local index lives in
-`~/hermes-hands/sessions/` (`$HERMES_HANDS_STATE` overrides) purely to make a
-bare run (resume this repo's latest), `--session <id>`, and `sessions` work
-offline. Titles are also mirrored into Hermes via a best-effort
+The `/v1` API has no endpoint to *list* sessions, so a local session store
+lives in `~/hermes-hands/sessions/` (`$HERMES_HANDS_STATE` overrides) — one
+directory per session (`<id>/session.json`, `<id>/transcript.jsonl`,
+`<id>/session-history.md`) — to make `--session <id>`, `sessions`, and
+`/history` work offline. Sessions are addressed by id only (there is no
+per-directory "last session" pointer). Titles are also
+mirrored into Hermes via a best-effort
 `PATCH /api/sessions/{id}`.
 
 `/session` (in-REPL) and `--session-list` show per-session **turns**, the last
@@ -233,8 +256,9 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_API_PROFILE` | — | route to `/p/<profile>/` (needs that profile's own key) |
 | `HERMES_HANDS_APPROVE` | `ask` | `ask` \| `auto` \| `never` |
 | `HERMES_HANDS_STREAM` | `auto` | SSE answer streaming: `auto` (when advertised) \| `on` \| `off` |
+| `HERMES_HANDS_REASONING` | — | set in the config file: start the session with `/reasoning` on |
 | `HERMES_HANDS_DENY` | — | extra denied `shell` commands, `\|`-separated shell globs |
-| `HERMES_HANDS_MAX_ROUNDS` | `8` | delegation rounds per turn |
+| `HERMES_HANDS_MAX_ROUNDS` | `25` | delegation rounds per turn |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
 | `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`shell` keeps 2×) |
 | `HERMES_HANDS_RESPONSE_TIMEOUT` | `600` | seconds hermes-agent may go silent in a turn before it is cancelled; pushed back by any token / tool round / a live server-run probe (`0` = no limit) |

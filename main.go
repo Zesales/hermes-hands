@@ -30,6 +30,7 @@ import (
 	"github.com/Zesales/hermes-hands/internal/api"
 	"github.com/Zesales/hermes-hands/internal/config"
 	"github.com/Zesales/hermes-hands/internal/dispatch"
+	"github.com/Zesales/hermes-hands/internal/knowsystem"
 	"github.com/Zesales/hermes-hands/internal/loop"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/redact"
@@ -52,15 +53,14 @@ Hermes holds the plan/memory; it drives a persistent local shell plus
 read_file / write_file / edit_file to see and act on the repo you're in.
 
 A session is one task. There is no one-shot, and no auto-resume: a bare run
-starts a fresh session — continue an old one only when you ask.
+starts a fresh session — resume an old one by its id only (plugins keep the id).
 
   hermes-hands                    start a fresh session here (main use)
-  hermes-hands --session          continue this repo's latest session
   hermes-hands --session <id>     open a specific session  (id from --session-list)
   hermes-hands --new              start a fresh session  (same as a bare run)
   hermes-hands --rpc              JSON-lines session server for an editor/plugin
 
-  hermes-hands --session-list     list sessions with id / turns / tokens
+  hermes-hands --session-list     list sessions with id / turns / tokens / idle
   hermes-hands sessions new       mint a session id (for --session / --rpc)
   hermes-hands setup              first-run config  (also: /setup in-session)
   hermes-hands check              preflight the API connection
@@ -126,13 +126,13 @@ func parseArgs(args []string) parsed {
 		case "--new":
 			p.smode = "new"
 		case "--session":
-			// optional id: "--session" alone == continue the latest;
-			// "--session <id>" opens that one.
+			// resume is explicit by id: "--session <id>" opens that one; a bare
+			// "--session" has nothing to point at any more (no per-dir pointer).
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
 				p.smode = args[i]
 			} else {
-				p.smode = "continue"
+				p.errMsg = "--session needs a session id (ids from --session-list)"
 			}
 		case "--yolo":
 			p.yolo = true
@@ -183,12 +183,12 @@ func main() {
 	}
 
 	// Every mode works ON a session. A bare REPL run starts a fresh one (a
-	// session is one task — no implicit resume); `--session` with no id
-	// continues this repo's latest, `--session <id>` opens a specific one.
-	// `--rpc` still defaults to continue: an editor/plugin holding the process
-	// wants the same session across restarts, and drives new/use over the pipe.
+	// session is one task); resuming is always EXPLICIT by id (`--session <id>`,
+	// `/session <id>`, rpc `use`) — the way editor plugins work: they keep the
+	// id from the `ready` event. `--rpc` defaults to a fresh session and the
+	// plugin switches to its stored one with {"type":"use"}.
 	if p.rpc {
-		os.Exit(runRPC(orElse(p.smode, "continue")))
+		os.Exit(runRPC(orElse(p.smode, "new")))
 	}
 	os.Exit(runREPL(orElse(p.smode, "new")))
 }
@@ -328,6 +328,38 @@ func versionString() string {
 func warnf(f string, a ...any) { fmt.Fprintf(os.Stderr, "hermes-hands: WARNING: "+f+"\n", a...) }
 func logf(f string, a ...any)  { fmt.Fprintf(os.Stderr, "hermes-hands: "+f+"\n", a...) }
 
+// logReasoning appends one reasoning block to
+// $HERMES_HANDS_HOME/verbose/hermes-hands-reasoning-<session>.md (the
+// /reasoning debug log; 0600). Best-effort: a failure warns and never breaks
+// the turn. The text is scrubbed with the same redactor tool output goes
+// through before it reaches this call.
+func logReasoning(home, sessionID, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	dir := home + "/verbose"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		warnf("reasoning log: %v", err)
+		return
+	}
+	path := dir + "/hermes-hands-reasoning-" + sessionID + ".md"
+	first := false
+	if _, err := os.Stat(path); err != nil {
+		first = true
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		warnf("reasoning log: %v", err)
+		return
+	}
+	defer f.Close()
+	if first {
+		fmt.Fprintf(f, "# hermes-hands reasoning log — session %s\n\n", sessionID)
+	}
+	fmt.Fprintf(f, "## %s\n\n%s\n\n", time.Now().Format("2006-01-02 15:04:05"), text)
+}
+
 // --- app wiring ---
 
 type app struct {
@@ -339,6 +371,115 @@ type app struct {
 	shell    *shell.Shell
 	disp     *dispatch.Dispatcher
 	loop     *loop.Loop
+}
+
+// prepareResume wires a resumed session's history so continuing feels like
+// continuing:
+//   - the server still holds the transcript -> it is the source of truth: the
+//     local mirror (transcript.jsonl + session-history.md) is synced from it
+//     whenever the server has more exchanges than the local copy, so the local
+//     history always converges on what hermes-agent actually has.
+//   - the server lost it (404 / empty — e.g. a Hermes update, retention purge)
+//     -> the loop's first turn carries a replay of the local transcript, so the
+//     brain sees the conversation as if it had never been interrupted.
+func prepareResume(a *app, rec *session.Record) {
+	a.loop.ResumeNote = ""
+	if rec.HermesSessionID == "" || rec.Turns == 0 {
+		return // nothing has been said in this session yet
+	}
+	if idle := session.IdleFor(rec, time.Now()); idle > session.StaleAfter {
+		logf("session %s: idle %s — model prompt caches (Bifrost/hermes-agent/Claude-style) likely expired; syncing chat history first, expect a full-transcript replay on the first turn (token cost)", rec.ID, idle.Round(time.Minute))
+	}
+	si, err := a.client.SessionInfo(context.Background(), rec.HermesSessionID)
+	if err == nil && si.Messages > 0 {
+		// The server holds the conversation — sync the local mirror from it so
+		// transcript + session-history.md converge on the server's copy
+		// (sessions that predate local transcripts, splits where the server
+		// moved on, remote-side edits). Only a strictly larger server copy
+		// replaces the local one; local timestamps survive a tie.
+		msgs, e2 := a.client.SessionMessages(context.Background(), rec.HermesSessionID, 500)
+		if e2 != nil {
+			warnf("history sync: %v", e2)
+			return
+		}
+		serverTurns := turnsFromMessages(msgs, rec)
+		local, _ := a.store.LoadTranscript(rec)
+		if len(serverTurns) > len(local) {
+			if e3 := a.store.ReplaceTranscript(rec, serverTurns); e3 != nil {
+				warnf("history sync: %v", e3)
+			} else {
+				logf("session %s: chat history synced from hermes-agent — %d exchange(s) → %s", rec.ID, len(serverTurns), a.store.HistoryPath(rec.ID))
+			}
+		}
+		return
+	}
+	turns, err := a.store.LoadTranscript(rec)
+	if err != nil {
+		warnf("transcript: %v", err)
+		return
+	}
+	if len(turns) == 0 {
+		logf("session %s: server-side history unavailable and no local transcript — the session starts fresh", rec.ID)
+		return
+	}
+	a.loop.ResumeNote = session.ResumeRecap(turns)
+	logf("session %s: server-side history unavailable — replaying %d local turn(s) into the first message", rec.ID, len(turns))
+}
+
+// turnsFromMessages pairs a server transcript (user → assistant) into local
+// turns. Server records carry no per-message timestamps; the session's
+// creation time is used — honest enough for a mirror.
+func turnsFromMessages(msgs []api.SessionMessage, rec *session.Record) []session.Turn {
+	var turns []session.Turn
+	var pending string
+	for _, m := range msgs {
+		switch m.Role {
+		case "user":
+			pending = m.Content
+		case "assistant":
+			if pending != "" {
+				turns = append(turns, session.Turn{At: rec.Created, User: pending, Answer: m.Content})
+				pending = ""
+			}
+		}
+	}
+	return turns
+}
+
+// showChatHistory prints a session's full chat history (the same content its
+// session-history.md carries), oldest first. lastN > 0 shows only the last N
+// exchanges. Reading a session this way never switches the REPL to it.
+func showChatHistory(a *app, rec *session.Record, lastN int) {
+	turns, err := a.store.LoadTranscript(rec)
+	if err != nil {
+		warnf("history: %v", err)
+		return
+	}
+	if len(turns) == 0 {
+		fmt.Fprintf(os.Stderr, "  no chat history for %s yet — it is written to %s after each exchange\n\n", rec.ID, a.store.HistoryPath(rec.ID))
+		return
+	}
+	shown := turns
+	if lastN > 0 && len(shown) > lastN {
+		shown = shown[len(shown)-lastN:]
+	}
+	fmt.Fprintf(os.Stderr, "  chat history — %s (%d of %d exchange(s); file: %s)\n\n", rec.ID, len(shown), len(turns), a.store.HistoryPath(rec.ID))
+	for i, t := range shown {
+		at := t.At
+		if len(at) > 19 {
+			at = at[:19]
+		}
+		fmt.Fprintf(os.Stderr, "  %d. [%s] operator\n%s\n\n", i+1, at, indentBlock(strings.TrimSpace(t.User)))
+		fmt.Fprintf(os.Stderr, "     hermes-hands answer\n%s\n\n", indentBlock(strings.TrimSpace(t.Answer)))
+	}
+}
+
+func indentBlock(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = "     " + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // loadCfgOrExit resolves configuration, or prints "hermes-hands: <err>" and
@@ -357,6 +498,24 @@ func newApp() (*app, error) {
 	repoRoot := physicalCwd()
 	u := ui.New(os.Stderr)
 
+	// known system: probe the machine once per session so the brain is told
+	// what exists instead of rediscovering it with tool rounds (internal/
+	// knowsystem). The previous session's learned-missing facts are merged in,
+	// stale ones dropped by the fresh probe; the record lives in the home dir.
+	knownPath := cfg.Home + "/known-system.json"
+	known := knowsystem.Probe(repoRoot, gitBranch(repoRoot))
+	if old, err := knowsystem.Load(knownPath); err == nil {
+		known.MergeLearned(old)
+	} else if !os.IsNotExist(err) {
+		warnf("known-system: %v", err)
+	}
+	if err := os.MkdirAll(cfg.Home, 0o700); err != nil {
+		warnf("known-system: home: %v", err)
+	}
+	if err := known.Save(knownPath); err != nil {
+		warnf("known-system: save: %v", err)
+	}
+
 	var vlogf func(string, ...any)
 	if cfg.Verbose {
 		vlogf = func(f string, a ...any) { u.DimLine("hermes-hands: " + fmt.Sprintf(f, a...)) }
@@ -372,7 +531,7 @@ func newApp() (*app, error) {
 		Retries:      cfg.APIRetries,
 		PollInterval: cfg.PollInterval,
 		RunTimeout:   cfg.APIRunTimeout,
-		Instructions: resolveInstructions(cfg.InstrPath),
+		Instructions: resolveInstructions(cfg.InstrPath) + "\n\n" + known.Brief(),
 		StreamMode:   cfg.Stream,
 		Warnf:        warnf,
 		Log:          logf,
@@ -399,6 +558,13 @@ func newApp() (*app, error) {
 		MaxRounds: cfg.MaxRounds, Scrub: redact.Scrub,
 		RepoRoot: repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
 		Vlogf: vlogf, Warnf: warnf,
+		OnResult: func(tool, out string, exit int) {
+			if known.ObserveShell(out, exit) { // learned 127: persist immediately
+				if err := known.Save(knownPath); err != nil {
+					warnf("known-system: save: %v", err)
+				}
+			}
+		},
 	}
 	return &app{cfg, repoRoot, u, client, store, sh, disp, lp}, nil
 }
@@ -471,6 +637,11 @@ func runREPL(smode string) int {
 		fmt.Printf("BLOCKED: %s\n", err)
 		return 1
 	}
+	prepareResume(a, rec)
+	if rec.Turns > 0 {
+		// opening an old session shows its full chat history first
+		showChatHistory(a, rec, 0)
+	}
 
 	agentSID := "" // only real once a turn has confirmed it
 	if rec.Turns > 0 {
@@ -535,6 +706,12 @@ func runREPL(smode string) int {
 		}
 	}
 
+	// /reasoning toggles reasoning capture: the text is appended ONLY to
+	// $HERMES_HANDS_HOME/verbose/hermes-hands-reasoning-<session>.md — it is
+	// never printed to the terminal.
+	// HERMES_HANDS_REASONING=1 in the config file starts a session with it on.
+	reasoningOn := a.cfg.Reasoning
+
 	// Per-app wiring that must be redone when /setup swaps `a`:
 	//  - the approval gate reads its answer through liner (one terminal owner;
 	//    a separate /dev/tty reader deadlocks against liner's input goroutine),
@@ -553,7 +730,16 @@ func runREPL(smode string) int {
 			wd.bump()
 		}
 		a.client.OnDelta = func(s string) { wd.bump(); fs.feed(s) } // previews the `final` text; any token = progress
-		a.loop.OnTool = func(string, string, int) { wd.bump() }     // a completed tool round = progress
+		a.client.OnReasoning = func(s string) {
+			wd.bump() // a reasoning frame is a sign of life too — extends the watchdog deadline
+			if !reasoningOn {
+				return
+			}
+			// reasoning is file-only: it lands in the verbose/ md log and is
+			// never printed to the terminal — it clutters the answer output.
+			logReasoning(a.cfg.Home, rec.ID, redact.Scrub(s))
+		}
+		a.loop.OnTool = func(string, string, int) { wd.bump() } // a completed tool round = progress
 	}
 	wireApp()
 
@@ -587,7 +773,7 @@ func runREPL(smode string) int {
 		switch cmd {
 		case "":
 			continue
-		case "/exit", "/quit", "/q":
+		case "/exit":
 			return 0
 		case "/help", "/h", "/?":
 			a.ui.Help(a.repoRoot)
@@ -646,7 +832,31 @@ func runREPL(smode string) int {
 				continue
 			}
 			rec = nr
+			prepareResume(a, rec)
 			a.ui.NewSessionNote(rec.ID)
+			if rec.Turns > 0 {
+				showChatHistory(a, rec, 0)
+			}
+			continue
+		case "/history", "/chat-history":
+			lastN, idArg := 0, ""
+			if rest != "" {
+				if n, e := strconv.Atoi(rest); e == nil && n > 0 {
+					lastN = n
+				} else {
+					idArg = rest
+				}
+			}
+			target := rec
+			if idArg != "" {
+				nr2, e := a.store.Load(idArg)
+				if e != nil {
+					fmt.Fprintf(os.Stderr, "  no such session: %s\n\n", idArg)
+					continue
+				}
+				target = nr2
+			}
+			showChatHistory(a, target, lastN)
 			continue
 		case "/yolo":
 			if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
@@ -657,6 +867,22 @@ func runREPL(smode string) int {
 					ta.Mode = "auto"
 					fmt.Fprintln(os.Stderr, "  approvals: OFF (yolo) — shell / write run unattended")
 				}
+			}
+			fmt.Fprintln(os.Stderr)
+			continue
+		case "/reasoning", "/reasoning-show":
+			switch strings.ToLower(rest) {
+			case "on", "true", "yes":
+				reasoningOn = true
+			case "off", "false", "no":
+				reasoningOn = false
+			default:
+				reasoningOn = !reasoningOn
+			}
+			if reasoningOn {
+				fmt.Fprintf(os.Stderr, "  reasoning: ON — appended to %s/verbose/hermes-hands-reasoning-%s.md (log file only, never shown on screen)\n", a.cfg.Home, rec.ID)
+			} else {
+				fmt.Fprintln(os.Stderr, "  reasoning: OFF (reasoning frames still extend the watchdog deadline)")
 			}
 			fmt.Fprintln(os.Stderr)
 			continue
@@ -769,6 +995,11 @@ func runREPL(smode string) int {
 		if out.OK {
 			if changed, _ := a.store.SetTitleLocal(rec, input); changed && rec.HermesSessionID != "" {
 				a.client.SetTitle(context.Background(), rec.HermesSessionID, rec.Title)
+			}
+			// Keep the local transcript copy current — it is what a future
+			// resume can replay when the server-side history is gone.
+			if err := a.store.AppendTurn(rec, input, out.Answer); err != nil {
+				warnf("transcript: %v", err)
 			}
 		}
 		fmt.Fprintln(os.Stderr)

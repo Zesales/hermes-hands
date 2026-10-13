@@ -157,10 +157,12 @@ func TestIntegration_OperatorQuestionSurvivesStarvedGateway(t *testing.T) {
 func TestIntegration_SessionContinuity(t *testing.T) {
 	h := newHarness(t, "plain")
 
-	if _, rec := h.turn(t, "new", "one"); rec.Turns != 1 {
-		t.Fatalf("after turn 1, Turns = %d", rec.Turns)
+	_, first := h.turn(t, "new", "one")
+	if first.Turns != 1 {
+		t.Fatalf("after turn 1, Turns = %d", first.Turns)
 	}
-	_, rec := h.turn(t, "continue", "two")
+	// resume is explicit by id (the plugin pattern)
+	_, rec := h.turn(t, first.ID, "two")
 	if rec.Turns != 2 {
 		t.Errorf("after -c turn 2, Turns = %d, want 2", rec.Turns)
 	}
