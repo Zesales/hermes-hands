@@ -314,3 +314,39 @@ func TestFinalStreamer(t *testing.T) {
 		t.Errorf("reset left state: %+v", fs)
 	}
 }
+
+func TestOfferGuidanceImport(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
+	os.MkdirAll(filepath.Join(home, ".codex"), 0o755)
+	os.WriteFile(filepath.Join(home, ".claude", "CLAUDE.md"), []byte("no ssh to the LAN\n"), 0o644)
+	os.WriteFile(filepath.Join(home, ".codex", "AGENTS.md"), []byte("pin versions exactly\n"), 0o644)
+	os.WriteFile(filepath.Join(home, "AGENTS.md"), []byte("no ssh to the LAN"), 0o644) // same rules again
+	dir := filepath.Join(t.TempDir(), "hermes-hands")
+	dst := filepath.Join(dir, globalGuidanceFile)
+
+	offerGuidanceImport(bufio.NewReader(strings.NewReader("n\n")), dir)
+	if _, err := os.Stat(dst); err == nil {
+		t.Fatal("declined import must write nothing")
+	}
+	offerGuidanceImport(bufio.NewReader(strings.NewReader("y\n")), dir)
+	b, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Count(got, "no ssh to the LAN") != 1 || !strings.Contains(got, "pin versions exactly") ||
+		!strings.Contains(got, "## from "+filepath.Join(home, ".claude", "CLAUDE.md")) {
+		t.Errorf("guidance.md =\n%s", got)
+	}
+	if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0o600 {
+		t.Errorf("guidance.md perms = %v", fi.Mode().Perm())
+	}
+	// an existing import is only replaced on an explicit yes
+	os.WriteFile(dst, []byte("hand-edited"), 0o600)
+	offerGuidanceImport(bufio.NewReader(strings.NewReader("\n")), dir)
+	if b, _ := os.ReadFile(dst); string(b) != "hand-edited" {
+		t.Error("an existing import was replaced without a yes")
+	}
+}
