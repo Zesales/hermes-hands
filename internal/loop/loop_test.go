@@ -279,7 +279,7 @@ func TestRoundBudgetNotes(t *testing.T) {
 	if !strings.Contains(sa.msgs[5], "5/7 rounds used, 2 left") {
 		t.Errorf("ask 6 should carry the countdown, got: %q", trunc(sa.msgs[5], 300))
 	}
-	// Ask 7 (6 rounds ran): the last executable round — hard final demand.
+	// Ask 7 (6 rounds ran): its reply is the last round whose calls run.
 	if !strings.Contains(sa.msgs[6], "LAST round (7/7)") {
 		t.Errorf("ask 7 should demand a final after the last round, got: %q", trunc(sa.msgs[6], 300))
 	}

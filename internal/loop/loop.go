@@ -467,8 +467,9 @@ func oneLine(s string) string {
 
 // roundBudgetNote is the countdown to the round cap, appended to the results
 // payload when the ceiling gets close: a soft nudge for the last 5 rounds
-// (finish, or plan the continuation), and on the very last round a hard
-// instruction that the next reply must be a final. Making the ceiling visible
+// (finish, or plan the continuation), a heads-up before the last round whose
+// calls still run, and once none is left a hard instruction that the reply must
+// be a final. Making the ceiling visible
 // while rounds are still left is what turns the cap from a punishment into a
 // planning input — the model batches calls or lands a clean final instead of
 // burning a round to hit the wall.
@@ -481,7 +482,7 @@ func (l *Loop) roundBudgetNote(nextRound int) string {
 	case left <= 0:
 		return "\n[round budget: no tool rounds remain — your reply must be {\"calls\":[],\"final\":\"...\"} stating what is done and what a continuation must do.]"
 	case left == 1:
-		return fmt.Sprintf("\n[round budget: this is the LAST round (%d/%d). After these results, your next reply must be {\"calls\":[],\"final\":\"...\"} stating what is done and what a continuation must do.]", nextRound, l.MaxRounds)
+		return fmt.Sprintf("\n[round budget: your next envelope is the LAST round (%d/%d) whose calls still run — put everything you still need into it. After its results your reply must be {\"calls\":[],\"final\":\"...\"} stating what is done and what a continuation must do.]", nextRound, l.MaxRounds)
 	case left > 1 && left <= 5:
 		return fmt.Sprintf("\n[round budget: %d/%d rounds used, %d left. Finish now, or batch the remaining calls and land a final that says what the continuation must do.]", nextRound-1, l.MaxRounds, left)
 	}
