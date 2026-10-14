@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -289,6 +290,12 @@ func splitCmd(s string) (cmd, rest string) {
 	}
 	return s, ""
 }
+
+var slashCmdRe = regexp.MustCompile(`^/[A-Za-z?][A-Za-z0-9_-]*$`)
+
+// isSlashCmd reports whether the first word looks like a REPL command
+// ("/quit"), as opposed to a message that starts with a path ("/etc/hosts …").
+func isSlashCmd(cmd string) bool { return slashCmdRe.MatchString(cmd) }
 
 // --- version strings ---
 
@@ -942,6 +949,12 @@ func runREPL(smode string) int {
 			// edit the file by hand (see the header this prints).
 			fmt.Fprint(os.Stderr, formatConfig(a.cfg))
 			fmt.Fprintln(os.Stderr)
+			continue
+		}
+		// An unknown /command never goes to Hermes as a task: a typo or a
+		// dropped alias (/quit) would otherwise cost a whole run.
+		if isSlashCmd(cmd) {
+			fmt.Fprintf(os.Stderr, "  unknown command %s — /help lists the commands, /exit leaves\n\n", cmd)
 			continue
 		}
 
