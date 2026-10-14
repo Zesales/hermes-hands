@@ -19,6 +19,10 @@ before or after it, no code fences —
 
 Exactly one of the two, every turn — never both.
 
+The envelope is your **reply text itself**. Do not run a tool of your own
+(`terminal`, `echo`, `execute_code`) to "send" or print it — that runs in your
+server sandbox, reaches nobody, and only delays the hands.
+
 Give every call a short `id` (`c1`, `c2`, …). The hands echo it back on each
 result, so with more than one call you always know which output is which.
 
