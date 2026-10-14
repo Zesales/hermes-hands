@@ -38,20 +38,12 @@ jobs:
   release:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-24.04
-    env:
-      GOFLAGS: -mod=vendor   # deps are vendored; CI never touches the network
     steps:
       # actions/checkout v4.2.2, pinned by commit
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: main
           fetch-depth: 0   # full history + tags, for `git tag -l` / describe
-      # actions/setup-go v7.0.0, pinned by commit
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: '1.26.7'   # exact, must equal go.mod
-          check-latest: false
-
       - name: Decide bump level
         id: lvl
         env:
@@ -108,6 +100,8 @@ jobs:
         if: steps.lvl.outputs.skip != 'true'
         env:
           VERSION: ${{ steps.v.outputs.version }}
+        # cross-compiles in the Makefile's pinned Go container (GO_IMAGE) — the
+        # same toolchain test.yml gated the PR with; deps are vendored
         run: ./build.sh release
 
       - name: Publish

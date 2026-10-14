@@ -7,7 +7,8 @@ A built-in, machine-bound, **no-passphrase** encrypted store for the Hermes URL
 
 This is **at-rest protection only.** It makes a copied / backed-up
 `secrets.enc` useless on another machine (or another uid), and keeps the key
-out of a plaintext dotfile. The blob is bound to `/etc/machine-id` + your uid —
+out of a plaintext dotfile. The blob is bound to the machine id (Linux / WSL:
+`/etc/machine-id`; macOS: the hardware `IOPlatformUUID`) + your uid —
 **not** hostname (dropped as too fragile: renames, DHCP, WSL — for near-zero
 gain over "the keyseed is already a 0600 file"). It does **not** defend against anything running as
 your uid — including an approved `shell` command — reading the key. The
@@ -31,8 +32,11 @@ from exactly that list: `["keyseed","machine-id","uid"]`, or
   `masterKey = HKDF(ikm = keyseed, salt = machine-id bytes (nil when unbound), info = "hermes-hands secrets v1 uid=<uid>")`, 32 bytes.
 - **Cipher:** AES-256-GCM (`crypto/aes` + `crypto/cipher`), a fresh 12-byte
   nonce from `crypto/rand` per write, AAD = the literal `hermes-hands/secrets.enc/v1`.
-- **machine-id:** `/etc/machine-id`, then `/var/lib/dbus/machine-id`, else omit
-  from `binds` and derive from `keyseed` + uid only. Whitespace trimmed.
+- **machine-id:** `/etc/machine-id`, then `/var/lib/dbus/machine-id`; on macOS
+  the `IOPlatformUUID` from `ioreg -rd1 -c IOPlatformExpertDevice` (upper-cased).
+  None available: omit from `binds` and derive from `keyseed` + uid only.
+  Whitespace trimmed. A blob written before macOS got its machine id (bound to
+  `keyseed` + uid only) keeps decrypting — `binds` records what it used.
 
 ## Runtime load order (`internal/config.Load`)
 
