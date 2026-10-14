@@ -32,6 +32,7 @@ import (
 	"github.com/Zesales/hermes-hands/internal/config"
 	"github.com/Zesales/hermes-hands/internal/debuglog"
 	"github.com/Zesales/hermes-hands/internal/dispatch"
+	"github.com/Zesales/hermes-hands/internal/guard"
 	"github.com/Zesales/hermes-hands/internal/knowsystem"
 	"github.com/Zesales/hermes-hands/internal/loop"
 	"github.com/Zesales/hermes-hands/internal/prompt"
@@ -453,6 +454,7 @@ func newApp() (*app, error) {
 		Log:          logf,
 		Vlogf:        vlogf,
 	}
+	client.Guard = sandboxGuard(cfg.Sandbox, repoRoot, os.Getenv("HOME"))
 
 	store, err := session.Open(cfg.StateDir)
 	if err != nil {
@@ -492,6 +494,53 @@ func newApp() (*app, error) {
 		},
 	}
 	return &app{cfg, repoRoot, u, client, store, sh, disp, lp}, nil
+}
+
+// sandboxGuard is the policy for Hermes' own server-side exec / file calls in
+// a hands run (HERMES_HANDS_SANDBOX): smart steers only calls aimed at the
+// operator's machine (internal/guard), steer every one, show none.
+func sandboxGuard(mode, workspace, home string) func(tool, preview string) (bool, string) {
+	switch mode {
+	case guard.Steer:
+		return nil // the client's strict default
+	case guard.Show:
+		return func(string, string) (bool, string) { return false, "" }
+	}
+	return func(tool, preview string) (bool, string) { return guard.Targets(tool, preview, workspace, home) }
+}
+
+// askServerApproval puts an approval request of Hermes' OWN server-side tool
+// to the operator. It is a separate trust domain from the hands' approvals,
+// so their [a]ll latch never answers it. o = once, s = for this Hermes
+// session, anything else = deny. Without an interactive prompt (approvals
+// auto / never) it is a deny — a server command nobody looked at never runs.
+func askServerApproval(ap prompt.Approver, tool, what string) string {
+	ta, ok := ap.(*prompt.TTYApprover)
+	if !ok || ta.Mode != "ask" || ta.AskLine == nil {
+		return "deny"
+	}
+	if ta.Pause != nil {
+		defer ta.Pause()()
+	}
+	out := ta.Out
+	if out == nil {
+		out = os.Stderr
+	}
+	if tool == "" {
+		tool = "a tool"
+	}
+	fmt.Fprintf(out, "\n  ⚠  hermes wants to run %s on its SERVER sandbox (not your machine):\n      %s\n", tool, what)
+	line, err := ta.AskLine("  [o]nce  [s]ession  [n]o > ")
+	if err != nil {
+		return "deny"
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "o", "y", "once":
+		return "once"
+	case "s", "session":
+		return "session"
+	}
+	return "deny"
 }
 
 // pruneFiles deletes the files in dir older than maxAge, then dir itself once
@@ -688,6 +737,7 @@ func runREPL(smode string) int {
 		}
 		a.client.OnDelta = func(s string) { wd.bump(); fs.feed(s) } // previews the `final` text; any token = progress
 		a.client.OnEvent = func(string) { wd.bump() }               // any SSE frame is a sign of life
+		a.client.OnApproval = func(tool, what string) string { return askServerApproval(a.disp.Approver, tool, what) }
 		a.client.OnHermesTool = func(tool, preview, action string) {
 			ev := evlog.add(session.Event{Kind: session.KindHermesTool, Tool: tool, Text: preview, Action: action})
 			evlog.show(ev, "")
@@ -1113,6 +1163,7 @@ func formatConfig(cfg *config.Config) string {
 		{"HERMES_HANDS_WATCHDOG_INTERVAL", secs(cfg.WatchdogInterval)},
 		{"HERMES_HANDS_RETENTION_DAYS", retention(cfg.RetentionDays)},
 		{"HERMES_HANDS_DEBUG", onOff(cfg.Debug)},
+		{"HERMES_HANDS_SANDBOX", cfg.Sandbox},
 		{"HERMES_HANDS_MAX_ROUNDS", strconv.Itoa(cfg.MaxRounds)},
 		{"HERMES_HANDS_RUN_TIMEOUT", strconv.Itoa(cfg.RunTimeout) + "s"},
 		{"HERMES_API_RUN_TIMEOUT", secs(cfg.APIRunTimeout)},
@@ -1232,7 +1283,8 @@ const setupConfigBody = "# hermes-hands config  —  edit by hand; `/config` sho
 	"# HERMES_HANDS_RESPONSE_TIMEOUT=600     # seconds hermes-agent may go silent in a turn before it is cancelled (0 = no limit)\n" +
 	"# HERMES_HANDS_WATCHDOG_INTERVAL=200    # seconds between server-side 'still working?' checks that push that limit back\n" +
 	"# HERMES_HANDS_RETENTION_DAYS=14        # local sessions idle longer are deleted on start, debug trace included (0 = keep)\n" +
-	"# HERMES_HANDS_DEBUG=1                  # start with /debug on: redacted connection trace per session\n"
+	"# HERMES_HANDS_DEBUG=1                  # start with /debug on: redacted connection trace per session\n" +
+	"# HERMES_HANDS_SANDBOX=smart            # Hermes' own server terminal/file tools: smart | steer | show\n"
 
 func runSetup() int {
 	plaintext := false

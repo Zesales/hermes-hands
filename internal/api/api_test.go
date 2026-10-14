@@ -515,3 +515,49 @@ func TestSetTitle_RetriesTakenTitle(t *testing.T) {
 		t.Errorf("titles tried = %q", titles)
 	}
 }
+
+func TestStreamRun_GuardPolicyAndOperatorApproval(t *testing.T) {
+	// with a policy: server-side work passes (shown as "server"), a call aimed
+	// at the operator's machine is steered; an approval goes to the operator
+	body := "" +
+		`data: {"event": "tool.started", "tool": "execute_code", "preview": "print(1+1)"}` + "\n\n" +
+		`data: {"event": "tool.started", "tool": "terminal", "preview": "make test"}` + "\n\n" +
+		`data: {"event": "approval.request", "request_id": "ap-7", "command": "rm -rf /tmp/build"}` + "\n\n" +
+		`data: {"event": "run.completed", "output": "{\"calls\":[],\"final\":\"ok\"}"}` + "\n\n"
+	var steers, approvals []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		switch r.URL.Path {
+		case "/v1/runs/run_p/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, body)
+		case "/v1/runs/run_p/steer":
+			steers = append(steers, string(b))
+			io.WriteString(w, `{"accepted":true}`)
+		case "/v1/runs/run_p/approval":
+			approvals = append(approvals, string(b))
+			io.WriteString(w, `{"resolved":1}`)
+		}
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+	c.Guard = func(tool, preview string) (bool, string) {
+		return strings.HasPrefix(preview, "make"), "`make` — the operator's repo"
+	}
+	var asked string
+	c.OnApproval = func(tool, what string) string { asked = what; return "once" }
+	var seen []string
+	c.OnHermesTool = func(tool, preview, action string) { seen = append(seen, tool+"/"+action) }
+	if _, err := c.streamRun(context.Background(), srv.URL, "run_p", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, " ") != "execute_code/server terminal/steered approval/approved" {
+		t.Errorf("hermes tools = %q", seen)
+	}
+	if len(steers) != 1 || !strings.Contains(steers[0], "the operator's repo") || !strings.Contains(steers[0], "server-side work") {
+		t.Errorf("steer = %q, want the policy's reason and the server-side allowance", steers)
+	}
+	if asked != "rm -rf /tmp/build" || len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"once"`) {
+		t.Errorf("approval: asked %q, sent %q", asked, approvals)
+	}
+}
