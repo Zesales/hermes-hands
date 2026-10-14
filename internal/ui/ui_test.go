@@ -81,15 +81,6 @@ func TestYouIndentsEveryLine(t *testing.T) {
 	}
 }
 
-func TestCallClipsPreviewAt72(t *testing.T) {
-	var b strings.Builder
-	newUI(&b, false, false).Call("shell", strings.Repeat("x", 100), 0)
-	want := "   ⟩ shell   " + strings.Repeat("x", 72) + "  exit 0\n"
-	if b.String() != want {
-		t.Errorf("Call =\n%q\nwant\n%q", b.String(), want)
-	}
-}
-
 func TestAnswerPlainPathIndents(t *testing.T) {
 	old := lookPath
 	lookPath = func(string) (string, error) { return "", errors.New("not found") }
@@ -128,6 +119,7 @@ func TestHelpByteExact(t *testing.T) {
 		"Type a message to your Hermes brain",
 		"in /home/x/repo,",
 		"/new", "/session <id>", "/sessions", "/fork", "/yolo", "/setup", "/config", "/check", "/help", "/exit",
+		"/history", "/out <n>", "/debug",
 		"Ctrl-C cancels the running turn",
 	} {
 		if !strings.Contains(got, want) {
@@ -296,11 +288,11 @@ func TestSyncClearsSpinnerLine(t *testing.T) {
 	u.mu.Lock()
 	u.spinning = true
 	u.mu.Unlock()
-	u.Call("shell", "ls", 0)
+	u.CallStart(1, "shell", "ls", nil)
 	if !strings.HasPrefix(b.String(), "\r\x1b[K") {
-		t.Errorf("Call while spinning must clear the line first, got %q", b.String())
+		t.Errorf("CallStart while spinning must clear the line first, got %q", b.String())
 	}
 	if !strings.Contains(b.String(), "shell") {
-		t.Errorf("Call content missing: %q", b.String())
+		t.Errorf("CallStart content missing: %q", b.String())
 	}
 }

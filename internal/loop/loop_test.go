@@ -124,19 +124,6 @@ func TestLtrimFirstLine(t *testing.T) {
 	}
 }
 
-func TestPreviewOf(t *testing.T) {
-	if got := previewOf(json.RawMessage(`{"cmd":"ls -la\nfoo"}`)); got != "ls -la foo" {
-		t.Errorf("previewOf cmd = %q", got)
-	}
-	if got := previewOf(json.RawMessage(`{"path":"src/x.go"}`)); got != "src/x.go" {
-		t.Errorf("previewOf path = %q", got)
-	}
-	long := strings.Repeat("z", 100)
-	if got := previewOf(json.RawMessage(`{"pattern":"` + long + `"}`)); len(got) != 72 {
-		t.Errorf("previewOf clip len = %d", len(got))
-	}
-}
-
 // --- Run: terminal outcomes ---
 
 func TestRunPlainFinal(t *testing.T) {
@@ -541,5 +528,38 @@ func TestRunNoFrameWithoutRepoRoot(t *testing.T) {
 	_ = l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
 	if sa.msgs[0] != "hello" {
 		t.Errorf("without RepoRoot the message must pass through, got %q", sa.msgs[0])
+	}
+}
+
+func TestRunEmitsCallBeforeResultWithSessionRefs(t *testing.T) {
+	// Two calls in one envelope: each is announced (KindCall) before it runs
+	// and reported (KindResult) after, numbered on from the session's last
+	// ref; Hermes sees the same number as "ref" in its results.
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(`{"calls":[{"id":"c1","tool":"read_file","args":{"path":"foo.txt"}},{"id":"c2","tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	var evs []session.Event
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 5, Ref: 41,
+		Emit: func(ev session.Event) { evs = append(evs, ev) }}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "done" {
+		t.Fatalf("out = %+v", out)
+	}
+	var got []string
+	for _, e := range evs {
+		got = append(got, fmt.Sprintf("%s#%d", e.Kind, e.Ref))
+	}
+	if strings.Join(got, " ") != "call#42 result#42 call#43 result#43" {
+		t.Errorf("events = %v", got)
+	}
+	if evs[1].Exit == nil || *evs[1].Exit != 0 || evs[1].Out != "filecontent" || evs[0].ID != "c1" {
+		t.Errorf("result payload = %+v / call = %+v", evs[1], evs[0])
+	}
+	if l.Ref != 43 {
+		t.Errorf("l.Ref = %d, want 43", l.Ref)
+	}
+	if !strings.Contains(sa.msgs[1], `"id":"c1","ref":42`) || !strings.Contains(sa.msgs[1], `"id":"c2","ref":43`) {
+		t.Errorf("results must carry the refs: %s", trunc(sa.msgs[1], 400))
 	}
 }

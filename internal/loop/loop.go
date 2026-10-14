@@ -12,11 +12,11 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Zesales/hermes-hands/internal/api"
 	"github.com/Zesales/hermes-hands/internal/dispatch"
 	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/ui"
 )
 
 // Asker is the slice of the Hermes client the loop needs; *api.Client
@@ -34,9 +34,18 @@ type Loop struct {
 	// OnResult sees each dispatched tool result (tool, raw output, exit code).
 	// The knowsystem learner uses it to catch 127 "command not found" facts.
 	OnResult  func(tool, output string, exit int)
-	UI        *ui.UI
 	MaxRounds int
 	Scrub     func(string) string
+
+	// Emit, when set, receives every hands call as two events: KindCall right
+	// BEFORE it runs (so the operator sees what is running, not only what
+	// ran) and KindResult after it, carrying the scrubbed output in Event.Out.
+	// The caller stores and renders them.
+	Emit func(ev session.Event)
+
+	// Ref is the last session-wide call number handed out; every call takes
+	// the next one (#Ref). The caller seeds it from the session's event log.
+	Ref int
 
 	// RepoRoot / GitBranch feed the per-turn frame that reminds Hermes it is
 	// driving a remote terminal and names the cwd. Both optional; an empty
@@ -44,17 +53,13 @@ type Loop struct {
 	RepoRoot  string
 	GitBranch func() string
 
-	// OnTool, when set, is called once per executed tool call (in addition to
-	// UI). --rpc uses it to emit a JSON progress event.
-	OnTool func(tool, preview string, exit int)
-
 	// PendingNote carries a one-off line to prepend to the next turn's message
 	// (e.g. "the previous turn was cancelled"). Set by Run, consumed by Run.
 	PendingNote string
 
 	// ResumeNote carries a one-off block to prepend to the FIRST turn of a
-	// resumed session whose server-side transcript was lost (the local replay,
-	// see session.ResumeRecap). Set by the caller, consumed by Run.
+	// resumed session whose server-side history was lost (the local replay,
+	// see session.Recap). Set by the caller, consumed by Run.
 	ResumeNote string
 
 	Vlogf func(string, ...any)
@@ -271,10 +276,15 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			id := mkID(i, calls[i].id())
 			tool := firstNonEmpty(calls[i].Tool, calls[i].Name)
 			args := callArgs(calls[i])
-			preview := previewOf(args)
+			l.Ref++
+			ref := l.Ref
+			l.emit(session.Event{Kind: session.KindCall, Ref: ref, ID: id, Tool: tool, Args: args})
 
+			start := time.Now()
 			result, derr := l.Dispatch.Dispatch(tool, args)
 			if errors.Is(derr, dispatch.ErrAbortTurn) {
+				l.emit(session.Event{Kind: session.KindResult, Ref: ref, Tool: tool, Exit: session.Int(125),
+					Ms: time.Since(start).Milliseconds(), Out: "(declined by the operator — turn stopped)"})
 				// Ctrl-C / "q" at an approval = decline this call AND stop the
 				// turn. Nothing more runs; Hermes is told at the start of the
 				// next turn so its transcript stays coherent.
@@ -282,22 +292,20 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 					"\" approval — that call was declined and nothing further was run. Treat it as not done.]"
 				return Outcome{Answer: "(cancelled — declined " + tool + " and stopped the turn)", OK: true}
 			}
-			if l.UI != nil {
-				l.UI.Call(tool, preview, result.Exit)
-			}
-			if l.OnTool != nil {
-				l.OnTool(tool, preview, result.Exit)
-			}
+			out := l.scrub(result.Out)
+			l.emit(session.Event{Kind: session.KindResult, Ref: ref, Tool: tool, Exit: session.Int(result.Exit),
+				Ms: time.Since(start).Milliseconds(), Out: out})
 			if l.OnResult != nil { // knowsystem learner: sees raw output + exit
 				l.OnResult(tool, result.Out, result.Exit)
 			}
 
 			e := resultElem{
 				ID:       id,
+				Ref:      ref,
 				Tool:     tool,
 				Args:     args,
 				ExitCode: result.Exit,
-				Output:   l.scrub(result.Out),
+				Output:   out,
 			}
 			if c := l.scrub(result.Ctx); c != "" {
 				e.Context = &c
@@ -329,6 +337,7 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 
 type resultElem struct {
 	ID       string          `json:"id"`
+	Ref      int             `json:"ref"` // the session-wide #ref the operator sees
 	Tool     string          `json:"tool"`
 	Args     json.RawMessage `json:"args"`
 	ExitCode int             `json:"exit_code"`
@@ -390,26 +399,10 @@ func callArgs(c callSpec) json.RawMessage {
 	return compact(raw)
 }
 
-// previewOf ports `jq -r '(.cmd // .path // .pattern // "")' | tr '\n' ' ' | head -c 72`.
-func previewOf(args json.RawMessage) string {
-	var m map[string]json.RawMessage
-	_ = json.Unmarshal(args, &m)
-	p := ""
-	for _, k := range []string{"cmd", "path", "pattern"} {
-		raw, ok := m[k]
-		if !ok || isJSONNull(raw) {
-			continue
-		}
-		var s string
-		if json.Unmarshal(raw, &s) == nil {
-			p = s
-		} else {
-			p = strings.TrimSpace(string(raw))
-		}
-		break
+func (l *Loop) emit(ev session.Event) {
+	if l.Emit != nil {
+		l.Emit(ev)
 	}
-	p = strings.ReplaceAll(p, "\n", " ")
-	return trunc(p, 72)
 }
 
 func ltrimFirstLine(s string) string {

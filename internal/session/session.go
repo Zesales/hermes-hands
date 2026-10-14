@@ -1,20 +1,21 @@
 // Package session is the local session store. One directory per session,
-// under <state>/sessions/<id>/:
+// under <state>/sessions/<id>/ (0700, every file 0600):
 //
-//	<id>/session.json       — the thin index record (`--session <id>` and
-//	                          `sessions` work offline from these)
-//	<id>/transcript.jsonl   — the machine transcript: canonical, append-only,
-//	                          one JSON object per completed exchange
-//	<id>/session-history.md — the FULL chat history rendered as readable
-//	                          markdown, regenerated from the transcript after
-//	                          every exchange (for the operator to read and for
-//	                          a hermes-remote to fetch)
+//	<id>/session.json  — the thin index record (`--session <id>` and
+//	                     `sessions` work offline from these)
+//	<id>/events.jsonl  — everything the terminal showed, as an append-only
+//	                     event log (see Event): the operator's messages, every
+//	                     hands call and result, Hermes' own tool attempts, the
+//	                     answers, the turn footers. The REPL renders a live turn
+//	                     and a reopened session from the same events, so a
+//	                     resume shows the session exactly as it ran.
+//	<id>/out/<ref>.txt — the full (scrubbed) output of call #ref; events only
+//	                     carry its size, the excerpt is rendered from this
+//	<id>/debug.jsonl   — the /debug wire trace, redacted (only while /debug is on)
 //
-// The live conversation lives on the Hermes server; the transcript is hermes-
-// hands' own backup mirror of it and session-history.md is that transcript's
-// pure rendering (hand edits to the .md never leak into a resume replay).
-// Open() migrates the pre-directory layout (<id>.json plus
-// transcripts/<id>.jsonl) into this layout automatically on next start.
+// The conversation the model sees lives on the Hermes server; this store is
+// the operator's local record of it and never syncs anywhere. Sessions idle
+// longer than the retention window are deleted on start (Prune).
 package session
 
 import (
@@ -48,7 +49,9 @@ type Record struct {
 	LastTokens       int    `json:"last_tokens,omitempty"` // best-effort tokens from the last run's usage
 	Splits           int    `json:"splits,omitempty"`      // times Hermes handed back a different session id (~ compactions)
 
-	path string // on-disk path; not serialised
+	path      string // on-disk path; not serialised
+	seq       int    // last event Seq written (see AppendEvent)
+	seqLoaded bool
 }
 
 // Store is the <state>/sessions directory.
@@ -59,73 +62,56 @@ type Store struct {
 	rnd   func() int
 }
 
-// Open ensures <stateDir>/sessions exists, migrates any pre-directory session
-// files into <id>/ directories, and returns the store. stateDir is
-// config.Config.StateDir (already resolved from the process env). Sessions are
-// addressed by id only — the old per-directory "last session" pointer is gone
-// (an editor/plugin keeps the id from the ready event; see Resolve).
+// Open ensures <stateDir>/sessions exists, tightens permissions left by older
+// versions, and returns the store. stateDir is config.Config.StateDir (already
+// resolved from the process env). Sessions are addressed by id only (an
+// editor/plugin keeps the id from the ready event; see Resolve).
 func Open(stateDir string) (*Store, error) {
 	s := &Store{dir: stateDir + "/sessions"}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return nil, err
 	}
-	s.migrate()
+	s.tidy()
 	return s, nil
 }
 
-func (s *Store) sessionDir(id string) string     { return s.dir + "/" + id }
-func (s *Store) path(id string) string           { return s.dir + "/" + id + "/session.json" }
-func (s *Store) transcriptPath(id string) string { return s.dir + "/" + id + "/transcript.jsonl" }
+func (s *Store) sessionDir(id string) string { return s.dir + "/" + id }
+func (s *Store) path(id string) string       { return s.dir + "/" + id + "/session.json" }
 
-// HistoryPath is where the FULL chat history lives as a readable document:
-// <state>/sessions/<id>/session-history.md — one directory per session.
-func (s *Store) HistoryPath(id string) string {
-	return s.sessionDir(id) + "/session-history.md"
-}
-
-// migrate converts the flat pre-directory layout (<id>.json plus
-// transcripts/<id>.jsonl) into <id>/session.json + <id>/transcript.jsonl +
-// <id>/session-history.md. It runs on every Open and is idempotent: a session
-// already in the directory layout is skipped. A per-session failure is skipped
-// silently (the load fallbacks still read the legacy files), so a half-
-// migrated state never hard-fails a run.
-func (s *Store) migrate() {
-	legacy, _ := filepath.Glob(s.dir + "/*.json")
-	for _, p := range legacy {
-		id := strings.TrimSuffix(filepath.Base(p), ".json")
-		if id == "" || id == "session" {
-			continue
-		}
-		if _, err := os.Stat(s.path(id)); err == nil {
-			continue // already migrated
-		}
-		if err := os.MkdirAll(s.sessionDir(id), 0o755); err != nil {
-			continue
-		}
-		if err := os.Rename(p, s.path(id)); err != nil {
-			continue
-		}
-		if b, err := os.ReadFile(s.dir + "/transcripts/" + id + ".jsonl"); err == nil {
-			if os.WriteFile(s.transcriptPath(id), b, 0o600) == nil {
-				_ = os.Remove(s.dir + "/transcripts/" + id + ".jsonl")
-			}
-		}
-		rec := &Record{ID: id}
-		if rb, err := os.ReadFile(s.path(id)); err == nil && json.Valid(rb) {
-			_ = json.Unmarshal(rb, rec)
-			rec.ID = id
-		}
-		if turns, _ := s.LoadTranscript(rec); len(turns) > 0 {
-			_ = os.WriteFile(s.HistoryPath(id), []byte(RenderHistory(rec, turns)), 0o644)
-		}
-	}
-	// tidy the emptied legacy transcripts directory
-	if entries, err := os.ReadDir(s.dir + "/transcripts"); err == nil && len(entries) == 0 {
-		_ = os.Remove(s.dir + "/transcripts")
-	}
+// tidy runs on every Open: it drops the obsolete by-cwd pointer directory and
+// tightens what older versions left world-readable.
+func (s *Store) tidy() {
 	// the legacy by-cwd "last session" pointer is obsolete — sessions are
 	// addressed by id, so the pointer dir is dropped on Open
 	_ = os.RemoveAll(s.dir + "/by-cwd")
+
+	// The store holds chat history and command output: 0700 dirs, 0600 files.
+	// Older versions wrote 0755 / 0644, and os.WriteFile keeps an existing
+	// file's mode — so tighten what is already on disk.
+	tighten(s.dir, 0o700)
+	entries, _ := os.ReadDir(s.dir)
+	for _, e := range entries {
+		p := s.dir + "/" + e.Name()
+		switch {
+		case e.IsDir():
+			tighten(p, 0o700)
+			files, _ := os.ReadDir(p)
+			for _, f := range files {
+				if f.Type().IsRegular() {
+					tighten(p+"/"+f.Name(), 0o600)
+				}
+			}
+		case e.Type().IsRegular():
+			tighten(p, 0o600)
+		}
+	}
+}
+
+// tighten chmods p to want when it carries any permission bit beyond want.
+func tighten(p string, want os.FileMode) {
+	if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&^want != 0 {
+		_ = os.Chmod(p, want)
+	}
 }
 
 // New mints a session rooted at cwd (hh_session_new): a local index id and the
@@ -210,9 +196,8 @@ func (s *Store) List() ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	flat, _ := filepath.Glob(s.dir + "/*.json") // legacy files, if migration skipped them
 	var recs []Record
-	for _, p := range append(dirs, flat...) {
+	for _, p := range dirs {
 		b, err := os.ReadFile(p)
 		if err != nil || !json.Valid(b) {
 			continue
@@ -221,11 +206,7 @@ func (s *Store) List() ([]Record, error) {
 		if json.Unmarshal(b, &r) != nil {
 			continue
 		}
-		id := strings.TrimSuffix(filepath.Base(p), ".json")
-		if id == "session" {
-			id = filepath.Base(filepath.Dir(p))
-		}
-		r.ID = id
+		r.ID = filepath.Base(filepath.Dir(p))
 		r.path = p
 		recs = append(recs, r)
 	}
@@ -348,15 +329,13 @@ func orDash(s string) string {
 // `basename`), authoritative over any .id inside. A readable-but-corrupt file
 // yields a bare record, matching bash's jq-fails-to-empty behaviour.
 func (s *Store) load(id string) (*Record, error) {
+	if err := validID(id); err != nil {
+		return nil, err
+	}
 	p := s.path(id)
 	b, err := os.ReadFile(p)
 	if err != nil {
-		// legacy flat record, if Open's migration never saw this file
-		if b2, e2 := os.ReadFile(s.dir + "/" + id + ".json"); e2 == nil {
-			b = b2
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
 	rec := &Record{ID: id, path: p}
 	if json.Valid(b) {
@@ -372,11 +351,11 @@ func (s *Store) write(rec *Record) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(rec.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(rec.path), 0o700); err != nil {
 		return err
 	}
 	tmp := rec.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, rec.path)
@@ -427,181 +406,4 @@ func trunc(s string, n int) string {
 		return s[:n]
 	}
 	return s
-}
-
-// --- local transcript -------------------------------------------------------
-//
-// The live conversation lives on the Hermes server. The transcript is hermes-
-// hands' own backup copy of it (JSONL, one object per completed exchange), so
-// resuming a session can still load its history when the server-side record
-// was lost (retention, migration, session purge).
-
-// Turn is one completed exchange in the local transcript.
-type Turn struct {
-	At     string `json:"at"`
-	User   string `json:"user"`
-	Answer string `json:"answer"`
-}
-
-// AppendTurn adds one completed exchange to the session's transcript. Call
-// sites treat it as best-effort: a failure warns and never breaks the turn.
-func (s *Store) AppendTurn(rec *Record, userMsg, answer string) error {
-	return s.SaveTranscript(rec, []Turn{{
-		At:     s.nowFn().UTC().Format("2006-01-02T15:04:05Z"),
-		User:   userMsg,
-		Answer: answer,
-	}})
-}
-
-// SaveTranscript appends turns to the session's transcript file (used for
-// per-turn appends and for seeding the local copy from the server).
-func (s *Store) SaveTranscript(rec *Record, turns []Turn) error {
-	if rec.ID == "" || len(turns) == 0 {
-		return nil
-	}
-	if err := os.MkdirAll(s.sessionDir(rec.ID), 0o755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(s.transcriptPath(rec.ID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	for _, t := range turns {
-		line, err := json.Marshal(t)
-		if err != nil {
-			return err
-		}
-		if _, err := f.Write(append(line, '\n')); err != nil {
-			return err
-		}
-	}
-	return s.UpdateHistory(rec)
-}
-
-// LoadTranscript reads a session's transcript turns (oldest first). A missing
-// transcript is not an error — it yields an empty slice.
-func (s *Store) LoadTranscript(rec *Record) ([]Turn, error) {
-	b, err := os.ReadFile(s.transcriptPath(rec.ID))
-	if err != nil {
-		if os.IsNotExist(err) {
-			// legacy location, if migration never saw this session
-			if b2, e2 := os.ReadFile(s.dir + "/transcripts/" + rec.ID + ".jsonl"); e2 == nil {
-				b = b2
-			} else {
-				return nil, nil
-			}
-		} else {
-			return nil, err
-		}
-	}
-	var turns []Turn
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || !json.Valid([]byte(line)) {
-			continue
-		}
-		var t Turn
-		if json.Unmarshal([]byte(line), &t) != nil {
-			continue
-		}
-		turns = append(turns, t)
-	}
-	return turns, nil
-}
-
-// HasTranscript reports whether a non-empty transcript file exists.
-func (s *Store) HasTranscript(rec *Record) bool {
-	st, err := os.Stat(s.transcriptPath(rec.ID))
-	return err == nil && st.Size() > 0
-}
-
-// ReplaceTranscript overwrites the transcript with turns — used by the resume
-// sync when the server-side copy is more complete than the local mirror (the
-// server is the source of truth; the local transcript is its mirror).
-func (s *Store) ReplaceTranscript(rec *Record, turns []Turn) error {
-	if rec.ID == "" {
-		return nil
-	}
-	if err := os.MkdirAll(s.sessionDir(rec.ID), 0o755); err != nil {
-		return err
-	}
-	var b strings.Builder
-	for _, t := range turns {
-		line, err := json.Marshal(t)
-		if err != nil {
-			return err
-		}
-		b.Write(append(line, '\n'))
-	}
-	if err := os.WriteFile(s.transcriptPath(rec.ID), []byte(b.String()), 0o600); err != nil {
-		return err
-	}
-	return s.UpdateHistory(rec)
-}
-
-// UpdateHistory regenerates <state>/sessions/<id>/session-history.md from the
-// transcript: the whole conversation, oldest first, unclipped. The transcript
-// is canonical; the .md is a pure rendering, so it is rebuilt on every append
-// and can be recreated from scratch at any time.
-func (s *Store) UpdateHistory(rec *Record) error {
-	if rec.ID == "" {
-		return nil
-	}
-	turns, err := s.LoadTranscript(rec)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(s.sessionDir(rec.ID), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(s.HistoryPath(rec.ID), []byte(RenderHistory(rec, turns)), 0o644)
-}
-
-// RenderHistory renders the full chat history of a session as markdown — for
-// the operator to read and for a future hermes-remote to fetch.
-func RenderHistory(rec *Record, turns []Turn) string {
-	title := rec.Title
-	if title == "" {
-		title = "(untitled)"
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n\n", title)
-	fmt.Fprintf(&b, "- hermes-hands session: %s\n", rec.ID)
-	fmt.Fprintf(&b, "- hermes-agent session: %s\n", orDash(rec.HermesSessionID))
-	fmt.Fprintf(&b, "- dir: %s\n", rec.Cwd)
-	fmt.Fprintf(&b, "- created / updated: %s / %s\n", rec.Created, rec.Updated)
-	fmt.Fprintf(&b, "- exchanges: %d\n\n", len(turns))
-	for i, t := range turns {
-		at := t.At
-		if at == "" {
-			at = "(undated)"
-		}
-		fmt.Fprintf(&b, "## %d. %s — operator\n\n", i+1, at)
-		b.WriteString(strings.TrimSpace(t.User) + "\n\n")
-		b.WriteString("**hermes-hands answer**\n\n")
-		b.WriteString(strings.TrimSpace(t.Answer) + "\n\n")
-	}
-	return b.String()
-}
-
-// ResumeRecap renders the local transcript as the block Hermes is shown when a
-// resumed session's server-side history was unavailable: the last exchanges,
-// oldest first, each clipped so the replay stays token-friendly.
-func ResumeRecap(turns []Turn) string {
-	const maxTurns = 20
-	if len(turns) > maxTurns {
-		turns = turns[len(turns)-maxTurns:]
-	}
-	var b strings.Builder
-	b.WriteString("[resumed session — the Hermes-side transcript of this session was not available, so hermes-hands replays its local copy of the conversation so far. Treat it as your own history: continue where it left off instead of re-doing finished steps.]\n")
-	for _, t := range turns {
-		b.WriteString("[operator] " + oneLine(t.User, 300) + "\n")
-		b.WriteString("[hermes-hands answer] " + oneLine(t.Answer, 800) + "\n")
-	}
-	return b.String()
-}
-
-func oneLine(s string, n int) string {
-	return trunc(strings.Join(strings.Fields(s), " "), n)
 }
