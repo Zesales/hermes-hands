@@ -223,6 +223,17 @@ func TestSplitCmd(t *testing.T) {
 	}
 }
 
+func TestIsSlashCmd(t *testing.T) {
+	for in, want := range map[string]bool{
+		"/quit": true, "/q": true, "/?": true, "/chat-history": true,
+		"/etc/hosts": false, "/home/x/repo": false, "hello": false, "/": false, "": false,
+	} {
+		if got := isSlashCmd(in); got != want {
+			t.Errorf("isSlashCmd(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestRPCReqUnmarshal(t *testing.T) {
 	var r rpcReq
 	if err := json.Unmarshal([]byte(`{"id":7,"type":"turn","text":"hi"}`), &r); err != nil {
