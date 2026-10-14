@@ -496,17 +496,18 @@ func newApp() (*app, error) {
 	return &app{cfg, repoRoot, u, client, store, sh, disp, lp}, nil
 }
 
-// sandboxGuard is the policy for Hermes' own server-side exec / file calls in
-// a hands run (HERMES_HANDS_SANDBOX): smart steers only calls aimed at the
-// operator's machine (internal/guard), steer every one, show none.
-func sandboxGuard(mode, workspace, home string) func(tool, preview string) (bool, string) {
+// sandboxGuard is the policy for Hermes' own tool calls in a hands run
+// (HERMES_HANDS_SANDBOX): smart steers only what is aimed at the operator's
+// machine or calls a hands tool as Hermes' own (guard.Check), steer every
+// server-side exec / file call (guard.Strict), show never steers.
+func sandboxGuard(mode, workspace, home string) func(tool, preview string) guard.Verdict {
 	switch mode {
 	case guard.Steer:
-		return nil // the client's strict default
+		return guard.Strict
 	case guard.Show:
-		return func(string, string) (bool, string) { return false, "" }
+		return func(string, string) guard.Verdict { return guard.Verdict{} }
 	}
-	return func(tool, preview string) (bool, string) { return guard.Targets(tool, preview, workspace, home) }
+	return func(tool, preview string) guard.Verdict { return guard.Check(tool, preview, workspace, home) }
 }
 
 // askServerApproval puts an approval request of Hermes' OWN server-side tool

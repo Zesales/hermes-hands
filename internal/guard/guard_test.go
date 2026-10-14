@@ -3,6 +3,7 @@ package guard
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,5 +42,42 @@ func TestTargets(t *testing.T) {
 		if got && why == "" {
 			t.Errorf("Targets(%s, %q): a steer needs a reason", tc.tool, tc.preview)
 		}
+	}
+}
+
+func TestCheckAndStrict(t *testing.T) {
+	repo := t.TempDir()
+	os.WriteFile(filepath.Join(repo, "Makefile"), []byte("x"), 0o644)
+
+	// the live follow-up: after a steer, Hermes tried its deferral mechanism
+	for _, tc := range []struct{ tool, preview string }{
+		{"tool_call", "Local Shell"},
+		{"tool_search", "local_read"},
+		{"local_shell", ""},
+		{"terminal", "local_shell ls"},
+	} {
+		if v := Check(tc.tool, tc.preview, repo, ""); !v.Steer || v.Kind != "hands-tool" {
+			t.Errorf("Check(%s, %q) = %+v, want a hands-tool steer", tc.tool, tc.preview, v)
+		}
+	}
+	if v := Check("terminal", "cat Makefile", repo, ""); !v.Steer || v.Kind != "sandbox" ||
+		!strings.Contains(v.Message, "names Makefile") || !strings.Contains(v.Message, "server-side work") {
+		t.Errorf("sandbox verdict = %+v", v)
+	}
+	for _, tc := range []struct{ tool, preview string }{
+		{"execute_code", "print(1)"},      // server work
+		{"tool_call", "Noop Placeholder"}, // nothing of the hands'
+		{"web_search", "go 1.26"},
+		{"cronjob_manage", "nightly report"},
+	} {
+		if v := Check(tc.tool, tc.preview, repo, ""); v.Steer {
+			t.Errorf("Check(%s, %q) steered: %+v", tc.tool, tc.preview, v)
+		}
+	}
+	if v := Strict("execute_code", "print(1)"); !v.Steer || v.Kind != "sandbox" {
+		t.Errorf("Strict must steer every server exec call: %+v", v)
+	}
+	if v := Strict("cronjob_manage", "x"); v.Steer {
+		t.Errorf("Strict must leave non-exec tools alone: %+v", v)
 	}
 }
