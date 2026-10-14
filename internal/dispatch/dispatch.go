@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -72,9 +71,6 @@ func (d *Dispatcher) doShell(args map[string]json.RawMessage) (Result, error) {
 	}
 	if reason, blocked := cmdBlocked(cmd, d.Deny); blocked {
 		return Result{Exit: 126, Out: "(blocked by worker policy: " + reason + ")"}, nil
-	}
-	if runtime.GOOS == "windows" {
-		return Result{Exit: 126, Out: "(blocked by worker policy: shell is unsupported on windows - use WSL)"}, nil
 	}
 
 	switch d.Approver.Confirm("shell: "+cmd, "") {

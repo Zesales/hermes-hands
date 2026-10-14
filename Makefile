@@ -2,16 +2,19 @@
 # install.sh (see README); this Makefile is for maintainers.
 #
 # The toolchain is pinned IN the repo: every go / gofmt / vet / test / build
-# runs inside $(GO_IMAGE) via `docker run` — the host needs nothing installed
-# but Docker: no system Go, no PATH hunting, no version drift; the checkout
-# itself says which Go it needs (keep GO_IMAGE's version equal to go.mod's
-# `go` line). `GO_MODE=local` falls back to a host-installed go — that is what
-# the CI workflows set (their runners pin go.mod's version via setup-go).
+# runs inside $(GO_IMAGE), a throwaway `docker run --rm` container — the host
+# needs nothing but Docker: no system Go, no version drift; the checkout itself
+# says which Go it needs (keep GO_IMAGE's version equal to go.mod's `go` line).
+# Only the BUILD runs in the container: `make dev` / `dev-setup` / `dev-install`
+# run the resulting binary on THIS host — hermes-hands is the local hands, its
+# shell must be your real bash, PATH, tools and machine-id, not the image's.
+# `GO_MODE=local` swaps the container for a host-installed go (same flags).
 #
-# CI never calls `make` directly — it calls ./build.sh. But `build.sh release`
-# runs `make clean dist` internally, so the `dist` target IS on the release
-# path: the published binaries are cross-compiled by it. What is NOT here is
-# the GitHub-specific release logic (compute the next version, tag it, generate
+# CI runs the same container: test.yml calls `make lint test` and
+# `./build.sh release` (which runs `make clean dist`), release.yml calls
+# `./build.sh release` — so GO_IMAGE is the ONE place the Go version is pinned
+# for builds (go.mod's `go` line must match it). What is NOT here is the
+# GitHub-specific release logic (compute the next version, tag it, generate
 # notes, publish) — that lives entirely in .github/workflows/release.yml.
 #
 # There is no VERSION file — git tags are the source of truth. `git describe`
@@ -24,39 +27,48 @@ GIT_SHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(GIT_SHA)
 PREFIX   ?= $(HOME)/.local
 BINDIR   ?= $(PREFIX)/bin
-# Linux + macOS only. On Windows hermes-hands runs inside WSL (a Linux binary):
-# native Windows has no `bash` for the `shell` tool, no /dev/tty, no $HOME.
+# Linux (WSL included) + macOS only. On Windows hermes-hands runs inside WSL (a
+# Linux binary) — a native windows build fails on purpose (internal/shell/platform.go).
 GOOSARCH := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+# The host the binary must run on — the container is always linux, so `build`
+# cross-compiles for the host explicitly (a macOS host gets a darwin binary).
+HOST_OS   := $(shell uname -s | tr A-Z a-z)
+HOST_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 
 # `make dev` runs a self-contained dev instance out of ./.dev/ (gitignored):
 # its own HERMES_HANDS_HOME, so sessions/config never touch your real
 # ~/hermes-hands/. The machine-bound key is copied over from your real home on
 # first run (it is bound to machine-id + uid, not its path, so the copy still
-# decrypts — the container mounts the host's /etc/machine-id read-only and
-# runs as your uid/gid, so the binding stays identical); `make dev-setup`
-# instead prompts for a separate key. The prompt is read LIVE from
-# share/instructions.md — edit it, `make dev` again, no rebuild.
+# decrypts); `make dev-setup` instead prompts for a separate key. The prompt is
+# read LIVE from share/instructions.md — edit it, `make dev` again; code changes
+# are rebuilt (incrementally, cached) on every `make dev`.
 DEV_HOME  ?= $(CURDIR)/.dev
 REAL_HOME ?= $(or $(HERMES_HANDS_HOME),$(HOME)/hermes-hands)
 ARGS      ?=
 
-# ---- toolchain: pinned in the repo, executed in a container ----------------
+# ---- toolchain: pinned in the repo, executed in a throwaway container ------
 GO_MODE  ?= docker
-# GO_IMAGE version MUST equal go.mod's `go` line
-GO_IMAGE ?= golang:1.26.7-alpine
+# GO_IMAGE version MUST equal go.mod's `go` line. Debian, not alpine: the
+# shell / dispatch / loop tests need bash and skip silently without it.
+GO_IMAGE ?= golang:1.26.7-bookworm
 # persistent build+module cache, host-owned, wiped by `make clean`
 GO_CACHE := $(CURDIR)/.dev/gocache
 
 UID      := $(shell id -u)
 GID      := $(shell id -g)
-TTY      := $(shell [ -t 0 ] && echo -t)  # -t only with a real terminal (the make dev REPL)
-MID      := $(if $(wildcard /etc/machine-id),-v /etc/machine-id:/etc/machine-id:ro,)
 
 # The pinned toolchain, run in the checkout, as your uid/gid: every file go
 # writes (dist/, .dev/) stays owned by you. Caches persist under ./.dev/gocache.
-docker-run = docker run --rm -i $(TTY) $(MID) -v $(CURDIR):/src -w /src -v $(GO_CACHE):/cache -e HOME=/tmp -e GOPATH=/cache/gopath -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod --user $(UID):$(GID)
-# the same offline flags the CI gate uses: vendored deps, CGO off
-go-flags   = -e CGO_ENABLED=0 -e GOFLAGS=-mod=vendor
+docker-run = docker run --rm -v $(CURDIR):/src -w /src -v $(GO_CACHE):/cache -e HOME=/tmp -e GOPATH=/cache/gopath -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod --user $(UID):$(GID)
+
+# $(call tc,VAR=value ...) prefixes a toolchain command: in the container
+# (GO_MODE=docker) or on the host's go (GO_MODE=local). Both get the offline
+# flags the CI gate uses — vendored deps, CGO off — plus any extra VAR=value.
+ifeq ($(GO_MODE),docker)
+tc = $(docker-run) -e CGO_ENABLED=0 -e GOFLAGS=-mod=vendor $(addprefix -e ,$(1)) $(GO_IMAGE)
+else
+tc = env CGO_ENABLED=0 GOFLAGS=-mod=vendor $(1)
+endif
 
 .PHONY: help toolchain dev dev-setup dev-install uninstall test lint ci build dist clean
 .DEFAULT_GOAL := help
@@ -72,28 +84,20 @@ toolchain:  ## docker pull the pinned Go image + print its version (once, first 
 	docker pull $(GO_IMAGE)
 	docker run --rm $(GO_IMAGE) go version
 
-dev: | $(GO_CACHE)  ## run from source out of ./.dev/ — live share/instructions.md; ARGS= forwards CLI flags
+dev: build  ## build in the container, run it on this host out of ./.dev/ — live share/instructions.md; ARGS= forwards CLI flags
 	@mkdir -p $(DEV_HOME)
 	@if [ ! -e "$(DEV_HOME)/secrets.enc" ] && [ -f "$(REAL_HOME)/secrets.enc" ] && [ -f "$(REAL_HOME)/keyseed" ]; then \
 	  install -m 0600 "$(REAL_HOME)/secrets.enc" "$(DEV_HOME)/secrets.enc"; \
 	  install -m 0600 "$(REAL_HOME)/keyseed"     "$(DEV_HOME)/keyseed"; \
 	  echo "make dev: reused the key from $(REAL_HOME)/  (make clean to refresh)"; \
 	fi
-ifeq ($(GO_MODE),docker)
-	$(docker-run) $(go-flags) -e HERMES_HANDS_HOME=/src/.dev -e HERMES_HANDS_INSTRUCTIONS=/src/share/instructions.md $(GO_IMAGE) go run -ldflags '$(LDFLAGS)' . $(ARGS)
-else
 	HERMES_HANDS_HOME=$(DEV_HOME) \
 	HERMES_HANDS_INSTRUCTIONS=$(CURDIR)/share/instructions.md \
-	go run -ldflags '$(LDFLAGS)' . $(ARGS)
-endif
+	./dist/hermes-hands $(ARGS)
 
 dev-setup: build  ## prompt for a separate key for ./.dev/  (else `make dev` reuses ~/hermes-hands/)
 	@mkdir -p $(DEV_HOME)
-ifeq ($(GO_MODE),docker)
-	$(docker-run) $(go-flags) -e HERMES_HANDS_HOME=/src/.dev $(GO_IMAGE) go run -ldflags '$(LDFLAGS)' . setup
-else
-	HERMES_HANDS_HOME=$(DEV_HOME) go run -ldflags '$(LDFLAGS)' . setup
-endif
+	HERMES_HANDS_HOME=$(DEV_HOME) ./dist/hermes-hands setup
 
 dev-install: build  ## build, then copy the binary onto your PATH  (PREFIX=/BINDIR= override)
 	@mkdir -p $(BINDIR)
@@ -108,51 +112,31 @@ uninstall:  ## remove the installed binary from your PATH
 ##@ Verify  (the same checks the PR gate runs)
 
 test: | $(GO_CACHE)  ## go test ./... — offline (vendored), no network, no model
-ifeq ($(GO_MODE),docker)
-	$(docker-run) $(go-flags) $(GO_IMAGE) go test ./...
-else
-	CGO_ENABLED=0 go test ./...
-endif
+	$(call tc) go test ./...
 
-lint: | $(GO_CACHE)  ## gofmt check + go vet   (STATICCHECK=1 also runs staticcheck — needs network)
-ifeq ($(GO_MODE),docker)
-	@bad=$$($(docker-run) $(go-flags) $(GO_IMAGE) sh -c 'find . -name "*.go" -not -path "./vendor/*" -not -path "./.dev/*" -exec gofmt -l {} +'); test -z "$$bad" || { echo "gofmt needs a run on:"; echo "$$bad"; exit 1; }
-	$(docker-run) $(go-flags) $(GO_IMAGE) go vet ./...
-ifdef STATICCHECK
-	$(docker-run) -e CGO_ENABLED=0 -e GOFLAGS=-mod=mod $(GO_IMAGE) go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 ./...
-endif
-else
-	@bad=$$(gofmt -l $$(find . -name '*.go' -not -path './vendor/*' -not -path './.dev/*')); \
+lint: | $(GO_CACHE)  ## gofmt check + go vet for linux AND darwin   (STATICCHECK=1 also runs staticcheck — needs network)
+	@bad=$$($(call tc) sh -c 'find . -name "*.go" -not -path "./vendor/*" -not -path "./.dev/*" -exec gofmt -l {} +'); \
 	 test -z "$$bad" || { echo "gofmt needs a run on:"; echo "$$bad"; exit 1; }
-	go vet ./...
+	$(call tc) go vet ./...
+	$(call tc,GOOS=darwin GOARCH=arm64) go vet ./...
 ifdef STATICCHECK
-	go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 ./...
-endif
+	$(call tc,GOFLAGS=-mod=mod) go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 ./...
 endif
 
-ci: lint test dist  ## the PR gate, locally: lint + test + release cross-build + a windows compile
-ifeq ($(GO_MODE),docker)
-	$(docker-run) $(go-flags) -e GOOS=windows -e GOARCH=amd64 $(GO_IMAGE) go build ./...
-else
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
-endif
+ci: lint test dist  ## the PR gate, locally: lint (linux + darwin) + test + release cross-build
 
 ##@ Artifacts
 
 build: | $(GO_CACHE)  ## dist/hermes-hands for this host  (VERSION + git sha baked in)
 	@mkdir -p dist
-ifeq ($(GO_MODE),docker)
-	$(docker-run) $(go-flags) $(GO_IMAGE) go build -trimpath -ldflags '$(LDFLAGS)' -o dist/hermes-hands .
-else
-	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/hermes-hands .
-endif
+	$(call tc,GOOS=$(HOST_OS) GOARCH=$(HOST_ARCH)) go build -trimpath -ldflags '$(LDFLAGS)' -o dist/hermes-hands .
 
 dist: | $(GO_CACHE)  ## cross-compile every target into dist/  (build.sh + release.yml call this; does NOT publish)
 	@mkdir -p dist
 	@set -e; for t in $(GOOSARCH); do \
-	  os=$${t%/*}; arch=$${t#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
-	  echo "building dist/hermes-hands_$${os}_$${arch}$$ext"; \
-	  $(docker-run) $(go-flags) -e GOOS=$$os -e GOARCH=$$arch $(GO_IMAGE) go build -trimpath -ldflags '$(LDFLAGS)' -o dist/hermes-hands_$${os}_$${arch}$$ext . ; \
+	  os=$${t%/*}; arch=$${t#*/}; \
+	  echo "building dist/hermes-hands_$${os}_$${arch}"; \
+	  $(call tc,GOOS=$$os GOARCH=$$arch) go build -trimpath -ldflags '$(LDFLAGS)' -o dist/hermes-hands_$${os}_$${arch} . ; \
 	done
 
 $(GO_CACHE):
