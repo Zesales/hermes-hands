@@ -45,22 +45,48 @@ type Dispatcher struct {
 
 var timeoutRe = regexp.MustCompile(`^[0-9]+$`)
 
+// The hands' tools. Named local_* so the brain never mixes them up with its
+// OWN server-side read_file / write_file / terminal; the old names stay as
+// aliases.
+const (
+	Shell = "local_shell"
+	Read  = "local_read"
+	Write = "local_write"
+	Edit  = "local_edit"
+)
+
+// Canonical maps a tool name or any alias to its local_* name ("" when it is
+// no hands tool).
+func Canonical(tool string) string {
+	switch tool {
+	case Shell, "shell", "run", "bash", "exec", "terminal":
+		return Shell
+	case Read, "read_file", "read", "cat":
+		return Read
+	case Write, "write_file", "write":
+		return Write
+	case Edit, "edit_file", "edit":
+		return Edit
+	}
+	return ""
+}
+
 // Dispatch runs one tool call. tool may be an alias. A nil error means the turn
 // continues (bash `return 0`); ErrAbortTurn means abort (bash `return 3`).
 func (d *Dispatcher) Dispatch(tool string, rawArgs json.RawMessage) (Result, error) {
 	args := parseArgs(rawArgs)
 
-	switch tool {
-	case "shell", "run", "bash", "exec", "terminal":
+	switch Canonical(tool) {
+	case Shell:
 		return d.doShell(args)
-	case "read_file", "read", "cat":
+	case Read:
 		return d.doRead(args), nil
-	case "write_file", "write":
+	case Write:
 		return d.doWrite(args)
-	case "edit_file", "edit":
+	case Edit:
 		return d.doEdit(args)
 	default:
-		return Result{Exit: 2, Out: "unknown tool '" + tool + "' (have: shell, read_file, write_file, edit_file)"}, nil
+		return Result{Exit: 2, Out: "unknown tool '" + tool + "' (the hands have: local_shell, local_read, local_write, local_edit)"}, nil
 	}
 }
 

@@ -162,19 +162,23 @@ Hermes drives these tools, all in the directory you launched from:
 
 | tool | args | approval |
 |---|---|---|
-| `shell` | `{cmd, timeout?}` | **each command** (unless `--yolo`) |
-| `read_file` | `{path}` | — (confined to the repo root) |
-| `write_file` | `{path, content}` | **with a diff** |
-| `edit_file` | `{path, old, new}` | **with a diff** (`old` must match once) |
+| `local_shell` | `{cmd, timeout?}` | **each command** (unless `--yolo`) |
+| `local_read` | `{path}` | — (confined to the repo root) |
+| `local_write` | `{path, content}` | **with a diff** |
+| `local_edit` | `{path, old, new}` | **with a diff** (`old` must match once) |
 
-`shell` is a **persistent login bash** rooted at your repo — `cd`, exported
+The `local_*` names keep them apart from Hermes' own server-side `read_file` /
+`write_file` / `terminal`; the old names (`shell`, `read_file`, `write_file`,
+`edit_file`) still work as aliases.
+
+`local_shell` is a **persistent login bash** rooted at your repo — `cd`, exported
 vars, and shell functions/aliases from your `~/.bashrc` survive between calls in
 a session, so Hermes operates it like a real terminal (`ls`, `rg`, `git`,
 `make`, build/test) rather than a fixed toolbox. No tty: interactive programs
-won't work. `read_file`/`write_file`/`edit_file` are structured helpers so the
-model gets a clean diff and needn't fight shell quoting. `edit_file` replaces one
+won't work. `local_read`/`local_write`/`local_edit` are structured helpers so the
+model gets a clean diff and needn't fight shell quoting. `local_edit` replaces one
 **literal** occurrence of `old` (no regex, no `&` metacharacters — a deliberate
-change from the old bash version). `write_file`/`edit_file` need the target's
+change from the old bash version). `local_write`/`local_edit` need the target's
 parent directory to already exist.
 
 The hands also tell Hermes **what your machine has**: each session start probes

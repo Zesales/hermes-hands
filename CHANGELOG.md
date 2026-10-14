@@ -133,6 +133,13 @@ scripts and plugins — see **Sessions** and **REPL**.
 
 ### Turn protocol
 
+- **The hands' tools are `local_shell`, `local_read`, `local_write`,
+  `local_edit`.** Hermes has server-side tools named `read_file`,
+  `write_file`, `terminal`; with the hands using the same names, the model
+  mixed them up (live: it ran its own `terminal` before using the hands in
+  4 of 5 runs). The old names stay as aliases; events, results and the
+  terminal speak `local_*`.
+
 - **Round budget is visible to Hermes**: the task frame states the ceiling,
   the results count down over the last 5 rounds, the round before the last one
   warns that its successor is the last whose calls run, and a capped turn
