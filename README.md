@@ -43,9 +43,12 @@ not change.**
 
 **Requirements**
 
-- **OS:** Linux or macOS, `x86-64` or `arm64`. On Windows, run it **inside
-  WSL** (use the Linux binary) — native Windows has no `bash`, no `/dev/tty`,
-  no `$HOME`.
+- **OS:** Linux (WSL included) or macOS, `x86-64` or `arm64`. There is no
+  native Windows build — on Windows, run it **inside WSL** (the Linux binary):
+  native Windows has no `bash`, no `/dev/tty`, no process groups, and WSL is
+  the better place to develop anyway. On macOS the hands run whatever `bash`
+  is first on `PATH` (the system's 3.2, or Homebrew's 5.x) and Hermes is told
+  about the BSD userland (see below).
 - **`bash`** on `PATH` — the `shell` tool drives a persistent `bash --login`.
   Without it only `read_file` / `write_file` / `edit_file` work.
 - Nothing else to *run* the binary: one static executable, no `curl` / `jq`, no
@@ -91,8 +94,8 @@ the id from the `ready` event. A session idle for over an hour is flagged in
 `/session`: the gateway/model prompt caches (Bifrost, hermes-agent,
 Claude-style ~1h TTL) have likely expired, so its first resumed turn re-reads
 the full transcript and can cost full-price **input tokens** — an information
-hint, not a hard expiry. Its chat history is re-synced from hermes-agent on
-open regardless.
+hint, not a hard expiry. Opening a session replays its last turns in the
+terminal exactly as they ran (see [Sessions](#sessions)).
 
 ```sh
 hermes-hands                       # start a fresh session here (main use)
@@ -109,19 +112,41 @@ Scripts drive `--rpc` (send one `turn`, read the `answer`, close stdin) rather
 than a per-call one-shot.
 
 REPL commands: `/help` `/new` `/session` (this session's detail — local + server
-numbers) `/session <id>` (switch, shows that session's chat history) `/sessions`
-`/history` (full chat history of the current session; `/history <n>` last n, `/history <id>`
-another session's — read-only, stored as `sessions/<id>/session-history.md`)
-`/fork` (branch on the server)
-`/reasoning` (toggle the model's reasoning view: dim on stderr + appended to
-`verbose/hermes-hands-reasoning-<session-id>.md`; SSE transport only)
-`/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also exits; `Ctrl-C` at
-the prompt just hints, during a turn it cancels the turn locally *and* stops the
-run on Hermes). `/setup` configures without leaving the session and the REPL
-starts even when unconfigured. When the gateway supports SSE the answer text
-previews live as it generates (`HERMES_HANDS_STREAM` = `auto`|`on`|`off`); tool
-calls are shown as they run (`⟩ shell npm test… → exit 0`); the final answer
-renders through `glow`/`bat`/`fmt` if installed.
+numbers) `/session <id>` (switch; replays its last turns) `/sessions`
+`/history` (replay every turn of this session; `/history <n>` the last n,
+`/history <id>` another session's — read-only) `/out <n>` (the full output of
+call `#n`) `/fork` (branch on the server) `/debug` (toggle the redacted
+connection trace, see below) `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also
+exits; `Ctrl-C` at the prompt just hints, during a turn it cancels the turn
+locally *and* stops the run on Hermes). An unknown `/command` is answered
+locally, never sent to Hermes. `/setup` configures without leaving the session
+and the REPL starts even when unconfigured. When the gateway supports SSE the
+answer text previews live as it generates (`HERMES_HANDS_STREAM` =
+`auto`|`on`|`off`); the final answer renders through `glow`/`bat` if installed.
+
+Every hands call is shown **before it runs** — its session-wide number, the
+tool and what it runs — and again when it finishes, with a short excerpt of
+its output (the first and last lines on success; the last lines plus earlier
+error-looking lines on failure; `read_file` shows only the size). The full
+output stays available as `/out <n>`, and Hermes sees the same `#n` (as `ref`)
+in its results, so both of you can point at a call:
+
+```
+ #14 shell  make test
+ #14 ✓ exit 0 · 1m12s · 38 lines
+     │ ok   …/internal/loop   0.036s
+     │ … 35 lines — /out 14
+     │ ok   …/internal/ui     1.914s
+```
+
+**Everything runs on your machine.** Hermes has its own server-side tools
+(`terminal`, `read_file`, `execute_code`, …) that act in a sandbox on the API
+host, not here. hermes-hands watches the run's tool events: when Hermes
+reaches for one of those, the run is steered back to the hands
+(`POST /v1/runs/{id}/steer`) and a `⚠ hermes-sandbox` line says so; an
+approval request from such a tool is denied instead of hanging the turn.
+Thinking-side tools (web search, memory) pass and show as a dim `· hermes`
+line.
 
 Hermes drives these tools, all in the directory you launched from:
 
@@ -143,14 +168,36 @@ change from the old bash version). `write_file`/`edit_file` need the target's
 parent directory to already exist.
 
 The hands also tell Hermes **what your machine has**: each session start probes
-the machine once (OS/arch/kernel, cwd + git branch, repo signals like
-Makefile/compose, `make` targets, a fixed tool list via `exec.LookPath`) and
-appends a compact ~8-line brief to the instructions Hermes receives — the brain
-plans against known facts instead of burning tool rounds rediscovering them.
-The full record is `~/hermes-hands/known-system.json` (0600, written by
-hermes-hands only). A `shell` result with exit 127 records the tool as missing
-for the next session's brief; every session re-probes from scratch, so a stale
-"missing" is dropped the moment the tool is actually installed.
+once and appends a compact brief to the instructions Hermes receives — the
+brain plans against known facts instead of burning tool rounds rediscovering
+them.
+
+- **The host:** the OS release (`Ubuntu 24.04 LTS`, `macOS 15.1`), arch
+  (Apple Silicon named), kernel, WSL recognised; the `bash` version the hands
+  run (bash 3.2 on macOS gets its caveats spelled out: no `mapfile`, no
+  associative arrays, …); on macOS the **BSD userland** traps (`sed -i ''`, no
+  `grep -P`, `date -v`, `stat -f`) and which GNU variants (`gsed`, `ggrep`, …)
+  are installed; the package manager (`brew`, `apt-get`, `dnf`, …); and which
+  tools resolve — probed in the same `bash --login` the `shell` tool runs, so a
+  PATH entry your login profile adds counts. With docker present, Hermes is
+  told a throwaway `docker run --rm` container is the isolated way to a tool
+  the host lacks.
+- **The repo** you stand in: git branch, manifests (Makefile, compose, go.mod,
+  …), the `make` targets **with their `## help` text**, a one-line layout map
+  of the tracked tree, and the repo's own **`AGENTS.md` / `CLAUDE.md`** (from
+  the repo root down to where you stand) — read fresh at every session start,
+  since every repo has its own.
+- **Your global rules:** `hermes-hands setup` offers to import the agent rules
+  in your home directory (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+  `~/AGENTS.md`, …) once into `~/hermes-hands/guidance.md` — stored knowledge
+  every session puts in front of the repo's rules. It is a snapshot: edit it
+  freely, re-import with `hermes-hands guidance`.
+
+All rules are inlined as binding guidance (identical copies once, capped). The
+record (without the rules' text) is `~/hermes-hands/known-system.json` (0600,
+written by hermes-hands only). A `shell` result with exit 127 records the tool
+as missing for the next session's brief; a stale "missing" is dropped the
+moment the tool resolves.
 
 ## Sessions
 
@@ -159,16 +206,37 @@ stable `session_id` (Hermes loads that session's transcript as context), plus an
 `X-Hermes-Session-Key` that's constant per repo (long-term memory handle) and an
 `X-Hermes-Session-Id` header. If Hermes hands back a different `session_id`, the
 CLI adopts it. If the server ever rejects the id, the CLI retries fresh (keeping
-the headers) and falls back to a local transcript recap for that turn.
+the headers) and, when Hermes lost the session, opens the first turn with a
+recap of the local history.
 
-The `/v1` API has no endpoint to *list* sessions, so a local session store
-lives in `~/hermes-hands/sessions/` (`$HERMES_HANDS_STATE` overrides) — one
-directory per session (`<id>/session.json`, `<id>/transcript.jsonl`,
-`<id>/session-history.md`) — to make `--session <id>`, `sessions`, and
-`/history` work offline. Sessions are addressed by id only (there is no
-per-directory "last session" pointer). Titles are also
-mirrored into Hermes via a best-effort
-`PATCH /api/sessions/{id}`.
+The local session store lives in `~/hermes-hands/sessions/`
+(`$HERMES_HANDS_STATE` overrides), one directory per session, 0700 / files
+0600:
+
+| file | what |
+|---|---|
+| `<id>/session.json` | the index record — `--session <id>` and `sessions` work offline |
+| `<id>/events.jsonl` | everything the terminal showed, as an append-only, versioned event log: your messages, every hands call (before it runs) and result, Hermes' own tool attempts, answers, turn footers |
+| `<id>/out/<n>.txt` | the full (scrubbed) output of call `#n` |
+| `<id>/debug.jsonl` | the `/debug` trace, only while it is on |
+
+Live turns and reopened sessions are rendered from the **same** events, so
+`--session <id>` / `/session <id>` show the last 5 turns exactly as they ran
+(`/history` all of them). Nothing is synced from the server into this store —
+it is your local record; the conversation the model sees stays on Hermes.
+Text is scrubbed (`internal/redact`) before it is stored. Sessions idle longer
+than `HERMES_HANDS_RETENTION_DAYS` (default **14**) are deleted on start —
+events, outputs and debug trace with them — so anything typed by mistake
+doesn't linger. Sessions are addressed by id only. Titles are also mirrored
+into Hermes via a best-effort `PATCH /api/sessions/{id}`.
+
+`/debug` (or `HERMES_HANDS_DEBUG=1`) traces the connection into the session's
+`debug.jsonl`: every HTTP request (method, path, status, duration), every run
+input and outcome, every raw SSE frame, every guard action. Every string is
+redacted before it is written — the API key literally, plus the
+bearer / authorization / password / token / key patterns; headers are never
+traced. A bare password typed into a message matches no pattern: that is what
+the retention window bounds. The trace never leaves the machine.
 
 `/session` (in-REPL) and `--session-list` show per-session **turns**, the last
 run's **tokens** (cumulative billing `usage`), and **splits** — the number of
@@ -256,7 +324,8 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_API_PROFILE` | — | route to `/p/<profile>/` (needs that profile's own key) |
 | `HERMES_HANDS_APPROVE` | `ask` | `ask` \| `auto` \| `never` |
 | `HERMES_HANDS_STREAM` | `auto` | SSE answer streaming: `auto` (when advertised) \| `on` \| `off` |
-| `HERMES_HANDS_REASONING` | — | set in the config file: start the session with `/reasoning` on |
+| `HERMES_HANDS_DEBUG` | — | set in the config file: start with `/debug` on (redacted connection trace) |
+| `HERMES_HANDS_RETENTION_DAYS` | `14` | delete local sessions idle longer than this on start (`0` keeps all) |
 | `HERMES_HANDS_DENY` | — | extra denied `shell` commands, `\|`-separated shell globs |
 | `HERMES_HANDS_MAX_ROUNDS` | `25` | delegation rounds per turn |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
@@ -296,6 +365,8 @@ your phone and web UI never see it.
   an explicit `HERMES_HANDS_ALLOW_HTTP=1`, for tests).
 - **WSL:** `/etc/machine-id` is stable across WSL restarts but is regenerated if
   you re-register the distro — re-run `hermes-hands setup` after that.
+- **macOS** has no machine-id file: the key is bound to the hardware
+  `IOPlatformUUID` (from `ioreg`) instead.
 
 ## Honest limitations
 
@@ -305,36 +376,46 @@ your phone and web UI never see it.
   `instructions.md`.
 - The delegation transcript accumulates in the Hermes session. Long sessions lean
   on Hermes' compaction; start a `/new` session for a new task.
-- `shell` is POSIX-only; on Windows use WSL.
+- Linux and macOS only; on Windows use WSL.
 
 ## Development
 
 ```sh
 git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
 make                 # list targets, grouped (Develop / Verify / Artifacts)
-make dev             # go run from source out of ./.dev/ — live share/instructions.md
+make toolchain       # once: docker pull the pinned Go image (golang:1.26.7-bookworm)
+make dev             # build in the container, run it on this host out of ./.dev/
 make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
 make ci              # the PR gate locally: lint + test + release cross-build
-make dev-install     # go build + copy dist/hermes-hands onto your PATH
+make dev-install     # build + copy dist/hermes-hands onto your PATH
 ```
+
+The toolchain is pinned in the repo: every `go` / `gofmt` / `vet` / `test` /
+`build` runs in a throwaway `docker run --rm` container, so the host needs only
+Docker (`GO_MODE=local` uses a host-installed go instead). Only the build runs
+there — the binary always runs on your host, with your real bash, PATH and
+tools, because that is what the hands are.
 
 `make dev` runs a **self-contained dev instance out of `./.dev/`** (gitignored):
 its own `HERMES_HANDS_HOME`, so nothing touches your real `~/hermes-hands/`. On
 first run it copies the machine-bound key over from `~/hermes-hands/` (bound to
 machine-id + uid, not its path, so the copy decrypts) — or `make dev-setup`
 prompts for a separate one. The prompt is read straight from
-`share/instructions.md`: edit it, `make dev` again, no rebuild. `make clean`
-wipes `./.dev/`.
+`share/instructions.md`: edit it, `make dev` again (code changes are rebuilt
+incrementally on every `make dev`). `make clean` wipes `./.dev/`, including the
+toolchain cache.
 
 Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
-and CI never touch the network. Layout: `main.go` (CLI + REPL + setup) +
-`internal/{config,redact,ttyio,prompt,ui,api,session,shell,dispatch,loop}` +
+never fetch modules (the one download is the pinned Go image). Layout: `main.go`
+(CLI + REPL + setup) +
+`internal/{config,redact,ttyio,prompt,ui,api,session,knowsystem,debuglog,shell,dispatch,loop}` +
 `share/instructions.md` (embedded via `//go:embed`). `.github/workflows/test.yml`
-runs gofmt, `go vet`, `go test`, `./build.sh release` (the linux+darwin ×
-amd64+arm64 cross-compile) and a windows compile check on every PR (the `test`
+runs gofmt, `go vet` (for linux **and** darwin), `go test` and
+`./build.sh release` (the linux+darwin × amd64+arm64 cross-compile) on every
+PR, all in the pinned Go container (the `test`
 job is a required check for merging); `release.yml` tags + publishes on merge
 (see Releasing).
 

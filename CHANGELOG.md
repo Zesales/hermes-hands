@@ -1,97 +1,170 @@
 # Changelog
 
-## Unreleased — session chat history
+## 0.11.0 — (unreleased, `bump:minor`) session event log, live tool calls, sandbox guard, known system
 
-- **Every session keeps its full chat history on disk.** Sessions now live
-  one directory each: `~/hermes-hands/sessions/<id>/` holds `session.json`,
-  `transcript.jsonl` (canonical, append-only) and **`session-history.md`** —
-  the whole conversation rendered as readable markdown, regenerated from the
-  transcript after every exchange (the .md is a pure rendering, so hand edits
-  there never leak into a resume replay). Existing state is migrated from the
-  old flat layout (`<id>.json` + `transcripts/<id>.jsonl`) automatically on
-  the next start.
-- **Resume syncs from the remote.** Opening an old session asks hermes-agent
-  for its transcript first; when the server holds more exchanges than the
-  local mirror, the local transcript + history are replaced with the server's
-  copy — the server is the source of truth, the local copy is its mirror.
-  Only when the server lost the history does the local transcript replay into
-  the first turn.
-- **Opening an old session shows the chat history**: at startup with
-  `--session <id>` and on `/session <id>` switches, plus `/history` on demand
-  (`/history <n>` = last n exchanges, `/history <id>` = another session's,
-  read-only — it never switches the session).
-- **`--rpc` gained a `history` request** (`{"type":"history"}`): answers with
-  the full turn list and the `session-history.md` path — the hook a future
-  hermes-remote uses to fetch a session's chat history.
+One minor release for the whole `better-instructions` line. Breaking for
+scripts and plugins — see **Sessions** and **REPL**.
+
+### Tool calls in the terminal
+
+- **Every hands call is shown before it runs** — `#14 shell  make test` — and
+  again when it finishes: `#14 ✓ exit 0 · 1m12s · 38 lines` plus a short,
+  deterministic excerpt of the output (first + last lines on success; the last
+  lines and earlier error-looking lines on failure; `read_file` shows only its
+  size). The spinner names the running call (`#14 shell running · 42s`).
+  Before, a call appeared only after it finished — a long `make test` looked
+  like a hang.
+- `#n` is **session-wide** and Hermes sees the same number as `ref` in its
+  results, so operator and brain can point at the same call. `/out <n>` prints
+  a call's full output.
+- The streamed answer previews under the same `hermes` label and indent as
+  the final rendering.
+
+### Everything runs on the operator's machine (sandbox guard)
+
+- hermes-hands now reads Hermes' own tool events (`tool.started`,
+  `approval.request`). When a run reaches for Hermes' **server-side sandbox**
+  tools (`terminal`, `process_manage` — `process` before hermes-agent v0.22,
+  still accepted — `execute_code`, `read_file`, `write_file`, `patch`,
+  `search_files`), the run is steered back to the hands
+  (`POST /v1/runs/{id}/steer`, once per run) and the terminal shows
+  `⚠ hermes-sandbox`. Their approval requests are denied
+  (`POST /v1/runs/{id}/approval`) instead of hanging the turn until the
+  watchdog. Thinking-side tools (web search, memory, …) pass as a dim line.
+- Every SSE frame now counts as a sign of life for the silence watchdog.
+
+### Sessions
+
+- **New session store**: `sessions/<id>/` holds `session.json`, the
+  append-only, versioned **`events.jsonl`** (messages, calls before they run,
+  results, Hermes' tool attempts, answers, turn footers — interrupted and
+  timed-out turns included) and `out/<n>.txt` (full scrubbed output per call).
+  Live turns and reopened sessions render from the same events:
+  `--session <id>` / `/session <id>` replay the last 5 turns exactly as they
+  ran, `/history` all of them (`/history <n>`, `/history <id>` read-only).
+  The log is built for later views (only the last answer, a local compaction,
+  an export) without a second store.
+- Nothing is synced from the server into the local store. When hermes-agent
+  lost a session, the first resumed turn carries a recap of the local log.
+  Sessions written by earlier versions are not migrated.
+- **Retention**: sessions idle longer than `HERMES_HANDS_RETENTION_DAYS`
+  (default 14, `0` keeps all) are deleted on start — events, outputs, debug
+  trace. On the first start of this version that removes every session older
+  than two weeks.
+- Permissions: `sessions/` and every `<id>/` 0700, every file 0600; older
+  0755 / 0644 leftovers are tightened on start. Session ids are validated
+  (no path traversal through `--session ../x`).
 - **Sessions are addressed by id only.** The per-directory "last session"
-  pointer (`sessions/by-cwd/`) is gone — `--session` now requires an id,
-  `--rpc` defaults to a fresh session, and plugins keep the id from the
-  `ready` event (Claude-style editor integration pattern). `/session` shows
-  each session's **idle time** and, past 1 h, reminds the operator that the
-  gateway/model prompt caches (Bifrost, hermes-agent, Claude-style ~1h TTL)
-  have likely expired — the first resumed turn re-reads the full transcript and
-  can cost full-price input tokens. The chat history is re-synced from
-  hermes-agent on every open regardless of idle time. The `sessions` list
-  gained an **IDLE** column (`*` past 1 h + a one-line legend); all of it is
-  informational. Later, once hermes-agent reports a session's model +
-  provider, the provider's official prompt-cache TTL can replace the fixed 1 h.
+  pointer (`sessions/by-cwd/`) is gone — `--session` needs an id, `--rpc`
+  starts a fresh session, plugins keep the id from the `ready` event.
+  `/session` shows each session's idle time and, past 1 h, that the prompt
+  caches have likely expired (the first resumed turn re-reads the full
+  conversation); `sessions` gained an **IDLE** column.
+- `--rpc`: new `call` (before a call runs) and `hermes_tool` messages, `ref` /
+  `lines` on `tool`, `history` returns the session's events, `debug` toggles
+  the trace. RPC turns are recorded like REPL turns.
+- `--rpc` now preflights like the REPL (`/v1/capabilities`). It never did, so
+  it never knew the gateway streams and always polled: no live deltas, no tool
+  events, no guard — and slow (a one-word live turn: ~23 s polled, ~4 s
+  streamed). Streamed, it also got the REPL's **silence watchdog** (a quiet
+  gateway can't hang the editor's turn forever) and stops the server run on
+  SIGINT, not only the local wait.
+- `--rpc` `delta` messages carry only the answer text — they used to stream
+  the raw envelope (`{"`, `calls`, `":[`, …). Both front ends now reset the
+  preview per round, so the final answer of a multi-round turn streams too
+  (before, a tool round muted the preview for the rest of the turn).
+- The answer preview muted itself whenever a chunk ended right after
+  `"calls":[` — taken for a tool round before the `]` arrived. The live
+  gateway splits exactly there, so the REPL's preview practically never
+  showed. It now waits for the next chunk.
+- Session titles: hermes-agent rejects a title another session already has
+  (`400 invalid_title`), so a second session opened with the same first
+  message stayed untitled. The title is retried as `… (2)`, `… (3)`.
 
-## Unreleased — known system
+### Debug instead of reasoning
 
-- **The client tells Hermes what the machine has.** `internal/knowsystem`
-  probes the machine once per session start (OS/arch/kernel, cwd + git branch,
-  repo signals like Makefile/compose/manifests, Makefile targets, a fixed
-  tool list via `exec.LookPath`) and appends a compact ~8-line brief to the
-  instructions Hermes receives. The brain plans against known facts instead of
-  burning tool rounds rediscovering them every session.
-- The full record lives in `~/hermes-hands/known-system.json` (0600, written
-  by hermes-hands only — single writer; Hermes reads it, never edits it).
-- **Run-time learning:** a `shell` result with exit 127 records the tool as
-  learned-missing immediately in `known-system.json`; the next session's
-  brief carries it. Each session re-probes from scratch, so a stale
-  "missing" is dropped the moment the tool is actually installed —
-  freshness always beats memory.
-- Repo tooling outranks raw binaries: when a Makefile/compose exists, the
-  brief lists its targets so Hermes drives the repo through `make` instead of
-  hunting for individual binaries (installs stay the operator's call).
+- **`/reasoning` is removed.** The gateway's `reasoning.available` frames
+  carried the reply envelope itself, not the model's reasoning — the view only
+  duplicated the answer. `HERMES_HANDS_REASONING` is gone with it.
+- **`/debug`** (or `HERMES_HANDS_DEBUG=1`; rpc `{"type":"debug"}`) writes a
+  connection trace into the session's `debug.jsonl`: HTTP requests (method,
+  path, status, duration), run input and outcome, every raw SSE frame, guard
+  actions. Every string is redacted before it is written (the API key
+  literally, plus bearer / authorization / password / token / key patterns);
+  headers are never traced. Local only, deleted with its session.
 
-## Unreleased — reasoning debug view
+### Known system
 
-- **Round budget is now visible to Hermes.** The task frame states the turn's
-  round ceiling up front; the results payload counts down during the last 5
-  rounds and, on the final round, requires a `final` that states what a
-  continuation must do. A capped turn leaves a PendingNote so "continue"
-  resumes instead of redoing finished steps. The model plans and batches
-  calls against a known ceiling instead of discovering it as a BLOCKED wall —
-  fewer round-trips, fewer re-sent tokens.
-- `HERMES_HANDS_MAX_ROUNDS` default raised 8 → 25: a multi-tool turn no longer
-  hits `BLOCKED: Hermes still requesting data after N rounds.` on ordinary
-  code-mode work; the cap stays as the runaway guard it was meant to be.
+- `internal/knowsystem` probes once per session start and appends a brief to
+  the instructions: host (OS/arch/kernel, **WSL** recognised), the tools that
+  resolve **in the hands' own `bash --login`** (a PATH entry the login profile
+  adds counts — before, `go` in `~/.local/go/bin` was reported missing), a
+  docker hint (a throwaway container as the isolated way to a missing tool),
+  git branch, repo signals, the **`make` targets with their `## help`**, and a
+  one-line **layout map** of the tracked tree.
+- **Operator rules**, inlined into the instructions as binding guidance:
+  your **global rules**, which `hermes-hands setup` offers to import once from
+  the home directory (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+  `~/AGENTS.md`, …) into `~/hermes-hands/guidance.md` (re-import:
+  `hermes-hands guidance`), then the **repo's own** `AGENTS.md` / `CLAUDE.md`
+  (repo root down to cwd), read fresh at every session start. Identical copies
+  once; capped.
+- **macOS**: the brief names the release (`macOS 15.1`, Apple Silicon), the
+  hands' bash version (bash 3.2's caveats spelled out), the **BSD userland**
+  traps (`sed -i ''`, no `grep -P`, `date -v`, `stat -f`) and the installed GNU
+  variants (`gsed`, `ggrep`, …); Linux gets its distribution
+  (`/etc/os-release`). The package manager is named (`brew`, `apt-get`, …).
+- The tool probe used to fall back to hermes-hands' own PATH whenever the last
+  probed tool was missing (its script exited 1) — so the login-shell probe
+  rarely ran, and on WSL every miss walked the ~50 Windows PATH entries under
+  `/mnt`. Fixed; `/mnt` entries are skipped. Probe time ~1.2 s → ~40 ms.
+- A `shell` exit 127 is learned as missing for the next session; a stale
+  "missing" is dropped once the tool resolves — also for tools outside the
+  fixed probe list (before, those stuck forever). Record:
+  `~/hermes-hands/known-system.json` (0600).
 
-The gateway's SSE stream carries the model's thinking as a
-`{"event":"reasoning.available","text":"…"}` frame. It was already on the wire
-but silently dropped by the stream dispatcher; `api.Client.OnReasoning` now
-forwards it.
+### Turn protocol
 
-- **`/reasoning` (alias `/reasoning-show`)** in the REPL: `on` / `off` /
-  `true` / `false` or a bare toggle. While on, each reasoning block renders dim
-  (`⌁ reasoning`) on stderr and is appended to
-  `~/hermes-hands/verbose/hermes-hands-reasoning-<session-id>.md` (0600,
-  scrubbed through the same redactor as tool output).
-- `HERMES_HANDS_REASONING=1` in the config file starts a session with it on.
-- `--rpc`: a `{"type":"reasoning","text":"on"}` request toggles it; frames
-  arrive as `{"type":"reasoning","id":…, "text":"…"}`.
-- A reasoning frame is a sign of life: it bumps the silence watchdog even when
-  the view is off — a long thinking phase that emits reasoning no longer leans
-  on the interval probe alone.
-- Only the SSE transport carries reasoning: with `HERMES_HANDS_STREAM=off`
-  (poll mode) there is nothing to show.
+- **Round budget is visible to Hermes**: the task frame states the ceiling,
+  the results count down over the last 5 rounds, the round before the last one
+  warns that its successor is the last whose calls run, and a capped turn
+  leaves a note so "continue" resumes instead of redoing work.
+  `HERMES_HANDS_MAX_ROUNDS` default 8 → 25.
+- `instructions.md`: results carry `ref`; independent commands go in as
+  separate calls of one envelope (own exit code / output / `#ref`), `&&` only
+  for dependent steps, no `| tail` on long-running commands (the `shell`
+  timeout counts silence); everything executes through the hands.
 
-## Unreleased — REPL cleanup
+### REPL
 
-- **`/quit` and `/q` are gone.** The REPL exits with `/exit` (Ctrl-D too) —
-  the one exit command `/help` and the README actually show. Two hidden
-  aliases for a single action added nothing but inconsistency.
+- **`/quit` and `/q` are gone** — `/exit` (Ctrl-D too) is the exit. An
+  unknown `/command` is answered locally and never sent to Hermes as a task
+  (a typed `/quit` used to cost a whole run). A message that starts with a
+  path (`/etc/hosts …`) still goes through.
+
+### Platforms
+
+- **Linux (WSL included) and macOS only.** A native Windows build now fails
+  on purpose with a readable error (`internal/shell/platform.go`) — on
+  Windows, run hermes-hands inside WSL. The windows compile check is gone.
+- **macOS secrets binding**: the key is bound to the hardware
+  `IOPlatformUUID` (macOS has no `/etc/machine-id`; it used to be bound to the
+  uid only). Existing blobs keep decrypting.
+- `make lint` vets for linux **and** darwin (test files included).
+
+### Build / CI
+
+- The toolchain is pinned in the repo: every go / gofmt / vet / test / build
+  runs in a throwaway `golang:1.26.7-bookworm` container (`GO_MODE=local`
+  uses a host go). Only the build runs there — `make dev` / `dev-setup` /
+  `dev-install` run the binary on the host (the hands need the real bash, PATH
+  and machine-id); `build` cross-compiles for the host's OS/arch. Debian, not
+  alpine: the shell / dispatch / loop tests need bash and silently skipped 11
+  tests without it.
+- CI runs the same container: `test.yml` calls `make toolchain lint test` +
+  `./build.sh release`, `release.yml` `./build.sh release`;
+  `setup-go` is gone, so `GO_IMAGE` (= go.mod's `go` line) is the one place
+  the build's Go version is pinned.
 
 ## 0.10.0 — continuous releases; pre-public cleanup
 
