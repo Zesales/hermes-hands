@@ -20,6 +20,7 @@ func clearEnv(t *testing.T) {
 		"HERMES_API_RUN_TIMEOUT", "HERMES_API_RETRIES", "HERMES_HANDS_MAX_ROUNDS",
 		"HERMES_HANDS_RUN_TIMEOUT", "HERMES_HANDS_MAX_OUTPUT", "HERMES_HANDS_STREAM",
 		"HERMES_HANDS_RESPONSE_TIMEOUT", "HERMES_HANDS_WATCHDOG_INTERVAL",
+		"HERMES_HANDS_DEBUG", "HERMES_HANDS_RETENTION_DAYS",
 		"HERMES_HANDS_HOME",
 	} {
 		t.Setenv(k, "")
@@ -43,8 +44,11 @@ func TestLoadDefaults(t *testing.T) {
 		c.PollInterval != 2*time.Second || c.APIRunTimeout != 600*time.Second {
 		t.Errorf("duration defaults wrong: %+v", c)
 	}
-	if c.AllowHTTP || c.Verbose || c.Deny != nil {
+	if c.AllowHTTP || c.Verbose || c.Debug || c.Deny != nil {
 		t.Errorf("bool/slice defaults wrong: %+v", c)
+	}
+	if c.RetentionDays != 14 {
+		t.Errorf("RetentionDays = %d, want 14", c.RetentionDays)
 	}
 	if c.ResponseTimeout != 600*time.Second || c.WatchdogInterval != 200*time.Second {
 		t.Errorf("watchdog defaults wrong: ResponseTimeout=%v WatchdogInterval=%v", c.ResponseTimeout, c.WatchdogInterval)

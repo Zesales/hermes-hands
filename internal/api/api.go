@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -54,10 +53,22 @@ type Client struct {
 	StreamMode string
 	OnDelta    func(text string)
 
-	// OnReasoning, when set, receives the model's reasoning text from the SSE
-	// stream (`reasoning.available` / reasoning delta frames). Only the stream
-	// transport carries reasoning — poll mode has none.
-	OnReasoning func(text string)
+	// OnEvent, when set, sees the type of every SSE frame of a run. Any frame
+	// is a sign of life — the REPL's silence watchdog bumps on it.
+	OnEvent func(event string)
+
+	// OnHermesTool, when set, is told about Hermes' OWN server-side tool calls
+	// (SSE tool.started / approval.request) and what the sandbox guard did:
+	// action "" = allowed (web_search, memory, …), "steered" = a sandbox tool
+	// the run was redirected away from, "denied" = an approval request the
+	// guard refused. Stream transport only — poll mode carries no events.
+	OnHermesTool func(tool, preview, action string)
+
+	// Trace, when set, receives the /debug wire trace: every HTTP request
+	// (method, path, status, duration), every run input and outcome, every
+	// raw SSE frame, every guard action. Fields carry message text verbatim —
+	// the sink must redact before it writes anything.
+	Trace func(kind string, fields map[string]any)
 
 	Warnf func(string, ...any)
 	Vlogf func(string, ...any)
@@ -183,6 +194,20 @@ func (c *Client) preflight() error {
 // any extra headers. code is the HTTP status (0 when the request never
 // completed, matching curl's "000").
 func (c *Client) do(ctx context.Context, method, url string, body []byte, hdr map[string]string) (code int, respBody []byte, err error) {
+	if c.Trace != nil {
+		start := time.Now()
+		defer func() {
+			f := map[string]any{"method": method, "path": strings.TrimPrefix(url, c.titleBase()),
+				"status": code, "ms": time.Since(start).Milliseconds(), "bytes": len(respBody)}
+			if err != nil {
+				f["err"] = err.Error()
+			}
+			if code != 0 && !is2xx(code) {
+				f["body"] = trunc(string(respBody), 2000)
+			}
+			c.Trace("http", f)
+		}()
+	}
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -408,76 +433,6 @@ func (c *Client) SessionInfo(ctx context.Context, hermesSessionID string) (SrvSe
 		}
 	}
 	return srvSessionFrom(m), nil
-}
-
-// SessionMessage is one transcript entry of a server-side session record.
-type SessionMessage struct {
-	Role    string
-	Content string
-}
-
-// SessionMessages reads the server-side transcript of a session
-// (GET /api/sessions/{id}/messages). Lenient: accepts a bare array or an
-// object with a "data"/"messages"/"items" array; content that arrives as a
-// parts-array is flattened to its text. A non-2xx (e.g. 404
-// session_not_found) is an error — the caller then falls back to the local
-// transcript copy.
-func (c *Client) SessionMessages(ctx context.Context, hermesSessionID string, limit int) ([]SessionMessage, error) {
-	if hermesSessionID == "" {
-		return nil, fmt.Errorf("no hermes-agent session id yet")
-	}
-	if limit <= 0 {
-		limit = 40
-	}
-	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	code, body, err := c.do(tctx, http.MethodGet,
-		c.titleBase()+"/api/sessions/"+hermesSessionID+"/messages?limit="+strconv.Itoa(limit)+"&order=oldest",
-		nil, map[string]string{"Accept": "application/json"})
-	if err != nil {
-		return nil, err
-	}
-	if !is2xx(code) {
-		return nil, fmt.Errorf("GET /api/sessions/%s/messages -> HTTP %s", hermesSessionID, httpCode(code))
-	}
-	var arr []map[string]json.RawMessage
-	if json.Unmarshal(body, &arr) != nil {
-		var top map[string]json.RawMessage
-		if json.Unmarshal(body, &top) != nil {
-			return nil, fmt.Errorf("unparseable messages body")
-		}
-		for _, k := range []string{"data", "messages", "items"} {
-			if raw, ok := top[k]; ok && json.Unmarshal(raw, &arr) == nil {
-				break
-			}
-		}
-	}
-	var out []SessionMessage
-	for _, m := range arr {
-		role := ""
-		if raw, ok := m["role"]; ok {
-			_ = json.Unmarshal(raw, &role)
-		}
-		content := ""
-		if raw, ok := m["content"]; ok {
-			if json.Unmarshal(raw, &content) != nil {
-				var parts []map[string]json.RawMessage // content-as-parts shape
-				if json.Unmarshal(raw, &parts) == nil {
-					for _, p := range parts {
-						var t string
-						if raw, ok := p["text"]; ok && json.Unmarshal(raw, &t) == nil {
-							content += t
-						}
-					}
-				}
-			}
-		}
-		if role == "" || content == "" {
-			continue
-		}
-		out = append(out, SessionMessage{Role: role, Content: content})
-	}
-	return out, nil
 }
 
 // ListSessions reads the server-side session list (GET /api/sessions). Lenient:
