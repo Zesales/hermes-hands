@@ -2,9 +2,11 @@ package knowsystem
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProbeRepoSignalsAndTargets(t *testing.T) {
@@ -95,6 +97,29 @@ func TestMergeLearnedFreshness(t *testing.T) {
 	}
 }
 
+func TestMergeLearnedUnprobedToolInstalled(t *testing.T) {
+	// A learned tool outside the fixed probe list must not stick forever: once
+	// it is on PATH, the stale "missing" is dropped.
+	orig := probeTools
+	t.Cleanup(func() { probeTools = orig })
+	probeTools = func(names []string) map[string]bool {
+		found := map[string]bool{}
+		for _, n := range names {
+			found[n] = n == "terraform"
+		}
+		return found
+	}
+	fresh := &System{Tools: map[string]bool{"git": true}}
+	old := &System{Learned: map[string]string{"terraform": "missing", "frobnicate": "missing"}}
+	fresh.MergeLearned(old)
+	if fresh.Learned["terraform"] != "" {
+		t.Errorf("installed unprobed tool still learned missing: %+v", fresh.Learned)
+	}
+	if fresh.Learned["frobnicate"] != "missing" {
+		t.Errorf("still-absent unprobed tool lost: %+v", fresh.Learned)
+	}
+}
+
 func TestSaveLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "known-system.json")
@@ -118,5 +143,148 @@ func TestSaveLoad(t *testing.T) {
 	fresh.MergeLearned(loaded)
 	if fresh.Learned["frobnicate"] != "missing" {
 		t.Fatalf("learned fact not carried into next session: %+v", fresh.Learned)
+	}
+}
+
+func TestProbeToolsUsesLoginShell(t *testing.T) {
+	// what a hands command finds is what counts: bash itself must resolve, a
+	// made-up name must not, and a profile's stdout chatter is ignored
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not on PATH")
+	}
+	got := probeTools([]string{"bash", "definitely-not-a-tool-xyz"})
+	if !got["bash"] || got["definitely-not-a-tool-xyz"] {
+		t.Errorf("probeTools = %v", got)
+	}
+	// a missing LAST name used to end the script with exit 1 -> the probe
+	// silently fell back to the process PATH; it must stay in the login shell
+	start := time.Now()
+	for i := 0; i < 5; i++ {
+		probeTools([]string{"bash", "definitely-not-a-tool-xyz"})
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("5 probes took %v — the login-shell probe is falling back", d)
+	}
+}
+
+func TestMakeTargetsWithHelp(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte(
+		"X := 1\nhelp:  ## this list\n\t@x\ntest: | $(C)  ## go test in the pinned container\n\tgo test\nall:\n\techo\n"), 0o644)
+	names, help := makeTargets(dir)
+	if strings.Join(names, " ") != "help test all" {
+		t.Errorf("targets = %v", names)
+	}
+	if help["test"] != "go test in the pinned container" || help["help"] != "this list" || help["all"] != "" {
+		t.Errorf("help = %v", help)
+	}
+	s := &System{MakeTargets: names, MakeHelp: help, Tools: map[string]bool{}}
+	if !strings.Contains(s.Brief(), "  test — go test in the pinned container\n") {
+		t.Errorf("brief does not carry make help:\n%s", s.Brief())
+	}
+}
+
+func TestGuidanceIsRepoScoped(t *testing.T) {
+	// the repo's rules only — root first, then the subdirectory's; nothing from
+	// above the repo (global rules come from the setup import instead)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	parent := t.TempDir()
+	repo := filepath.Join(parent, "repo")
+	os.MkdirAll(filepath.Join(repo, "sub"), 0o755)
+	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	os.WriteFile(filepath.Join(parent, "CLAUDE.md"), []byte("above the repo — must not be read"), 0o644)
+	os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("use make, not go directly"), 0o644)
+	os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("use make, not go directly"), 0o644) // identical copy
+	os.WriteFile(filepath.Join(repo, "sub", "AGENTS.md"), []byte(strings.Repeat("x", maxGuideFile+100)), 0o644)
+
+	g := guidance(filepath.Join(repo, "sub"))
+	if len(g) != 2 || g[0].Path != filepath.Join(repo, "AGENTS.md") || g[1].Path != filepath.Join(repo, "sub", "AGENTS.md") {
+		t.Fatalf("guidance = %+v", g)
+	}
+	if !strings.Contains(g[1].text, "cut by hermes-hands") {
+		t.Error("an oversized file must be cut")
+	}
+	// outside a git work tree: only cwd's own files
+	plain := t.TempDir()
+	os.WriteFile(filepath.Join(plain, "AGENTS.md"), []byte("plain rules"), 0o644)
+	if g := guidance(plain); len(g) != 1 || g[0].text != "plain rules" {
+		t.Errorf("non-git guidance = %+v", g)
+	}
+}
+
+func TestUseGlobalComesFirst(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "guidance.md")
+	os.WriteFile(path, []byte("no ssh to the LAN"), 0o600)
+	s := &System{Guidance: []GuideFile{{Path: "/r/AGENTS.md", text: "use make"}}}
+	s.UseGlobal(path)
+	s.UseGlobal(filepath.Join(t.TempDir(), "missing.md")) // none imported: no-op
+	if len(s.Guidance) != 2 || !s.Guidance[0].Global {
+		t.Fatalf("guidance = %+v", s.Guidance)
+	}
+	block := s.GuidanceBlock()
+	gi, ri := strings.Index(block, "no ssh to the LAN"), strings.Index(block, "use make")
+	if gi < 0 || ri < 0 || gi > ri || !strings.Contains(block, "imported by the operator at setup") || !strings.Contains(block, "binding") {
+		t.Errorf("guidance block:\n%s", block)
+	}
+	if (&System{}).GuidanceBlock() != "" {
+		t.Error("no rules, no block")
+	}
+}
+
+func TestLayoutFromGitLsFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	for _, f := range []string{"main.go", "internal/api/a.go", "internal/ui/u.go", "docs/x.md"} {
+		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if got := layout(dir); got != "main.go | docs/ (1) | internal/{api,ui} (2)" {
+		t.Errorf("layout = %q", got)
+	}
+	if layout(t.TempDir()) != "" {
+		t.Error("no git work tree, no layout")
+	}
+}
+
+func TestParseOSRelease(t *testing.T) {
+	if got := parseOSRelease("NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\n"); got != "Ubuntu 24.04.1 LTS" {
+		t.Errorf("PRETTY_NAME = %q", got)
+	}
+	if got := parseOSRelease("NAME=Alpine Linux\nVERSION_ID=3.20.3\n"); got != "Alpine Linux 3.20.3" {
+		t.Errorf("NAME+VERSION_ID = %q", got)
+	}
+}
+
+func TestBriefMacOS(t *testing.T) {
+	// a macOS host: release + Apple Silicon, the system bash 3.2 caveats, the
+	// BSD userland traps, the installed GNU variants, the package manager
+	s := &System{OS: "darwin", Arch: "arm64", OSName: "macOS 15.1", Kernel: "Darwin 24.1.0",
+		Bash: "3.2.57(1)-release", Userland: "bsd", GNUTools: []string{"gsed"}, PkgManager: "brew",
+		Tools: map[string]bool{"bash": true}}
+	b := s.Brief()
+	for _, want := range []string{
+		"host: macOS 15.1 — darwin arm64 (Apple Silicon), kernel Darwin 24.1.0",
+		"shell: bash 3.2.57(1)-release", "no mapfile",
+		"userland: BSD (macOS)", "`sed -i ''`", "GNU variants installed: gsed",
+		"package manager: brew",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("brief missing %q:\n%s", want, b)
+		}
+	}
+	linux := (&System{OS: "linux", Arch: "amd64", Userland: "gnu", Bash: "5.2.21(1)-release", Tools: map[string]bool{}}).Brief()
+	if strings.Contains(linux, "userland") || strings.Contains(linux, "no mapfile") {
+		t.Errorf("a GNU/bash-5 host needs no caveats:\n%s", linux)
 	}
 }
