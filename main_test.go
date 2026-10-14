@@ -405,17 +405,20 @@ func TestAskServerApproval(t *testing.T) {
 
 func TestSandboxGuardModes(t *testing.T) {
 	repo := t.TempDir()
-	if sandboxGuard("steer", repo, "") != nil {
-		t.Error("steer = the client's strict default (nil policy)")
+	if v := sandboxGuard("steer", repo, "")("execute_code", "print(2)"); !v.Steer {
+		t.Error("steer steers every server exec call")
 	}
-	if aimed, _ := sandboxGuard("show", repo, "")("terminal", "make test"); aimed {
+	if v := sandboxGuard("show", repo, "")("terminal", "make test"); v.Steer {
 		t.Error("show never steers")
 	}
 	smart := sandboxGuard("smart", repo, "")
-	if aimed, _ := smart("terminal", "make test"); !aimed {
+	if v := smart("terminal", "make test"); !v.Steer {
 		t.Error("smart steers make")
 	}
-	if aimed, _ := smart("execute_code", "print(2)"); aimed {
+	if v := smart("execute_code", "print(2)"); v.Steer {
 		t.Error("smart leaves a scratch computation alone")
+	}
+	if v := smart("tool_call", "Local Shell"); !v.Steer || v.Kind != "hands-tool" {
+		t.Errorf("smart steers a hands tool called as Hermes' own: %+v", v)
 	}
 }

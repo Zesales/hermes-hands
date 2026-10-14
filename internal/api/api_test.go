@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/Zesales/hermes-hands/internal/hermesmock"
+
+	"github.com/Zesales/hermes-hands/internal/guard"
 )
 
 func testClient(baseURL string) *Client {
@@ -541,8 +543,8 @@ func TestStreamRun_GuardPolicyAndOperatorApproval(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := testClient(srv.URL)
-	c.Guard = func(tool, preview string) (bool, string) {
-		return strings.HasPrefix(preview, "make"), "`make` — the operator's repo"
+	c.Guard = func(tool, preview string) guard.Verdict {
+		return guard.Check(tool, preview, t.TempDir(), "")
 	}
 	var asked string
 	c.OnApproval = func(tool, what string) string { asked = what; return "once" }
@@ -554,7 +556,7 @@ func TestStreamRun_GuardPolicyAndOperatorApproval(t *testing.T) {
 	if strings.Join(seen, " ") != "execute_code/server terminal/steered approval/approved" {
 		t.Errorf("hermes tools = %q", seen)
 	}
-	if len(steers) != 1 || !strings.Contains(steers[0], "the operator's repo") || !strings.Contains(steers[0], "server-side work") {
+	if len(steers) != 1 || !strings.Contains(steers[0], "`make`") || !strings.Contains(steers[0], "server-side work") {
 		t.Errorf("steer = %q, want the policy's reason and the server-side allowance", steers)
 	}
 	if asked != "rm -rf /tmp/build" || len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"once"`) {

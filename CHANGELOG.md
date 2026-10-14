@@ -35,6 +35,10 @@ scripts and plugins — see **Sessions** and **REPL**.
   terminal shows `⚠ hermes-sandbox`; anything else runs and shows as a dim
   `· hermes server-sandbox` line. `HERMES_HANDS_SANDBOX` = `smart` (default)
   | `steer` (every such call) | `show` (never).
+- A hands tool called as if it were Hermes' own (`tool_call` "Local Shell",
+  `tool_search local_read`, …) is steered too — seen live right after the
+  rename to `local_*`. The guard steers a run once per kind of mistake
+  (server call aimed at the workspace / hands tool misused), not once in all.
 - **Approval requests of Hermes' server tools go to the operator** — their
   own prompt (`[o]nce` / `[s]ession` / `[n]o`), separate from the hands'
   approvals, whose `[a]ll` latch never answers them. With approvals off and
