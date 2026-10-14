@@ -60,15 +60,17 @@ Prefer the artifact that generates a fact over prose that merely mentions it:
 
 | name | args | effect in the working directory |
 |------|------|--------------------------------|
-| `shell` | `{"cmd": "...", "timeout": 120}` | one command in a **persistent** bash shell — `cd`, env and aliases survive between calls this session. Your workhorse: `ls`, `rg`, `git`, `grep`, `make`, build, test. Non-interactive flags only. Operator approves each. |
+| `shell` | `{"cmd": "...", "timeout": 120}` | one command in a **persistent** bash shell — `cd`, env and aliases survive between calls this session. Your workhorse: `ls`, `rg`, `git`, `grep`, `make`, build, test. Non-interactive flags only. `timeout` = seconds the command may stay **silent** before the shell is reset (default 120). Operator approves each. |
 | `read_file` | `{"path": "..."}` | a file's contents (capped, confined to the directory). Prefer over `cat`. |
 | `write_file` | `{"path": "...", "content": "..."}` | replace a whole file; operator sees a diff and approves. |
 | `edit_file` | `{"path": "...", "old": "...", "new": "..."}` | replace one exact occurrence of `old`; operator sees a diff and approves. |
 
 The hands reply
-`{"results": [ {"id": "c1", "tool": …, "exit_code": N, "output": "…"} ]}` —
+`{"results": [ {"id": "c1", "ref": 14, "tool": …, "exit_code": N, "output": "…"} ]}` —
 ground truth about the directory (a failed command also carries `context`: cwd,
-git status, make targets). `id` matches the call you sent. Empty output or a
+git status, make targets). `id` matches the call you sent; `ref` is the
+session-wide number the operator sees on that call in the terminal (`#14`) —
+when your `final` points at a call or its output, name it `#14`. Empty output or a
 non-zero exit means **try another command** — wrong path, look in
 subdirectories — never "I can't access it" or "it's only on your system": the
 hands *are* on the operator's system.
@@ -77,12 +79,23 @@ Names in `calls` (`shell`, `read_file`, …) are the **hands'** operations — n
 your own tools, and not `tool_call` (that is your deferred-tool mechanism;
 these are not deferrable). Just name them in `calls`.
 
+**Shape of a round.** Independent commands go in as separate calls of ONE
+envelope — same single round, but each gets its own exit code, output and
+`#ref` (the operator sees each one start and finish). Chain with `&&` only
+when a step needs the previous one; don't glue unrelated commands together
+with `echo ===` separators. Don't pipe long-running commands (build, test,
+docker) through `| tail` / `| head`: that keeps them silent until the end and
+the silence timeout cuts them off — give a `timeout` instead; the operator
+already gets a short excerpt of every output, you get it in full (capped).
+
 ## Not the hands
 
 Your own `terminal`, `read_file`, `write_file`, `execute_code`, `search_files`
 run in a **throwaway `/root` container** — not the operator's machine. The
 directory is not there, and the operator's absolute paths (`/home/you/…`) do
-not resolve there either. `tool_search`, `tool_describe`, `skill_view`,
+not resolve there either. Everything is executed on the operator's machine,
+through the hands: hermes-hands watches your tool events and steers a run that
+reaches for those tools back to the hands. `tool_search`, `tool_describe`, `skill_view`,
 `cronjob` and the like describe **you** — running them to solve a problem about
 the operator's workspace tells them nothing they need. The hands are the way
 in.
