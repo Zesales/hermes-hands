@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Zesales/hermes-hands/internal/config"
+	"github.com/Zesales/hermes-hands/internal/guard"
 )
 
 // retrySleep is bash's fixed `sleep 2` between failed POST / capability
@@ -66,11 +67,10 @@ type Client struct {
 	// only — poll mode carries no events.
 	OnHermesTool func(tool, preview, action string)
 
-	// Guard decides whether a server-side exec / file call (terminal,
-	// execute_code, read_file, …) is aimed at the operator's workspace and
-	// the run should be steered back to the hands, and why. nil steers every
-	// such call (the strict default).
-	Guard func(tool, preview string) (aimed bool, why string)
+	// Guard judges each of Hermes' own tool calls (tool.started): steer the run
+	// back to the hands or not, and with which message (internal/guard). nil
+	// is guard.Strict — every server-side exec / file call is steered.
+	Guard func(tool, preview string) guard.Verdict
 
 	// OnApproval answers an approval request of Hermes' own server-side tool:
 	// "once" | "session" | "deny". nil denies.

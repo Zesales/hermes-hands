@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Zesales/hermes-hands/internal/guard"
 )
 
 // wantStream decides whether Ask reads the answer from GET
@@ -54,19 +56,6 @@ type sseEvent struct {
 	Desc      string          `json:"description"`
 }
 
-// sandboxTools are Hermes' OWN tools that act on the API server's sandbox — a
-// shell and filesystem that are NOT the operator's machine. They stay usable
-// for server-side work; Client.Guard decides per call whether one is aimed at
-// the operator's workspace and the run gets steered back to the hands
-// (POST /v1/runs/{id}/steer). Thinking-side tools (web_search, memory,
-// session_search, skills, cron, …) are never looked at.
-var sandboxTools = map[string]bool{
-	"terminal": true, "process_manage": true, "process": true, // `process` = pre-v0.22 name, still accepted
-	"execute_code": true, "read_file": true, "write_file": true, "patch": true, "search_files": true,
-}
-
-const steerSandbox = "[hermes-hands] your `%s` call ran in YOUR server sandbox, but %s. The operator's machine — their repo, files, git, build — is reachable only through the hands: put that work in a hands envelope {\"calls\":[...],\"final\":null}. Your own tools stay fine for server-side work (scratch computations, downloads, cron jobs)."
-
 // streamRun consumes the run's SSE stream: it forwards answer-text deltas to
 // c.OnDelta as they arrive and returns the completed AskResult from the
 // terminal run.completed event. Any stream-shape surprise (no completed event,
@@ -99,7 +88,7 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 	var data strings.Builder
 	var answer strings.Builder
 	sawDelta := false
-	steered := false // the sandbox guard steers a run once; later attempts are only reported
+	steered := map[string]bool{} // the guard steers a run once per kind of mistake; repeats are only reported
 
 	dispatch := func() (AskResult, bool, error) {
 		raw := strings.TrimSpace(data.String())
@@ -130,18 +119,18 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 			}
 		case "tool.started":
 			action := ""
-			if sandboxTools[e.Tool] {
-				action = "server"
-				aimed, why := true, "it reached for the operator's machine"
-				if c.Guard != nil {
-					aimed, why = c.Guard(e.Tool, e.Preview)
-				}
-				if aimed {
-					action = "steered"
-					if !steered {
-						steered = true
-						c.steer(ctx, base, runID, fmt.Sprintf(steerSandbox, e.Tool, why))
-					}
+			if guard.SandboxTools[e.Tool] {
+				action = "server" // server-side work, unless the guard says otherwise
+			}
+			check := c.Guard
+			if check == nil {
+				check = guard.Strict
+			}
+			if v := check(e.Tool, e.Preview); v.Steer {
+				action = "steered"
+				if !steered[v.Kind] {
+					steered[v.Kind] = true
+					c.steer(ctx, base, runID, v.Message)
 				}
 			}
 			if c.OnHermesTool != nil {
