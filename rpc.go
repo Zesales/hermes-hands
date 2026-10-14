@@ -207,19 +207,20 @@ func runRPC(smode string) int {
 			evlog.beginTurn()
 			evlog.add(session.Event{Kind: session.KindUser, Text: redact.Scrub(req.Text)})
 			curID = id
+			heads := map[int]string{} // ref -> the call's preview; a result event carries no args
 			a.loop.Emit = func(ev session.Event) {
 				wd.bump()
 				ev = evlog.add(ev)
-				head, _ := ui.Summarize(ev.Tool, ev.Args)
 				switch ev.Kind {
 				case session.KindCall:
-					emit(map[string]any{"type": "call", "id": id, "ref": ev.Ref, "tool": ev.Tool, "preview": head})
+					heads[ev.Ref], _ = ui.Summarize(ev.Tool, ev.Args)
+					emit(map[string]any{"type": "call", "id": id, "ref": ev.Ref, "tool": ev.Tool, "preview": heads[ev.Ref]})
 				case session.KindResult:
 					exit := 0
 					if ev.Exit != nil {
 						exit = *ev.Exit
 					}
-					emit(map[string]any{"type": "tool", "id": id, "ref": ev.Ref, "tool": ev.Tool, "preview": head, "exit": exit, "lines": ev.Lines})
+					emit(map[string]any{"type": "tool", "id": id, "ref": ev.Ref, "tool": ev.Tool, "preview": heads[ev.Ref], "exit": exit, "lines": ev.Lines})
 				}
 			}
 			a.client.OnHermesTool = func(tool, preview, action string) {
