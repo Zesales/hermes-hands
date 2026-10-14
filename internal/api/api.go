@@ -244,8 +244,20 @@ func (c *Client) SetTitle(ctx context.Context, hermesSessionID, title string) {
 	}
 	tctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	_, _, _ = c.do(tctx, http.MethodPatch, c.titleBase()+"/api/sessions/"+hermesSessionID,
-		body, map[string]string{"Content-Type": "application/json"})
+	// hermes-agent wants titles unique: two sessions opened with the same
+	// first message would leave the second untitled — retry with "(2)", "(3)".
+	for n := 1; n <= 3; n++ {
+		t := title
+		if n > 1 {
+			t = fmt.Sprintf("%s (%d)", title, n)
+		}
+		body, _ = marshalJSON(map[string]string{"title": t})
+		code, resp, err := c.do(tctx, http.MethodPatch, c.titleBase()+"/api/sessions/"+hermesSessionID,
+			body, map[string]string{"Content-Type": "application/json"})
+		if err != nil || code != 400 || !strings.Contains(string(resp), "already in use") {
+			return
+		}
+	}
 }
 
 // RawRun submits one run with no retry ladder and returns its ids — for the

@@ -308,6 +308,26 @@ func TestFinalStreamer(t *testing.T) {
 		t.Errorf("tool-call round should stream nothing, got %q", got.String())
 	}
 
+	// the exact chunking a live gateway produced: the chunk ends right at
+	// "[" — must wait for the "]" instead of muting the preview as a calls-round
+	got.Reset()
+	fs3 := &finalStreamer{emit: func(s string) { got.WriteString(s) }}
+	for _, ch := range []string{`{"`, `calls`, `":[`, `],"`, `final`, `":"`, `OK`, `"}`} {
+		fs3.feed(ch)
+	}
+	if got.String() != "OK" {
+		t.Errorf("live chunking streamed %q, want OK", got.String())
+	}
+	// …and a real calls-round split the same way still streams nothing
+	got.Reset()
+	fs4 := &finalStreamer{emit: func(s string) { got.WriteString(s) }}
+	for _, ch := range []string{`{"`, `calls`, `":[`, `{"id":"c1","tool":"shell"}],"`, `final`, `":null}`} {
+		fs4.feed(ch)
+	}
+	if got.Len() != 0 {
+		t.Errorf("split calls-round streamed %q", got.String())
+	}
+
 	// reset keeps the emit fn, drops state
 	fs.reset()
 	if fs.started || fs.done || fs.pos != 0 || fs.emit == nil {
