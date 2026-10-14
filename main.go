@@ -233,9 +233,15 @@ func (f *finalStreamer) feed(chunk string) {
 		// a real tool-call round -> never a final to stream
 		if i := strings.Index(s, `"calls"`); i >= 0 {
 			after := strings.TrimLeft(s[i+7:], " :\t\r\n")
-			if strings.HasPrefix(after, "[") && !strings.HasPrefix(strings.TrimLeft(after[1:], " \t\r\n"), "]") {
-				f.done = true
-				return
+			if strings.HasPrefix(after, "[") {
+				rest := strings.TrimLeft(after[1:], " \t\r\n")
+				if rest == "" {
+					return // the chunk ended at "[" — can't tell an empty array yet
+				}
+				if !strings.HasPrefix(rest, "]") {
+					f.done = true
+					return
+				}
 			}
 		}
 		k := strings.Index(s, `"final"`)
@@ -753,6 +759,9 @@ func runREPL(smode string) int {
 			turnMu.Lock()
 			runID = id
 			turnMu.Unlock()
+			// each round is a fresh envelope: a calls-round must not keep the
+			// preview muted for the final round that follows it
+			fs.reset()
 			wd.bump()
 		}
 		a.client.OnDelta = func(s string) { wd.bump(); fs.feed(s) } // previews the `final` text; any token = progress
