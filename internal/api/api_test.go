@@ -430,3 +430,25 @@ func TestWantStream(t *testing.T) {
 		t.Error("on -> stream even without caps")
 	}
 }
+
+func TestSetTitle_RetriesTakenTitle(t *testing.T) {
+	// hermes-agent rejects a title another session already has: the second
+	// session must still get one ("… (2)")
+	var titles []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ Title string }
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		titles = append(titles, b.Title)
+		if b.Title == "fix CI" {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"error":{"message":"Title 'fix CI' is already in use by session hh-x","code":"invalid_title"}}`)
+			return
+		}
+		io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+	testClient(srv.URL).SetTitle(context.Background(), "hh-2", "fix CI")
+	if strings.Join(titles, " | ") != "fix CI | fix CI (2)" {
+		t.Errorf("titles tried = %q", titles)
+	}
+}
