@@ -385,8 +385,8 @@ func TestStreamRun_RealShape(t *testing.T) {
 	c := testClient(srv.URL)
 	var deltas []string
 	c.OnDelta = func(s string) { deltas = append(deltas, s) }
-	var reasoning []string
-	c.OnReasoning = func(s string) { reasoning = append(reasoning, s) }
+	var events []string
+	c.OnEvent = func(e string) { events = append(events, e) }
 	res, err := c.streamRun(context.Background(), srv.URL, "run_x", true)
 	if err != nil {
 		t.Fatal(err)
@@ -397,8 +397,71 @@ func TestStreamRun_RealShape(t *testing.T) {
 	if strings.Join(deltas, "") != "Hi there" {
 		t.Errorf("deltas = %q", deltas)
 	}
-	if strings.Join(reasoning, "") != "thinking" {
-		t.Errorf("reasoning = %q, want the reasoning.available text forwarded to OnReasoning", reasoning)
+	// every frame is a sign of life — including ones without a case
+	if strings.Join(events, ",") != "message.delta,message.delta,reasoning.available,run.completed" {
+		t.Errorf("events = %q", events)
+	}
+}
+
+func TestStreamRun_SandboxGuard(t *testing.T) {
+	// Hermes reaching for its own sandbox tools is steered back to the hands
+	// (once per run), its approval requests are denied, and thinking-side
+	// tools pass untouched.
+	body := "" +
+		`data: {"event": "tool.started", "tool": "web_search", "preview": "go 1.26 release"}` + "\n\n" +
+		`data: {"event": "tool.started", "tool": "terminal", "preview": "make test"}` + "\n\n" +
+		`data: {"event": "tool.started", "tool": "read_file", "preview": "Makefile"}` + "\n\n" +
+		`data: {"event": "approval.request", "request_id": "ap-1", "command": "rm -rf /tmp/x"}` + "\n\n" +
+		`data: {"event": "run.completed", "output": "{\"calls\":[],\"final\":\"ok\"}"}` + "\n\n"
+	var steers, approvals []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		switch r.URL.Path {
+		case "/v1/runs/run_g/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, body)
+		case "/v1/runs/run_g/steer":
+			steers = append(steers, string(b))
+			io.WriteString(w, `{"accepted":true}`)
+		case "/v1/runs/run_g/approval":
+			approvals = append(approvals, string(b))
+			io.WriteString(w, `{"resolved":1}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+	var seen []string
+	c.OnHermesTool = func(tool, preview, action string) { seen = append(seen, tool+"/"+action) }
+	if _, err := c.streamRun(context.Background(), srv.URL, "run_g", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, " ") != "web_search/ terminal/steered read_file/steered approval/denied" {
+		t.Errorf("hermes tools = %q", seen)
+	}
+	if len(steers) != 1 || !strings.Contains(steers[0], "terminal") || !strings.Contains(steers[0], `"input"`) {
+		t.Errorf("steers = %q, want exactly one, naming the first sandbox tool", steers)
+	}
+	if len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"deny"`) || !strings.Contains(approvals[0], `"request_id":"ap-1"`) {
+		t.Errorf("approvals = %q", approvals)
+	}
+}
+
+func TestTraceSeesRunAndFrames(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `data: {"event": "run.completed", "output": "done"}`+"\n\n")
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+	var kinds []string
+	c.Trace = func(kind string, f map[string]any) { kinds = append(kinds, kind) }
+	if _, err := c.streamRun(context.Background(), srv.URL, "r", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(kinds, ",") != "http,sse" {
+		t.Errorf("trace kinds = %q", kinds)
 	}
 }
 

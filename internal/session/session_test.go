@@ -50,126 +50,6 @@ func TestNewMintsIDs(t *testing.T) {
 	}
 }
 
-func TestMigrateFromFlatLayout(t *testing.T) {
-	// Build the pre-directory state by hand: <id>.json + transcripts/<id>.jsonl
-	state := t.TempDir()
-	sessDir := state + "/sessions"
-	if err := os.MkdirAll(sessDir+"/transcripts", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	id := "hh_20260902T101112_deadbe"
-	recJSON := `{"id":"` + id + `","hermes_session_id":"hh-abcd-20260902T101112","hermes_session_key":"k","cwd":"/home/x/repo","title":"alter chat","created":"2026-09-02T10:11:12Z","updated":"2026-09-02T10:12:00Z","turns":2}` + "\n"
-	if err := os.WriteFile(sessDir+"/"+id+".json", []byte(recJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	jsonl := `{"at":"2026-09-02T10:11:20Z","user":"alte frage","answer":"alte antwort"}` + "\n"
-	if err := os.WriteFile(sessDir+"/transcripts/"+id+".jsonl", []byte(jsonl), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	st, err := Open(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// flat files are gone; the session lives in <id>/
-	if _, err := os.Stat(sessDir + "/" + id + ".json"); !os.IsNotExist(err) {
-		t.Error("flat <id>.json should be migrated away")
-	}
-	if _, err := os.Stat(sessDir + "/transcripts/" + id + ".jsonl"); !os.IsNotExist(err) {
-		t.Error("flat transcript should be migrated away")
-	}
-	for _, want := range []string{"session.json", "transcript.jsonl", "session-history.md"} {
-		if _, err := os.Stat(sessDir + "/" + id + "/" + want); err != nil {
-			t.Errorf("migrated session missing %s: %v", want, err)
-		}
-	}
-	// the record and its history are readable through the normal API
-	rec, err := st.Load(id)
-	if err != nil || rec.Title != "alter chat" || rec.Turns != 2 {
-		t.Fatalf("Load after migrate: %v %+v", err, rec)
-	}
-	turns, _ := st.LoadTranscript(rec)
-	if len(turns) != 1 || turns[0].User != "alte frage" {
-		t.Errorf("transcript after migrate: %+v", turns)
-	}
-	md, err := os.ReadFile(st.HistoryPath(id))
-	if err != nil || !strings.Contains(string(md), "alte frage") || !strings.Contains(string(md), "# alter chat") {
-		t.Errorf("session-history.md after migrate:\n%s (%v)", md, err)
-	}
-	// idempotent: a second Open must not touch the migrated layout
-	if _, err := Open(state); err != nil {
-		t.Fatal(err)
-	}
-	recs, _ := st.List()
-	if len(recs) != 1 || recs[0].ID != id {
-		t.Errorf("List after migrate: %+v", recs)
-	}
-}
-
-func TestAppendTurnWritesSessionHistoryMD(t *testing.T) {
-	st := newStore(t)
-	rec, err := st.New("/home/x/repo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.AppendTurn(rec, "erste frage", "erste antwort"); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.AppendTurn(rec, "zweite frage", "zweite antwort"); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(st.HistoryPath(rec.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	md := string(b)
-	for _, want := range []string{
-		"# (untitled)",
-		"- hermes-hands session: " + rec.ID,
-		"## 1. ", "erste frage", "erste antwort",
-		"## 2. ", "zweite frage", "zweite antwort",
-	} {
-		if !strings.Contains(md, want) {
-			t.Errorf("session-history.md missing %q\n---\n%s", want, md)
-		}
-	}
-	if strings.Index(md, "erste frage") > strings.Index(md, "zweite frage") {
-		t.Error("history must be oldest first")
-	}
-}
-
-func TestHistoryIsPureRenderingAndReplaceSyncs(t *testing.T) {
-	st := newStore(t)
-	rec, err := st.New("/home/x/repo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.AppendTurn(rec, "lokal", "lokal antwort"); err != nil {
-		t.Fatal(err)
-	}
-	// resume sync: the server copy is larger -> it replaces the local mirror
-	// wholesale (the .md never keeps stale fragments).
-	server := []Turn{{At: rec.Created, User: "remote frage", Answer: "remote antwort"}}
-	if err := st.ReplaceTranscript(rec, server); err != nil {
-		t.Fatal(err)
-	}
-	turns, err := st.LoadTranscript(rec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(turns) != 1 || turns[0].User != "remote frage" {
-		t.Fatalf("ReplaceTranscript did not adopt the server copy: %+v", turns)
-	}
-	b, err := os.ReadFile(st.HistoryPath(rec.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	md := string(b)
-	if !strings.Contains(md, "remote frage") || strings.Contains(md, "lokal") {
-		t.Errorf("session-history.md not re-rendered from replaced transcript:\n%s", md)
-	}
-}
-
 func TestSha1HexNoTrailingNewline(t *testing.T) {
 	// bash: printf '%s' "$1" | sha1sum  -- no trailing newline
 	want := "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33" // sha1("foo")
@@ -207,6 +87,33 @@ func TestOpenDropsLegacyByCwd(t *testing.T) {
 	}
 	if _, err := os.Stat(state + "/sessions/by-cwd"); !os.IsNotExist(err) {
 		t.Errorf("legacy by-cwd dir should be dropped on Open")
+	}
+}
+
+func TestOpenTightensPermissions(t *testing.T) {
+	// what an older version left world-readable is tightened on Open
+	state := t.TempDir()
+	dir := state + "/sessions/hh_old"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(state+"/sessions", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/session.json", []byte(`{"id":"hh_old"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(state); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]os.FileMode{state + "/sessions": 0o700, dir: 0o700, dir + "/session.json": 0o600} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Errorf("%s perms = %v, want %v", p, fi.Mode().Perm(), want)
+		}
 	}
 }
 

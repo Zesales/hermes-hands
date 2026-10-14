@@ -25,8 +25,8 @@ var Warnf = func(format string, a ...any) {
 // _SECRETS / _STATE / _INSTRUCTIONS) which wins over the Home-derived default.
 //
 // The API tuning knobs come from the process environment only; URL / key /
-// profile / approve / stream / deny / allow-http / verbose / reasoning / the watchdog
-// knobs are read after the config file so the file (and, conditionally, the
+// profile / approve / stream / deny / allow-http / verbose / debug / retention /
+// the watchdog knobs are read after the config file so the file (and, conditionally, the
 // secrets store) wins over the environment for those.
 type Config struct {
 	APIURL, APIKey, APIProfile            string
@@ -44,10 +44,16 @@ type Config struct {
 	// watchdog probes the server run out-of-band so a legitimately long
 	// "thinking" phase keeps pushing that deadline back
 	// (HERMES_HANDS_WATCHDOG_INTERVAL). Both hand-tunable in the config file.
-	ResponseTimeout                    time.Duration
-	WatchdogInterval                   time.Duration
-	AllowHTTP, Verbose                 bool
-	Reasoning                          bool // HERMES_HANDS_REASONING / /reasoning: capture the model's reasoning events
+	ResponseTimeout    time.Duration
+	WatchdogInterval   time.Duration
+	AllowHTTP, Verbose bool
+	Debug              bool // HERMES_HANDS_DEBUG / /debug: redacted wire trace into the session's debug.jsonl
+
+	// RetentionDays: local sessions idle longer than this are deleted on start
+	// — events, tool output and debug trace with them (HERMES_HANDS_RETENTION_DAYS,
+	// default 14; 0 keeps everything). Bounds how long anything typed by
+	// mistake (a password) can linger on disk.
+	RetentionDays                      int
 	StateDir                           string
 	Home                               string // HERMES_HANDS_HOME (else $HOME/hermes-hands)
 	ConfigPath, SecretsPath, InstrPath string
@@ -106,7 +112,8 @@ func Load() (*Config, error) {
 		WatchdogInterval: secondsOr(merged["HERMES_HANDS_WATCHDOG_INTERVAL"], 200*time.Second),
 		AllowHTTP:        merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
 		Verbose:          merged["HERMES_HANDS_VERBOSE"] != "",
-		Reasoning:        merged["HERMES_HANDS_REASONING"] != "",
+		Debug:            merged["HERMES_HANDS_DEBUG"] != "",
+		RetentionDays:    intOr(merged["HERMES_HANDS_RETENTION_DAYS"], 14),
 		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], home+"/instructions.md"),
 
 		ConnectTimeout: secondsOr(proc["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
