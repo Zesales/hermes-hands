@@ -51,19 +51,21 @@ type sseEvent struct {
 	Preview   string          `json:"preview"`
 	RequestID string          `json:"request_id"`
 	Command   string          `json:"command"`
+	Desc      string          `json:"description"`
 }
 
 // sandboxTools are Hermes' OWN tools that act on the API server's sandbox — a
-// shell and filesystem that are NOT the operator's machine. hermes-hands exists
-// so the brain works through the hands; a run that reaches for one of these is
-// steered back (POST /v1/runs/{id}/steer). Thinking-side tools (web_search,
-// memory, session_search, skills, …) stay allowed.
+// shell and filesystem that are NOT the operator's machine. They stay usable
+// for server-side work; Client.Guard decides per call whether one is aimed at
+// the operator's workspace and the run gets steered back to the hands
+// (POST /v1/runs/{id}/steer). Thinking-side tools (web_search, memory,
+// session_search, skills, cron, …) are never looked at.
 var sandboxTools = map[string]bool{
 	"terminal": true, "process_manage": true, "process": true, // `process` = pre-v0.22 name, still accepted
 	"execute_code": true, "read_file": true, "write_file": true, "patch": true, "search_files": true,
 }
 
-const steerSandbox = "[hermes-hands] `%s` just ran in YOUR server sandbox — not on the operator's machine, so its result says nothing about the operator's files. Do not use your own terminal / process_manage / execute_code / read_file / write_file / patch / search_files for this work: everything runs on the operator's machine through the hands. Reply with a hands envelope {\"calls\":[...],\"final\":null} instead."
+const steerSandbox = "[hermes-hands] your `%s` call ran in YOUR server sandbox, but %s. The operator's machine — their repo, files, git, build — is reachable only through the hands: put that work in a hands envelope {\"calls\":[...],\"final\":null}. Your own tools stay fine for server-side work (scratch computations, downloads, cron jobs)."
 
 // streamRun consumes the run's SSE stream: it forwards answer-text deltas to
 // c.OnDelta as they arrive and returns the completed AskResult from the
@@ -129,21 +131,38 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 		case "tool.started":
 			action := ""
 			if sandboxTools[e.Tool] {
-				action = "steered"
-				if !steered {
-					steered = true
-					c.steer(ctx, base, runID, fmt.Sprintf(steerSandbox, e.Tool))
+				action = "server"
+				aimed, why := true, "it reached for the operator's machine"
+				if c.Guard != nil {
+					aimed, why = c.Guard(e.Tool, e.Preview)
+				}
+				if aimed {
+					action = "steered"
+					if !steered {
+						steered = true
+						c.steer(ctx, base, runID, fmt.Sprintf(steerSandbox, e.Tool, why))
+					}
 				}
 			}
 			if c.OnHermesTool != nil {
 				c.OnHermesTool(e.Tool, e.Preview, action)
 			}
 		case "approval.request":
-			// Only Hermes' own (sandbox) tools ask for approval — the hands
-			// never do. Unanswered, the run would hang until the watchdog.
-			c.denyApproval(ctx, base, runID, e.RequestID)
+			// Only Hermes' own server-side tools ask for approval — the hands
+			// never do. The operator decides (OnApproval); without one it is a
+			// deny. Unanswered, the run would hang until the watchdog.
+			what := firstNonEmptyStr(e.Command, e.Desc, e.Preview)
+			choice := "deny"
+			if c.OnApproval != nil {
+				choice = c.OnApproval(e.Tool, what)
+			}
+			c.answerApproval(ctx, base, runID, e.RequestID, choice)
+			action := "denied"
+			if choice != "deny" {
+				action = "approved"
+			}
 			if c.OnHermesTool != nil {
-				c.OnHermesTool(firstNonEmptyStr(e.Tool, "approval"), firstNonEmptyStr(e.Command, e.Preview), "denied")
+				c.OnHermesTool(firstNonEmptyStr(e.Tool, "approval"), what, action)
 			}
 		case "run.completed", "response.completed", "done":
 			out := e.Output
@@ -229,19 +248,19 @@ func (c *Client) steer(ctx context.Context, base, runID, text string) {
 	}
 }
 
-// denyApproval answers a pending approval request with "deny".
-func (c *Client) denyApproval(ctx context.Context, base, runID, requestID string) {
+// answerApproval answers a pending approval request: once | session | deny.
+func (c *Client) answerApproval(ctx context.Context, base, runID, requestID, choice string) {
 	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req := map[string]string{"choice": "deny"}
+	req := map[string]string{"choice": choice}
 	if requestID != "" {
 		req["request_id"] = requestID
 	}
 	body, _ := marshalJSON(req)
 	code, _, err := c.do(tctx, http.MethodPost, base+"/v1/runs/"+runID+"/approval", body,
 		map[string]string{"Content-Type": "application/json"})
-	c.trace("guard.deny", map[string]any{"run_id": runID, "request_id": requestID, "status": code})
+	c.trace("guard.approval", map[string]any{"run_id": runID, "request_id": requestID, "choice": choice, "status": code})
 	if err != nil || !is2xx(code) {
-		c.warnf("sandbox guard: approval deny refused (%s, HTTP %s)", errText(err), httpCode(code))
+		c.warnf("approval answer %q refused (%s, HTTP %s)", choice, errText(err), httpCode(code))
 	}
 }

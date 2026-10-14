@@ -58,11 +58,23 @@ type Client struct {
 	OnEvent func(event string)
 
 	// OnHermesTool, when set, is told about Hermes' OWN server-side tool calls
-	// (SSE tool.started / approval.request) and what the sandbox guard did:
-	// action "" = allowed (web_search, memory, …), "steered" = a sandbox tool
-	// the run was redirected away from, "denied" = an approval request the
-	// guard refused. Stream transport only — poll mode carries no events.
+	// (SSE tool.started / approval.request) and what became of them: action
+	// "" = a thinking-side tool (web_search, memory, cron, …), "server" = an
+	// exec / file tool doing server-side work, "steered" = one aimed at the
+	// operator's machine the run was redirected away from, "approved" /
+	// "denied" = an approval request and the answer it got. Stream transport
+	// only — poll mode carries no events.
 	OnHermesTool func(tool, preview, action string)
+
+	// Guard decides whether a server-side exec / file call (terminal,
+	// execute_code, read_file, …) is aimed at the operator's workspace and
+	// the run should be steered back to the hands, and why. nil steers every
+	// such call (the strict default).
+	Guard func(tool, preview string) (aimed bool, why string)
+
+	// OnApproval answers an approval request of Hermes' own server-side tool:
+	// "once" | "session" | "deny". nil denies.
+	OnApproval func(tool, what string) string
 
 	// Trace, when set, receives the /debug wire trace: every HTTP request
 	// (method, path, status, duration), every run input and outcome, every
