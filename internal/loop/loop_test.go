@@ -376,7 +376,7 @@ func TestRunResultsShape(t *testing.T) {
 		t.Fatalf("results len = %d", len(payload.Results))
 	}
 	r := payload.Results[0]
-	if r.ID != "c1" || r.Tool != "read_file" || r.ExitCode != 0 || r.Output != "filecontent" ||
+	if r.ID != "c1" || r.Tool != "local_read" || r.ExitCode != 0 || r.Output != "filecontent" || // old name in, canonical name out
 		string(r.Args) != `{"path":"foo.txt"}` || r.Context != nil {
 		t.Errorf("result element = %+v (args %s)", r, r.Args)
 	}
@@ -468,11 +468,11 @@ func TestRunTurnAbortedByOperator(t *testing.T) {
 	}}
 	l := &Loop{API: sa, Dispatch: d, MaxRounds: 8}
 	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
-	if !out.OK || !strings.Contains(out.Answer, "declined write_file") {
+	if !out.OK || !strings.Contains(out.Answer, "declined local_write") {
 		t.Errorf("out = %+v", out)
 	}
-	if !strings.Contains(l.PendingNote, "write_file") || !strings.Contains(l.PendingNote, "cancelled") {
-		t.Errorf("PendingNote = %q, want a cancellation note naming write_file", l.PendingNote)
+	if !strings.Contains(l.PendingNote, "local_write") || !strings.Contains(l.PendingNote, "cancelled") {
+		t.Errorf("PendingNote = %q, want a cancellation note naming local_write", l.PendingNote)
 	}
 	// the note is consumed and prepended to the next turn's message
 	sa.replies = []api.AskResult{reply(`{"calls":[],"final":"ok"}`, true)}
@@ -508,7 +508,7 @@ func TestRunFramesFirstMessage(t *testing.T) {
 		"PROBLEM — operator's working directory: cwd /home/me/proj (git branch: main)",
 		"was hälst du von der readme ?", // the message, verbatim, as the problem body
 		"reason it through, then ONE instruction",
-		`{"id":"c1","tool":"shell|read_file|write_file|edit_file"`,
+		`{"id":"c1","tool":"local_shell|local_read|local_write|local_edit"`,
 		`"final":null}`,
 		"not a description of yourself or your tools",
 	} {
