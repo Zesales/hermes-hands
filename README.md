@@ -111,6 +111,27 @@ hermes-hands check                 # preflight the connection
 Scripts drive `--rpc` (send one `turn`, read the `answer`, close stdin) rather
 than a per-call one-shot.
 
+**Scheduled jobs on your machine.** A cron job set up *in Hermes* runs on the
+server, without the hands — it can't touch your repo. For a job on your
+machine, turn it around: your own cron / systemd timer starts hermes-hands,
+and Hermes works through the hands as usual.
+
+```sh
+# crontab -e — weekdays 07:00: what is new upstream, in the same session every day
+0 7 * * 1-5  cd "$HOME/projects/myrepo" && printf '%s\n' \
+  '{"type":"use","session":"hh_20261014T070000_abc123"}' \
+  '{"type":"turn","text":"git fetch, then summarize what is new on origin/main"}' \
+  | HERMES_HANDS_APPROVE=auto HERMES_HANDS_DENY='*git push*|*rm -r*' \
+    "$HOME/.local/bin/hermes-hands" --rpc >> "$HOME/hermes-hands/cron.jsonl" 2>&1
+```
+
+Unattended means `HERMES_HANDS_APPROVE=auto` — fence it with
+`HERMES_HANDS_DENY` (each glob is matched against the whole command line,
+hence the leading `*`). Approval requests of Hermes' own server tools are always
+denied in `--rpc`. The answer is the `{"type":"answer",…}` line; the turn is
+in the session's event log like any other (`hermes-hands --session <id>`
+replays it). Without the `use` line every run starts a fresh session.
+
 REPL commands: `/help` `/new` `/session` (this session's detail — local + server
 numbers) `/session <id>` (switch; replays its last turns) `/sessions`
 `/history` (replay every turn of this session; `/history <n>` the last n,
