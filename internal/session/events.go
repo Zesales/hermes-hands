@@ -56,7 +56,7 @@ type Event struct {
 	Bytes   int             `json:"bytes,omitempty"`
 	OK      *bool           `json:"ok,omitempty"`
 	Tokens  int             `json:"tokens,omitempty"`
-	Action  string          `json:"action,omitempty"`  // hermes_tool: "" | steered | denied
+	Action  string          `json:"action,omitempty"`  // hermes_tool: "" | server | steered | approved | denied
 	Outcome string          `json:"outcome,omitempty"` // turn_end: "" | interrupted | timeout
 	Limit   int             `json:"limit,omitempty"`   // turn_end timeout: the response timeout in seconds
 

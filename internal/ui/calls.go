@@ -80,9 +80,10 @@ func (u *UI) CallDone(ref int, tool string, exit int, dur time.Duration, out str
 }
 
 // HermesTool reports Hermes reaching for one of its OWN server-side tools.
-// action "" is a thinking-side tool (web search, memory) and stays a dim
-// note; "steered" / "denied" mean it tried to act in its server sandbox
-// instead of through the hands, and the guard turned it back.
+// action "" is a thinking-side tool (web search, memory, cron) and "server"
+// an exec / file tool doing server-side work — both dim notes; "steered"
+// means the call was aimed at the operator's machine and the run was turned
+// back to the hands; "approved" / "denied" answer an approval request.
 func (u *UI) HermesTool(tool, preview, action string) {
 	preview = clipWidth(strings.Join(strings.Fields(preview), " "), u.cols()-30)
 	u.sync(func() {
@@ -92,6 +93,10 @@ func (u *UI) HermesTool(tool, preview, action string) {
 				u.cBad, u.cR, u.cB, tool, u.cR, preview, u.cDim, u.cR)
 		case "denied":
 			fmt.Fprintf(u.w, " %s⚠ hermes-sandbox%s approval request denied  %s\n", u.cBad, u.cR, preview)
+		case "approved":
+			fmt.Fprintf(u.w, " %s✓ hermes-sandbox%s approval granted  %s\n", u.cOK, u.cR, preview)
+		case "server":
+			fmt.Fprintf(u.w, " %s· hermes server-sandbox %s  %s%s\n", u.cDim, tool, preview, u.cR)
 		default:
 			fmt.Fprintf(u.w, " %s· hermes %s  %s%s\n", u.cDim, tool, preview, u.cR)
 		}

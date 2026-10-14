@@ -26,7 +26,7 @@ var Warnf = func(format string, a ...any) {
 //
 // The API tuning knobs come from the process environment only; URL / key /
 // profile / approve / stream / deny / allow-http / verbose / debug / retention /
-// the watchdog knobs are read after the config file so the file (and, conditionally, the
+// sandbox / the watchdog knobs are read after the config file so the file (and, conditionally, the
 // secrets store) wins over the environment for those.
 type Config struct {
 	APIURL, APIKey, APIProfile            string
@@ -48,6 +48,11 @@ type Config struct {
 	WatchdogInterval   time.Duration
 	AllowHTTP, Verbose bool
 	Debug              bool // HERMES_HANDS_DEBUG / /debug: redacted wire trace into the session's debug.jsonl
+
+	// Sandbox is how Hermes' own server-side exec / file tools are treated in a
+	// hands run (HERMES_HANDS_SANDBOX): smart (default — steer only calls aimed
+	// at the operator's machine) | steer (every one) | show (never steer).
+	Sandbox string
 
 	// RetentionDays: local sessions idle longer than this are deleted on start
 	// — events, tool output and debug trace with them (HERMES_HANDS_RETENTION_DAYS,
@@ -113,6 +118,7 @@ func Load() (*Config, error) {
 		AllowHTTP:        merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
 		Verbose:          merged["HERMES_HANDS_VERBOSE"] != "",
 		Debug:            merged["HERMES_HANDS_DEBUG"] != "",
+		Sandbox:          sandboxMode(merged["HERMES_HANDS_SANDBOX"]),
 		RetentionDays:    intOr(merged["HERMES_HANDS_RETENTION_DAYS"], 14),
 		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], home+"/instructions.md"),
 
@@ -272,6 +278,16 @@ func secondsOr(s string, def time.Duration) time.Duration {
 		return time.Duration(f * float64(time.Second))
 	}
 	return def
+}
+
+// sandboxMode normalises HERMES_HANDS_SANDBOX: smart | steer | show, anything
+// else (unset included) is smart.
+func sandboxMode(v string) string {
+	switch v = strings.ToLower(strings.TrimSpace(v)); v {
+	case "steer", "show":
+		return v
+	}
+	return "smart"
 }
 
 func intOr(s string, def int) int {

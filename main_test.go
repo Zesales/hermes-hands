@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Zesales/hermes-hands/internal/config"
+	"github.com/Zesales/hermes-hands/internal/prompt"
 )
 
 func TestParseArgsTable(t *testing.T) {
@@ -368,5 +370,52 @@ func TestOfferGuidanceImport(t *testing.T) {
 	offerGuidanceImport(bufio.NewReader(strings.NewReader("\n")), dir)
 	if b, _ := os.ReadFile(dst); string(b) != "hand-edited" {
 		t.Error("an existing import was replaced without a yes")
+	}
+}
+
+func TestAskServerApproval(t *testing.T) {
+	ask := func(mode, answer string, err error) string {
+		var out strings.Builder
+		ta := &prompt.TTYApprover{Mode: mode, Out: &out, AskLine: func(string) (string, error) { return answer, err }}
+		return askServerApproval(ta, "terminal", "rm -rf /tmp/build")
+	}
+	for _, tc := range []struct {
+		mode, answer string
+		err          error
+		want         string
+	}{
+		{"ask", "o", nil, "once"},
+		{"ask", "s", nil, "session"},
+		{"ask", "n", nil, "deny"},
+		{"ask", "", nil, "deny"},
+		{"ask", "o", io.EOF, "deny"}, // Ctrl-C / EOF at the prompt
+		{"auto", "o", nil, "deny"},   // yolo never approves a server command unseen
+		{"never", "o", nil, "deny"},
+	} {
+		if got := ask(tc.mode, tc.answer, tc.err); got != tc.want {
+			t.Errorf("mode %s answer %q -> %q, want %q", tc.mode, tc.answer, got, tc.want)
+		}
+	}
+	// the hands' [a]ll latch is another trust domain: it must not answer this
+	ta := &prompt.TTYApprover{Mode: "ask", AskLine: func(string) (string, error) { return "a", nil }}
+	if askServerApproval(ta, "terminal", "x") != "deny" {
+		t.Error("'a' (the hands' all-latch) must not approve a server command")
+	}
+}
+
+func TestSandboxGuardModes(t *testing.T) {
+	repo := t.TempDir()
+	if sandboxGuard("steer", repo, "") != nil {
+		t.Error("steer = the client's strict default (nil policy)")
+	}
+	if aimed, _ := sandboxGuard("show", repo, "")("terminal", "make test"); aimed {
+		t.Error("show never steers")
+	}
+	smart := sandboxGuard("smart", repo, "")
+	if aimed, _ := smart("terminal", "make test"); !aimed {
+		t.Error("smart steers make")
+	}
+	if aimed, _ := smart("execute_code", "print(2)"); aimed {
+		t.Error("smart leaves a scratch computation alone")
 	}
 }

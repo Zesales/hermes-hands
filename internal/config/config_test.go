@@ -20,7 +20,7 @@ func clearEnv(t *testing.T) {
 		"HERMES_API_RUN_TIMEOUT", "HERMES_API_RETRIES", "HERMES_HANDS_MAX_ROUNDS",
 		"HERMES_HANDS_RUN_TIMEOUT", "HERMES_HANDS_MAX_OUTPUT", "HERMES_HANDS_STREAM",
 		"HERMES_HANDS_RESPONSE_TIMEOUT", "HERMES_HANDS_WATCHDOG_INTERVAL",
-		"HERMES_HANDS_DEBUG", "HERMES_HANDS_RETENTION_DAYS",
+		"HERMES_HANDS_DEBUG", "HERMES_HANDS_RETENTION_DAYS", "HERMES_HANDS_SANDBOX",
 		"HERMES_HANDS_HOME",
 	} {
 		t.Setenv(k, "")
@@ -49,6 +49,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.RetentionDays != 14 {
 		t.Errorf("RetentionDays = %d, want 14", c.RetentionDays)
+	}
+	if c.Sandbox != "smart" || sandboxMode(" Steer ") != "steer" || sandboxMode("show") != "show" || sandboxMode("bogus") != "smart" {
+		t.Errorf("Sandbox = %q (normalisation broken)", c.Sandbox)
 	}
 	if c.ResponseTimeout != 600*time.Second || c.WatchdogInterval != 200*time.Second {
 		t.Errorf("watchdog defaults wrong: ResponseTimeout=%v WatchdogInterval=%v", c.ResponseTimeout, c.WatchdogInterval)

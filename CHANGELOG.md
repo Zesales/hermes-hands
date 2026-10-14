@@ -20,17 +20,25 @@ scripts and plugins — see **Sessions** and **REPL**.
 - The streamed answer previews under the same `hermes` label and indent as
   the final rendering.
 
-### Everything runs on the operator's machine (sandbox guard)
+### Two machines: the hands and Hermes' server (sandbox guard)
 
 - hermes-hands now reads Hermes' own tool events (`tool.started`,
-  `approval.request`). When a run reaches for Hermes' **server-side sandbox**
-  tools (`terminal`, `process_manage` — `process` before hermes-agent v0.22,
-  still accepted — `execute_code`, `read_file`, `write_file`, `patch`,
-  `search_files`), the run is steered back to the hands
-  (`POST /v1/runs/{id}/steer`, once per run) and the terminal shows
-  `⚠ hermes-sandbox`. Their approval requests are denied
-  (`POST /v1/runs/{id}/approval`) instead of hanging the turn until the
-  watchdog. Thinking-side tools (web search, memory, …) pass as a dim line.
+  `approval.request`). Hermes keeps every tool — cron, memory, web, browser,
+  delegation, and its server-side exec / file tools (`terminal`,
+  `process_manage` — `process` before hermes-agent v0.22 —, `execute_code`,
+  `read_file`, `write_file`, `patch`, `search_files`) for server work.
+- `internal/guard` decides per call whether one of those is aimed at the
+  operator's machine: it names the operator's workspace or home path or a
+  file of their repo, runs `make` or a repo-local `git`, or echoes a hands
+  envelope. Then the run is steered back to the hands
+  (`POST /v1/runs/{id}/steer`, once per run, with the reason) and the
+  terminal shows `⚠ hermes-sandbox`; anything else runs and shows as a dim
+  `· hermes server-sandbox` line. `HERMES_HANDS_SANDBOX` = `smart` (default)
+  | `steer` (every such call) | `show` (never).
+- **Approval requests of Hermes' server tools go to the operator** — their
+  own prompt (`[o]nce` / `[s]ession` / `[n]o`), separate from the hands'
+  approvals, whose `[a]ll` latch never answers them. With approvals off and
+  in `--rpc` they are denied instead of hanging the turn until the watchdog.
 - Every SSE frame now counts as a sign of life for the silence watchdog.
 
 ### Sessions
