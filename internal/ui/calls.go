@@ -62,7 +62,7 @@ func (u *UI) CallDone(ref int, tool string, exit int, dur time.Duration, out str
 		info = append(info, nLines(len(lines)))
 	}
 	var rows []row
-	if tool != "read_file" {
+	if tool != "local_read" && tool != "read_file" {
 		rows = excerpt(lines, exit)
 	}
 	width := u.cols() - 8
@@ -131,7 +131,7 @@ func Summarize(tool string, args json.RawMessage) (head string, more []string) {
 		return s
 	}
 	switch tool {
-	case "shell", "run", "bash", "exec", "terminal":
+	case "local_shell", "shell", "run", "bash", "exec", "terminal":
 		lines := strings.Split(strings.TrimRight(str("cmd"), "\n"), "\n")
 		head = lines[0]
 		rest := lines[1:]
@@ -143,12 +143,12 @@ func Summarize(tool string, args json.RawMessage) (head string, more []string) {
 		if t := str("timeout"); t != "" && t != "0" {
 			head += "   (timeout " + t + "s)"
 		}
-	case "read_file":
+	case "local_read", "read_file":
 		head = str("path")
-	case "write_file":
+	case "local_write", "write_file":
 		n := strings.Count(str("content"), "\n")
 		head = fmt.Sprintf("%s   (%d lines)", str("path"), n+1)
-	case "edit_file":
+	case "local_edit", "edit_file":
 		head = str("path")
 	default:
 		head = clipWidth(string(args), 100)

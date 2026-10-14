@@ -94,12 +94,12 @@ func (l *Loop) frame(userMsg string) string {
 		"PROBLEM — operator's working directory: " + loc + "\n\n" +
 		userMsg + "\n\n" +
 		"Your reply: reason it through, then ONE instruction and nothing else —\n" +
-		"{\"calls\":[{\"id\":\"c1\",\"tool\":\"shell|read_file|write_file|edit_file\",\"args\":{...}}],\"final\":null}\n" +
+		"{\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +
 		"output to call) — or {\"calls\":[],\"final\":\"...\"} once it is solved. Not a\n" +
 		"chat reply, not a description of yourself or your tools. If you do not know\n" +
-		"the directory yet, your instruction is a look — `shell` (ls / git / rg) or\n" +
-		"`read_file`." + l.budgetNote()
+		"the directory yet, your instruction is a look — `local_shell` (ls / git / rg)\n" +
+		"or `local_read`." + l.budgetNote()
 }
 
 // budgetNote is the round-budget line of the task frame: the model plans
@@ -275,6 +275,9 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 		for i := 0; i < callsN; i++ {
 			id := mkID(i, calls[i].id())
 			tool := firstNonEmpty(calls[i].Tool, calls[i].Name)
+			if c := dispatch.Canonical(tool); c != "" {
+				tool = c // events, results and the terminal speak local_*
+			}
 			args := callArgs(calls[i])
 			l.Ref++
 			ref := l.Ref

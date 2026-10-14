@@ -139,8 +139,23 @@ func TestUnknownTool(t *testing.T) {
 	d, _ := newDisp(t, prompt.AutoApprover{})
 	res, err := d.Dispatch("frobnicate", raw(map[string]any{}))
 	if err != nil || res.Exit != 2 ||
-		res.Out != "unknown tool 'frobnicate' (have: shell, read_file, write_file, edit_file)" {
+		res.Out != "unknown tool 'frobnicate' (the hands have: local_shell, local_read, local_write, local_edit)" {
 		t.Errorf("unknown tool = %+v, %v", res, err)
+	}
+}
+
+func TestCanonicalToolNames(t *testing.T) {
+	// local_* are the names the brain is taught; every old name stays an alias
+	for in, want := range map[string]string{
+		"local_shell": Shell, "shell": Shell, "bash": Shell, "terminal": Shell,
+		"local_read": Read, "read_file": Read, "cat": Read,
+		"local_write": Write, "write_file": Write,
+		"local_edit": Edit, "edit_file": Edit,
+		"frobnicate": "",
+	} {
+		if got := Canonical(in); got != want {
+			t.Errorf("Canonical(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
