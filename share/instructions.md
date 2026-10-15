@@ -72,7 +72,8 @@ Prefer the artifact that generates a fact over prose that merely mentions it:
 The hands reply
 `{"results": [ {"id": "c1", "ref": 14, "tool": …, "exit_code": N, "output": "…"} ]}` —
 ground truth about the directory (a failed command also carries `context`: cwd,
-git status, make targets). `id` matches the call you sent; `ref` is the
+git status, make targets; the first call into a subdirectory with its own
+AGENTS.md / CLAUDE.md carries those rules in `context` — binding there). `id` matches the call you sent; `ref` is the
 session-wide number the operator sees on that call in the terminal (`#14`) —
 when your `final` points at a call or its output, name it `#14`. Empty output or a
 non-zero exit means **try another command** — wrong path, look in
