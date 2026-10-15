@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Zesales/hermes-hands/internal/knowsystem"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/shell"
 )
@@ -41,6 +42,16 @@ type Dispatcher struct {
 	Deny       []string
 	MaxOutput  int           // read_file byte cap (HERMES_HANDS_MAX_OUTPUT)
 	RunTimeout time.Duration // default per shell command (HERMES_HANDS_RUN_TIMEOUT)
+	// Rules hands out the rules files of a subdirectory with the first call
+	// into it (nil: none). The loop calls NextRound before each batch.
+	Rules *knowsystem.ScopedRules
+}
+
+// NextRound tells the rules hand-out that a new batch of calls begins.
+func (d *Dispatcher) NextRound() {
+	if d != nil {
+		d.Rules.NextRound()
+	}
 }
 
 var timeoutRe = regexp.MustCompile(`^[0-9]+$`)
@@ -117,7 +128,80 @@ func (d *Dispatcher) doShell(args map[string]json.RawMessage) (Result, error) {
 	if exit != 0 {
 		res.Ctx = d.failCtx(cmd)
 	}
+	if d.Rules != nil {
+		rules, _ := d.Rules.Take(d.shellPaths(cmd)...)
+		res.Ctx = joinCtx(res.Ctx, rules)
+	}
 	return res, nil
+}
+
+// shellPaths are the places a shell command touched, as far as can be told
+// from outside: the shell's directory after it ran (a `cd` persists) and every
+// word of the command that names an existing path — relative to that
+// directory or to the repo root; a path still to be created counts by its
+// directory. A guess, which is why a shell call only brings rules along and is
+// never held back.
+func (d *Dispatcher) shellPaths(cmd string) []string {
+	cwd := d.RepoRoot
+	if out, exit := d.Shell.Run("pwd -P", 5*time.Second); exit == 0 && filepath.IsAbs(strings.TrimSpace(out)) {
+		cwd = strings.TrimSpace(out)
+	}
+	paths := []string{cwd}
+	for _, w := range shellWordRe.FindAllString(cmd, -1) {
+		if strings.HasPrefix(w, "-") || strings.ContainsAny(w, "$~") {
+			continue
+		}
+		if i := strings.IndexAny(w, "*?[{"); i >= 0 {
+			w = w[:i] // a glob: its literal prefix
+		}
+		if w == "" {
+			continue
+		}
+		for _, base := range []string{cwd, d.RepoRoot} {
+			p := w
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(base, p)
+			}
+			if _, err := os.Stat(p); err == nil {
+				paths = append(paths, p)
+				break
+			}
+			if dir := filepath.Dir(p); dir != base {
+				if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+					paths = append(paths, dir)
+					break
+				}
+			}
+		}
+	}
+	return paths
+}
+
+var shellWordRe = regexp.MustCompile("[^\\s;|&<>()'\"`=]+")
+
+func joinCtx(a, b string) string {
+	if a == "" || b == "" {
+		return a + b
+	}
+	return a + "\n\n" + b
+}
+
+// heldBack is the answer to a local_write / local_edit into a directory whose
+// rules the brain had not seen when it wrote the call: nothing is changed and
+// the operator is not asked; the rules come along, the brain sends the call
+// again (or a corrected one).
+func (d *Dispatcher) heldBack(abs, p string) (Result, bool) {
+	rules, fresh := d.Rules.Take(abs)
+	if !fresh {
+		return Result{}, false
+	}
+	where := "they are in this result's context"
+	if rules == "" {
+		where = "they came with an earlier result of this batch"
+	}
+	return Result{Exit: 1, Ctx: rules, Out: "held back, nothing changed: '" + p + "' lies in a directory with its own rules," +
+		" which you had not seen when you wrote this call — " + where + "." +
+		" Check the change against them, then send the call again."}, true
 }
 
 // failCtx ports the auto-context attached after a non-zero shell exit: cwd +
@@ -144,16 +228,18 @@ func (d *Dispatcher) doRead(args map[string]json.RawMessage) Result {
 	if err != nil {
 		return Result{Exit: 1, Out: fmt.Sprintf("refused: '%s' resolves outside the repo root (%s)", p, d.RepoRoot)}
 	}
+	d.Rules.Saw(abs) // reading a rules file itself: it is with the brain now
+	rules, _ := d.Rules.Take(abs)
 	// bash: `_hh_cap "$(timeout ... cat -- "$abs" 2>&1)"` — the cat error text
 	// lands in the output and _hh_cap masks the exit to 0.
 	if fi, statErr := os.Stat(abs); statErr == nil && fi.IsDir() {
-		return Result{Exit: 0, Out: "cat: " + abs + ": Is a directory"}
+		return Result{Exit: 0, Out: "cat: " + abs + ": Is a directory", Ctx: rules}
 	}
 	b, err := os.ReadFile(abs)
 	if err != nil {
-		return Result{Exit: 0, Out: "cat: " + abs + ": " + catErr(err)}
+		return Result{Exit: 0, Out: "cat: " + abs + ": " + catErr(err), Ctx: rules}
 	}
-	return Result{Exit: 0, Out: capBytes(string(b), d.MaxOutput)}
+	return Result{Exit: 0, Out: capBytes(string(b), d.MaxOutput), Ctx: rules}
 }
 
 func (d *Dispatcher) doWrite(args map[string]json.RawMessage) (Result, error) {
@@ -165,6 +251,9 @@ func (d *Dispatcher) doWrite(args map[string]json.RawMessage) (Result, error) {
 	abs, err := resolveInRepo(d.RepoRoot, p)
 	if err != nil {
 		return Result{Exit: 1, Out: "refused: '" + p + "' outside repo root"}, nil
+	}
+	if res, held := d.heldBack(abs, p); held {
+		return res, nil
 	}
 
 	var diff string
@@ -204,6 +293,9 @@ func (d *Dispatcher) doEdit(args map[string]json.RawMessage) (Result, error) {
 	abs, err := resolveInRepo(d.RepoRoot, p)
 	if err != nil {
 		return Result{Exit: 1, Out: "refused: '" + p + "' outside repo root"}, nil
+	}
+	if res, held := d.heldBack(abs, p); held {
+		return res, nil
 	}
 	fi, err := os.Stat(abs)
 	if err != nil || !fi.Mode().IsRegular() {

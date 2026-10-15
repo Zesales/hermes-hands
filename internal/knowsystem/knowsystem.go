@@ -12,8 +12,10 @@
 // command actually finds; whether docker is there as the isolated way to get a
 // tool the host lacks) and, optionally, the REPO the session stands in (git
 // branch, manifests, make targets with their `##` help, a layout map, and the
-// repo's own AGENTS.md / CLAUDE.md). The operator's global rules are imported
-// once at setup into the hermes-hands home (UseGlobal).
+// repo's own rules: AGENTS.md / CLAUDE.md / CLAUDE.local.md on the way down to
+// cwd and their `@path` imports inlined, deeper ones named — ScopedRules hands
+// those out at the first call into their directory). The operator's global
+// rules are imported once at setup into the hermes-hands home (UseGlobal).
 //
 // Freshness: every session start re-probes from scratch, so tools installed
 // or removed between sessions are picked up automatically. A shell call that
@@ -29,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -85,18 +88,31 @@ type System struct {
 	PkgManager  string            `json:"pkg_manager,omitempty"` // brew | apt-get | dnf | pacman | apk | zypper
 	GNUTools    []string          `json:"gnu_tools,omitempty"`   // macOS: GNU variants installed (gsed, ggrep, …)
 	Tools       map[string]bool   `json:"tools"`
-	Learned     map[string]string `json:"learned,omitempty"`  // tool -> "missing"
-	Guidance    []GuideFile       `json:"guidance,omitempty"` // AGENTS.md / CLAUDE.md read for the brief
+	Learned     map[string]string `json:"learned,omitempty"`        // tool -> "missing"
+	Guidance    []GuideFile       `json:"guidance,omitempty"`       // AGENTS.md / CLAUDE.md read for the brief
+	MoreRules   []RuleHint        `json:"more_rules,omitempty"`     // deeper rules files, named, not inlined
+	MoreRulesN  int               `json:"more_rules_cut,omitempty"` // deeper rules files past maxNested
 }
 
 // GuideFile is one operator rules file: the global rules imported at setup
-// (Global) or a repo's AGENTS.md / CLAUDE.md. Its text goes into the
-// instructions, never into known-system.json.
+// (Global), a repo's AGENTS.md / CLAUDE.md, or a file one of those imports with
+// `@path` (ImportedBy). Its text goes into the instructions, never into
+// known-system.json.
 type GuideFile struct {
-	Path   string `json:"path"`
-	Bytes  int    `json:"bytes"`
-	Global bool   `json:"global,omitempty"`
-	text   string
+	Path       string `json:"path"`
+	Bytes      int    `json:"bytes"`
+	Global     bool   `json:"global,omitempty"`
+	ImportedBy string `json:"imported_by,omitempty"`
+	text       string // as inlined (capped)
+	raw        string // as read
+}
+
+// RuleHint is a rules file deeper in the tree than cwd: it governs its own
+// subdirectory (Scope), so the instructions only name it, and ScopedRules
+// hands it to the brain with the first call into that directory.
+type RuleHint struct {
+	Path  string `json:"path"`  // relative to cwd
+	Scope string `json:"scope"` // the subdirectory it governs ("services/api/")
 }
 
 // Probe collects everything deterministically: no LLM, no guessing, no
@@ -152,7 +168,7 @@ func Probe(cwd, gitBranch string) *System {
 		}
 	}
 	s.Layout = layout(cwd)
-	s.Guidance = guidance(cwd)
+	s.Guidance, s.MoreRules, s.MoreRulesN = guidance(cwd)
 	return s
 }
 
@@ -342,21 +358,32 @@ func layout(cwd string) string {
 }
 
 // guidanceNames are a repo's rules files, in the order they are read in each
-// directory.
-var guidanceNames = []string{"AGENTS.md", "CLAUDE.md"}
+// directory: the shared AGENTS.md, Claude Code's CLAUDE.md (or .claude/
+// CLAUDE.md), then CLAUDE.local.md — the operator's personal rules for the
+// repo, usually gitignored, which is why the files are read from disk.
+var guidanceNames = []string{"AGENTS.md", "CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"}
 
 const (
 	maxGuideFile  = 8 * 1024
 	maxGuideTotal = 16 * 1024
+	maxNested     = 20 // deeper rules files named in the instructions
+	maxImports    = 10 // `@path` imports inlined
+	maxImportHops = 5  // as Claude Code: an import's imports, 5 deep
 )
 
 // guidance reads the REPO's rules fresh at every session start — each repo has
-// its own: AGENTS.md / CLAUDE.md from the repo's top level down to cwd (a
-// subdirectory's rules refine the root's, so they come after). Outside a git
+// its own: the guidanceNames from the repo's top level down to cwd (a
+// subdirectory's rules refine the root's, so they come after), then the files
+// those import with Claude Code's `@path` — an import is part of the file
+// that names it, so it is inlined too, but after every rules file proper (the
+// budget goes to those first) and only from inside the repo. Outside a git
 // work tree only cwd's own files count. Nothing above the repo is read — the
 // operator's global rules are imported once at setup (see UseGlobal).
 // Identical copies are read once; each file and the total are capped.
-func guidance(cwd string) []GuideFile {
+//
+// The rules files deeper in the tree are named (hints, with the directory
+// each governs); more counts the ones past maxNested.
+func guidance(cwd string) (files []GuideFile, hints []RuleHint, more int) {
 	cwd = filepath.Clean(cwd)
 	top := cwd
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -374,22 +401,302 @@ func guidance(cwd string) []GuideFile {
 			dirs = append(dirs, d)
 		}
 	}
-	var out []GuideFile
-	seen := map[string]bool{}
+	type imp struct {
+		from, path string
+		hop        int
+	}
+	var queue []imp
+	seen := map[string]bool{} // contents inlined
+	read := map[string]bool{} // paths read — an import of one adds nothing
 	total := 0
 	for _, dir := range dirs {
 		for _, name := range guidanceNames {
 			p := filepath.Join(dir, name)
 			b, err := os.ReadFile(p)
-			if err != nil || len(bytes.TrimSpace(b)) == 0 || seen[string(b)] {
+			if err != nil || len(bytes.TrimSpace(b)) == 0 {
+				continue
+			}
+			read[p] = true
+			if seen[string(b)] {
 				continue
 			}
 			seen[string(b)] = true
-			gf := capGuide(p, b, &total)
-			out = append(out, gf)
+			files = append(files, capGuide(p, b, &total))
+			for _, ip := range importsOf(p, b) {
+				queue = append(queue, imp{p, ip, 1})
+			}
+		}
+	}
+	for n := 0; len(queue) > 0 && n < maxImports; {
+		im := queue[0]
+		queue = queue[1:]
+		if read[im.path] || !inside(top, im.path) {
+			continue
+		}
+		read[im.path] = true
+		b, err := os.ReadFile(im.path)
+		if err != nil || len(bytes.TrimSpace(b)) == 0 || seen[string(b)] {
+			continue // unreadable, empty, or a copy of an inlined file
+		}
+		seen[string(b)] = true
+		g := capGuide(im.path, b, &total)
+		g.ImportedBy = im.from
+		files = append(files, g)
+		n++
+		if im.hop < maxImportHops {
+			for _, ip := range importsOf(im.path, b) {
+				queue = append(queue, imp{im.path, ip, im.hop + 1})
+			}
+		}
+	}
+	hints, more = nestedRules(cwd)
+	return files, hints, more
+}
+
+// inside reports whether p — symlinks resolved — lies in dir (physical).
+func inside(dir, p string) bool {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(real, dir+string(filepath.Separator))
+}
+
+var (
+	importRe   = regexp.MustCompile(`(?:^|\s)@(\S+)`)
+	codeSpanRe = regexp.MustCompile("`[^`]*`")
+)
+
+// importsOf finds Claude Code's `@path` imports in a rules file, as absolute
+// paths: an `@` that starts a word, outside code blocks and code spans,
+// naming a file relative to the importing file (or `~/…`, or absolute). Only
+// names that resolve to an existing file count — `@someone` or `@types/node`
+// do not.
+func importsOf(path string, b []byte) []string {
+	var out []string
+	fence := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		t := strings.TrimSpace(line)
+		if fence != "" {
+			if strings.HasPrefix(t, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			fence = t[:3]
+			continue
+		}
+		for _, m := range importRe.FindAllStringSubmatch(codeSpanRe.ReplaceAllString(line, " "), -1) {
+			p := strings.TrimRight(m[1], ".,;:!?)]}'\"")
+			if p == "" || strings.Contains(p, "://") {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(p, "~/"):
+				home := os.Getenv("HOME")
+				if home == "" {
+					continue
+				}
+				p = filepath.Join(home, p[2:])
+			case !filepath.IsAbs(p):
+				p = filepath.Join(filepath.Dir(path), p)
+			}
+			if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+				out = append(out, filepath.Clean(p))
+			}
 		}
 	}
 	return out
+}
+
+// nestedRules names the rules files deeper in cwd's tree (git ls-files: tracked,
+// or new and not ignored), each with the subdirectory it governs. Shallow ones
+// first (they govern more), at most maxNested; cut counts the rest. Vendored
+// code (vendor/, node_modules/) carries someone else's rules and is skipped;
+// files above or beside cwd are outside the hands' directory and not listed.
+func nestedRules(cwd string) (hints []RuleHint, cut int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", cwd, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+		"--", "*AGENTS.md", "*CLAUDE.md", "*CLAUDE.local.md").Output()
+	if err != nil {
+		return nil, 0
+	}
+	var found []string
+	seen := map[string]bool{}
+	scope := map[string]string{}
+	for _, f := range strings.Split(string(out), "\x00") {
+		if f == "" || seen[f] { // an unmerged file is listed once per stage
+			continue
+		}
+		seen[f] = true
+		dir, base := path.Split(f)
+		if base != "AGENTS.md" && base != "CLAUDE.md" && base != "CLAUDE.local.md" {
+			continue
+		}
+		if base == "CLAUDE.md" && (dir == ".claude/" || strings.HasSuffix(dir, "/.claude/")) {
+			dir = strings.TrimSuffix(dir, ".claude/")
+		}
+		if dir == "" || vendored(dir) {
+			continue // cwd's own (inlined), or vendored
+		}
+		if fi, err := os.Stat(filepath.Join(cwd, f)); err != nil || !fi.Mode().IsRegular() {
+			continue // deleted in the work tree
+		}
+		scope[f] = dir
+		found = append(found, f)
+	}
+	sort.Slice(found, func(i, j int) bool {
+		if di, dj := strings.Count(scope[found[i]], "/"), strings.Count(scope[found[j]], "/"); di != dj {
+			return di < dj
+		}
+		return found[i] < found[j]
+	})
+	if len(found) > maxNested {
+		cut = len(found) - maxNested
+		found = found[:maxNested]
+	}
+	for _, f := range found {
+		hints = append(hints, RuleHint{Path: filepath.FromSlash(f), Scope: scope[f]})
+	}
+	return hints, cut
+}
+
+// vendored reports whether a slash-separated relative directory lies in
+// someone else's code (vendor/, node_modules/) or in .git.
+func vendored(dir string) bool {
+	for _, part := range strings.Split(dir, "/") {
+		if part == "vendor" || part == "node_modules" || part == ".git" {
+			return true
+		}
+	}
+	return false
+}
+
+// ScopedRules hands the brain the rules files that govern a subdirectory of
+// cwd — an AGENTS.md / CLAUDE.md / .claude/CLAUDE.md / CLAUDE.local.md below
+// it, which the instructions only name — with the first call that touches
+// that directory, the way Claude Code loads a nested CLAUDE.md once it reads a
+// file there. Looked up on disk at call time, so a rules file written during
+// the session counts too. Each file is handed out once; the ones inlined in
+// the instructions never. A nil *ScopedRules hands out nothing.
+type ScopedRules struct {
+	root  string
+	round int
+	given map[string]int  // path -> round it reached the brain (-1: in the instructions)
+	texts map[string]bool // contents already with the brain
+}
+
+// Scoped starts the hand-out for this session: rooted at cwd, with every file
+// the instructions inline already counted as seen.
+func (s *System) Scoped() *ScopedRules {
+	r := &ScopedRules{root: filepath.Clean(s.Cwd), given: map[string]int{}, texts: map[string]bool{}}
+	for _, g := range s.Guidance {
+		r.given[filepath.Clean(g.Path)] = -1
+		r.texts[g.raw] = true
+	}
+	return r
+}
+
+// NextRound marks the start of a new batch of calls: rules handed out in an
+// earlier round have been seen by the brain when it wrote this batch.
+func (r *ScopedRules) NextRound() {
+	if r != nil {
+		r.round++
+	}
+}
+
+// Saw records that the brain gets path's full text right now (a local_read of
+// the rules file itself), so it is not handed out again.
+func (r *ScopedRules) Saw(path string) {
+	if r == nil {
+		return
+	}
+	path = filepath.Clean(path)
+	if _, ok := r.given[path]; !ok && r.governs(path) {
+		r.given[path] = r.round
+		if b, err := os.ReadFile(path); err == nil {
+			r.texts[string(b)] = true
+		}
+	}
+}
+
+// Take renders the rules files governing the given absolute paths that the
+// brain has not seen yet, for a tool result's context ("" when there are
+// none), and marks them seen. fresh reports whether any of the governing
+// files reached the brain only in this round — a write composed before it saw
+// them has to wait (see dispatch).
+func (r *ScopedRules) Take(paths ...string) (text string, fresh bool) {
+	if r == nil {
+		return "", false
+	}
+	var b strings.Builder
+	total := 0
+	for _, p := range paths {
+		for _, f := range r.governing(p) {
+			if at, ok := r.given[f]; ok {
+				fresh = fresh || at == r.round
+				continue
+			}
+			r.given[f] = r.round
+			raw, err := os.ReadFile(f)
+			if err != nil || len(bytes.TrimSpace(raw)) == 0 || r.texts[string(raw)] {
+				continue
+			}
+			r.texts[string(raw)] = true
+			fresh = true
+			rel, _ := filepath.Rel(r.root, f)
+			scope := filepath.ToSlash(filepath.Dir(rel))
+			scope = strings.TrimSuffix(scope, "/.claude") + "/"
+			g := capGuide(rel, raw, &total)
+			b.WriteString("### " + rel + " — governs " + scope + "\n\n" + strings.TrimSpace(g.text) + "\n\n")
+		}
+	}
+	if b.Len() == 0 {
+		return "", fresh
+	}
+	return "[hermes-hands: the rules for the directory this call touched — binding there, in addition to the operator rules in your instructions; shown once]\n\n" +
+		strings.TrimRight(b.String(), "\n"), fresh
+}
+
+// governing lists the rules files on disk in the directories from just below
+// root down to p's own (p itself when it is a directory), shallow first.
+// Nothing at or above root (the instructions carry those), nothing vendored.
+func (r *ScopedRules) governing(p string) []string {
+	rel, err := filepath.Rel(r.root, filepath.Clean(p))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
+		parts = parts[:len(parts)-1] // a file (or one still to be written): its directory
+	}
+	var out []string
+	d := r.root
+	for _, part := range parts {
+		if vendored(part) {
+			break
+		}
+		d = filepath.Join(d, part)
+		for _, name := range guidanceNames {
+			f := filepath.Join(d, name)
+			if fi, err := os.Stat(f); err == nil && fi.Mode().IsRegular() {
+				out = append(out, f)
+			}
+		}
+	}
+	return out
+}
+
+// governs reports whether path is one of the rules files below root.
+func (r *ScopedRules) governs(path string) bool {
+	for _, f := range r.governing(path) {
+		if f == path {
+			return true
+		}
+	}
+	return false
 }
 
 // capGuide wraps one rules file, cut to maxGuideFile, and not inlined at all
@@ -400,10 +707,10 @@ func capGuide(path string, b []byte, total *int) GuideFile {
 		text = text[:maxGuideFile] + "\n[… cut by hermes-hands — read the file for the rest]"
 	}
 	if *total+len(text) > maxGuideTotal {
-		return GuideFile{Path: path, Bytes: len(b), text: "[not inlined — over the guidance budget; read the file]"}
+		return GuideFile{Path: path, Bytes: len(b), raw: string(b), text: "[not inlined — over the guidance budget; read the file]"}
 	}
 	*total += len(text)
-	return GuideFile{Path: path, Bytes: len(b), text: text}
+	return GuideFile{Path: path, Bytes: len(b), raw: string(b), text: text}
 }
 
 // UseGlobal puts the operator's global rules — the file `hermes-hands setup`
@@ -614,21 +921,35 @@ func (s *System) Brief() string {
 }
 
 // GuidanceBlock renders the operator's rules for the instructions — the
-// imported global rules first, then the repo's AGENTS.md / CLAUDE.md ("" when
-// there are none). They bind the brain the same way they bind any agent
-// working this workspace.
+// imported global rules first, then the repo's AGENTS.md / CLAUDE.md and their
+// imports, then the deeper rules files by name ("" when there are none). They
+// bind the brain the same way they bind any agent working this workspace.
 func (s *System) GuidanceBlock() string {
-	if len(s.Guidance) == 0 {
+	if len(s.Guidance) == 0 && len(s.MoreRules) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("## Operator rules (binding: follow them; where they name a tool, a pipeline or a limit, that is how the work is done here)\n")
 	for _, g := range s.Guidance {
 		head := "the repo's " + g.Path + " (read at session start)"
-		if g.Global {
+		switch {
+		case g.Global:
 			head = "global rules, imported by the operator at setup (" + g.Path + ")"
+		case g.ImportedBy != "":
+			head = "the repo's " + g.Path + " (imported by " + g.ImportedBy + " with `@`, so part of its rules)"
+		case filepath.Base(g.Path) == "CLAUDE.local.md":
+			head = "the operator's personal rules for this repo, " + g.Path + " (not committed; read at session start)"
 		}
 		b.WriteString("\n### " + head + "\n\n" + strings.TrimSpace(g.text) + "\n")
+	}
+	if len(s.MoreRules) > 0 || s.MoreRulesN > 0 {
+		b.WriteString("\n### rules for subdirectories — binding there, in addition to the rules above. Not inlined: your first call into such a directory brings its rules along in the result's `context`, and a local_write / local_edit there is held back until you have seen them — `local_read` them first to save that round\n\n")
+		for _, h := range s.MoreRules {
+			b.WriteString("- `" + h.Path + "` — governs `" + h.Scope + "`\n")
+		}
+		if s.MoreRulesN > 0 {
+			b.WriteString(fmt.Sprintf("- … %d more — `git ls-files '*AGENTS.md' '*CLAUDE.md'` lists them\n", s.MoreRulesN))
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

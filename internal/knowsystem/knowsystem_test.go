@@ -1,6 +1,7 @@
 package knowsystem
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,7 +202,7 @@ func TestGuidanceIsRepoScoped(t *testing.T) {
 	os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("use make, not go directly"), 0o644) // identical copy
 	os.WriteFile(filepath.Join(repo, "sub", "AGENTS.md"), []byte(strings.Repeat("x", maxGuideFile+100)), 0o644)
 
-	g := guidance(filepath.Join(repo, "sub"))
+	g, _, _ := guidance(filepath.Join(repo, "sub"))
 	if len(g) != 2 || g[0].Path != filepath.Join(repo, "AGENTS.md") || g[1].Path != filepath.Join(repo, "sub", "AGENTS.md") {
 		t.Fatalf("guidance = %+v", g)
 	}
@@ -211,8 +212,208 @@ func TestGuidanceIsRepoScoped(t *testing.T) {
 	// outside a git work tree: only cwd's own files
 	plain := t.TempDir()
 	os.WriteFile(filepath.Join(plain, "AGENTS.md"), []byte("plain rules"), 0o644)
-	if g := guidance(plain); len(g) != 1 || g[0].text != "plain rules" {
-		t.Errorf("non-git guidance = %+v", g)
+	if g, h, _ := guidance(plain); len(g) != 1 || g[0].text != "plain rules" || len(h) != 0 {
+		t.Errorf("non-git guidance = %+v %+v", g, h)
+	}
+}
+
+// gitRepo makes a git work tree with the given files ("" content: the path is
+// written but stays untracked); returns its root.
+func gitRepo(t *testing.T, files map[string]string, tracked ...string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	for f, body := range files {
+		os.MkdirAll(filepath.Join(repo, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(repo, f), []byte(body), 0o644)
+	}
+	if len(tracked) > 0 {
+		if out, err := exec.Command("git", append([]string{"-C", repo, "add", "--"}, tracked...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git add: %v %s", err, out)
+		}
+	}
+	return repo
+}
+
+func TestGuidanceLocalAndDotClaude(t *testing.T) {
+	// CLAUDE.local.md is personal and gitignored — read from disk all the
+	// same, after CLAUDE.md; .claude/CLAUDE.md counts like CLAUDE.md
+	repo := gitRepo(t, map[string]string{
+		".gitignore":            "CLAUDE.local.md\n",
+		"CLAUDE.md":             "team rules",
+		"CLAUDE.local.md":       "my rules",
+		"sub/.claude/CLAUDE.md": "sub rules",
+	}, ".gitignore", "CLAUDE.md", "sub/.claude/CLAUDE.md")
+	g, h, _ := guidance(filepath.Join(repo, "sub"))
+	var got []string
+	for _, f := range g {
+		got = append(got, f.text)
+	}
+	if strings.Join(got, "|") != "team rules|my rules|sub rules" || len(h) != 0 {
+		t.Fatalf("guidance = %v, hints %+v", got, h)
+	}
+	block := (&System{Guidance: g}).GuidanceBlock()
+	if !strings.Contains(block, "personal rules for this repo, "+filepath.Join(repo, "CLAUDE.local.md")+" (not committed") {
+		t.Errorf("CLAUDE.local.md not labelled as personal:\n%s", block)
+	}
+}
+
+func TestGuidanceNamesNestedRules(t *testing.T) {
+	// rules deeper in the tree are named with the directory they govern —
+	// shallow first; vendored, ignored and deleted ones are not
+	repo := gitRepo(t, map[string]string{
+		".gitignore":                   "ignored/\n",
+		"AGENTS.md":                    "root rules",
+		"services/api/AGENTS.md":       "api rules",
+		"services/api/CLAUDE.md":       "api claude rules",
+		"web/CLAUDE.md":                "new, untracked, not ignored",
+		"tools/.claude/CLAUDE.md":      "tools rules",
+		"a/b/c/AGENTS.md":              "deep rules",
+		"vendor/x/AGENTS.md":           "someone else's",
+		"web/node_modules/p/CLAUDE.md": "someone else's",
+		"ignored/AGENTS.md":            "ignored",
+		"gone/AGENTS.md":               "deleted after commit",
+		"docs/MY_AGENTS.md":            "not a rules file",
+	}, ".gitignore", "AGENTS.md", "services", "tools", "a", "vendor", "gone", "docs")
+	os.Remove(filepath.Join(repo, "gone", "AGENTS.md"))
+
+	g, h, more := guidance(repo)
+	if len(g) != 1 || g[0].text != "root rules" {
+		t.Fatalf("inlined = %+v", g)
+	}
+	var got []string
+	for _, x := range h {
+		got = append(got, x.Path+" -> "+x.Scope)
+	}
+	want := "tools/.claude/CLAUDE.md -> tools/|web/CLAUDE.md -> web/|services/api/AGENTS.md -> services/api/|services/api/CLAUDE.md -> services/api/|a/b/c/AGENTS.md -> a/b/c/"
+	if strings.Join(got, "|") != want || more != 0 {
+		t.Fatalf("hints =\n%s\nwant\n%s (more %d)", strings.Join(got, "|"), want, more)
+	}
+	block := (&System{Guidance: g, MoreRules: h}).GuidanceBlock()
+	if !strings.Contains(block, "- `services/api/AGENTS.md` — governs `services/api/`") || !strings.Contains(block, "held back until you have seen them") {
+		t.Errorf("block:\n%s", block)
+	}
+	// from a subdirectory: only what lies below it, relative to it
+	if _, h, _ := guidance(filepath.Join(repo, "services")); len(h) != 2 || h[0].Path != filepath.Join("api", "AGENTS.md") || h[0].Scope != "api/" {
+		t.Errorf("hints from services/ = %+v", h)
+	}
+}
+
+func TestGuidanceNestedCap(t *testing.T) {
+	files := map[string]string{}
+	for i := 0; i < maxNested+3; i++ {
+		files[fmt.Sprintf("m%02d/AGENTS.md", i)] = fmt.Sprintf("rules %d", i)
+	}
+	repo := gitRepo(t, files)
+	_, h, more := guidance(repo)
+	if len(h) != maxNested || more != 3 || h[0].Path != filepath.Join("m00", "AGENTS.md") {
+		t.Fatalf("%d hints, %d more: %+v", len(h), more, h)
+	}
+	if block := (&System{MoreRules: h, MoreRulesN: more}).GuidanceBlock(); !strings.Contains(block, "- … 3 more — `git ls-files") {
+		t.Errorf("block:\n%s", block)
+	}
+}
+
+func TestGuidanceImports(t *testing.T) {
+	// Claude Code's `@path` imports are part of the file that names them:
+	// inlined after the rules files proper, resolved relative to the importing
+	// file, followed into their own imports. Not imports: one of a file inlined
+	// anyway, a code span, a fenced block, an @mention, an e-mail address; a
+	// file outside the repo is not inlined
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.WriteFile(filepath.Join(home, "team.md"), []byte("team-wide rules"), 0o644)
+	repo := gitRepo(t, map[string]string{
+		"AGENTS.md": "shared rules",
+		"CLAUDE.md": "@AGENTS.md\n\nSee @docs/style.md. Ask @someone, mail ops@docs/x.md.\n" +
+			"Not `@docs/span.md`, and personal: @~/team.md\n```\n@docs/fenced.md\n```\n",
+		"docs/style.md":  "style — see @more.md",
+		"docs/more.md":   "more style",
+		"docs/span.md":   "span",
+		"docs/fenced.md": "fenced",
+		"docs/x.md":      "x",
+	})
+	g, _, _ := guidance(repo)
+	var got []string
+	for _, f := range g {
+		rel, _ := filepath.Rel(repo, f.Path)
+		by := ""
+		if f.ImportedBy != "" {
+			by, _ = filepath.Rel(repo, f.ImportedBy)
+		}
+		got = append(got, rel+"<"+by)
+	}
+	want := "AGENTS.md<|CLAUDE.md<|" + filepath.Join("docs", "style.md") + "<CLAUDE.md|" +
+		filepath.Join("docs", "more.md") + "<" + filepath.Join("docs", "style.md")
+	if strings.Join(got, "|") != want {
+		t.Fatalf("inlined =\n%s\nwant\n%s", strings.Join(got, "|"), want)
+	}
+	block := (&System{Guidance: g}).GuidanceBlock()
+	if !strings.Contains(block, "### the repo's "+filepath.Join(repo, "docs", "style.md")+" (imported by "+filepath.Join(repo, "CLAUDE.md")+" with `@`") ||
+		strings.Contains(block, "team-wide") {
+		t.Errorf("block:\n%s", block)
+	}
+}
+
+func TestScopedRulesHandOut(t *testing.T) {
+	// a subdirectory's rules reach the brain with the first call into it —
+	// shallow first, once, never the ones the instructions inline, never
+	// vendored ones; a rules file written mid-session counts too
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	for f, body := range map[string]string{
+		"CLAUDE.md":                      "root rules — and @services/db/AGENTS.md",
+		"services/AGENTS.md":             "svc rules",
+		"services/api/CLAUDE.md":         "api rules",
+		"services/api/.claude/CLAUDE.md": "svc rules", // a copy: handed out once
+		"services/db/AGENTS.md":          "db rules",  // imported by the root CLAUDE.md
+		"services/web/AGENTS.md":         "web rules",
+		"vendor/x/AGENTS.md":             "someone else's",
+	} {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(root, f), []byte(body), 0o644)
+	}
+	g, _, _ := guidance(root)
+	r := (&System{Cwd: root, Guidance: g}).Scoped()
+	at := func(rel string) string { return filepath.Join(root, rel) }
+
+	if text, _ := r.Take(at("main.go"), at("vendor/x/a.go")); text != "" {
+		t.Errorf("root / vendored: %q", text)
+	}
+	text, fresh := r.Take(at("services/api/new.go")) // not written yet: its directory counts
+	si, ai := strings.Index(text, "svc rules"), strings.Index(text, "api rules")
+	if !fresh || si < 0 || ai < si || strings.Count(text, "svc rules") != 1 ||
+		!strings.Contains(text, "### "+filepath.Join("services", "AGENTS.md")+" — governs services/") ||
+		!strings.Contains(text, "governs services/api/") {
+		t.Fatalf("take = %v %q", fresh, text)
+	}
+	if text, fresh := r.Take(at("services/api/x.go")); text != "" || !fresh {
+		t.Errorf("same round again = %v %q", fresh, text)
+	}
+	r.NextRound()
+	if text, fresh := r.Take(at("services/api/x.go")); text != "" || fresh {
+		t.Errorf("next round = %v %q", fresh, text)
+	}
+	if text, _ := r.Take(at("services/db/q.sql")); text != "" {
+		t.Errorf("inlined by import, handed out again: %q", text)
+	}
+	r.Saw(at("services/web/AGENTS.md")) // read in full by the brain
+	if text, fresh := r.Take(at("services/web/x")); text != "" || !fresh {
+		t.Errorf("after Saw = %v %q", fresh, text)
+	}
+	os.WriteFile(at("services/api/AGENTS.md"), []byte("written mid-session"), 0o644)
+	if text, _ := r.Take(at("services/api")); !strings.Contains(text, "written mid-session") {
+		t.Errorf("new rules file: %q", text)
+	}
+	var none *ScopedRules
+	none.NextRound()
+	none.Saw(at("x"))
+	if text, fresh := none.Take(at("services/api/x.go")); text != "" || fresh {
+		t.Error("a nil hand-out hands out nothing")
 	}
 }
 

@@ -219,9 +219,21 @@ them.
   the host lacks.
 - **The repo** you stand in: git branch, manifests (Makefile, compose, go.mod,
   …), the `make` targets **with their `## help` text**, a one-line layout map
-  of the tracked tree, and the repo's own **`AGENTS.md` / `CLAUDE.md`** (from
-  the repo root down to where you stand) — read fresh at every session start,
-  since every repo has its own.
+  of the tracked tree, and the repo's own rules — read fresh at every session
+  start, since every repo has its own:
+  - **inlined:** `AGENTS.md`, `CLAUDE.md` (or `.claude/CLAUDE.md`) and your
+    personal, usually gitignored `CLAUDE.local.md`, from the repo root down to
+    where you stand — plus the files they import with Claude Code's `@path`
+    syntax (from inside the repo, 5 hops deep, like Claude Code);
+  - **handed out on first contact:** the rules files deeper in the tree. The
+    instructions only name them with their scope ("`services/api/AGENTS.md` —
+    governs `services/api/`"); the hands attach one to the result of the first
+    call into its directory, the way Claude Code loads a nested `CLAUDE.md`.
+    A `local_write` / `local_edit` there that Hermes wrote before it saw those
+    rules is **held back** (nothing changes, you are not asked) — Hermes gets
+    the rules and sends the call again. A `local_shell` command only brings the
+    rules along (which paths it touches is a guess: its words, and where a
+    `cd` left the shell). `vendor/` / `node_modules/` are skipped.
 - **Your global rules:** `hermes-hands setup` offers to import the agent rules
   in your home directory (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
   `~/AGENTS.md`, …) once into `~/hermes-hands/guidance.md` — stored knowledge
