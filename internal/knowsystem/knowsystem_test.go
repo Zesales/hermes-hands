@@ -2,6 +2,7 @@ package knowsystem
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -487,5 +488,30 @@ func TestBriefMacOS(t *testing.T) {
 	linux := (&System{OS: "linux", Arch: "amd64", Userland: "gnu", Bash: "5.2.21(1)-release", Tools: map[string]bool{}}).Brief()
 	if strings.Contains(linux, "userland") || strings.Contains(linux, "no mapfile") {
 		t.Errorf("a GNU/bash-5 host needs no caveats:\n%s", linux)
+	}
+}
+
+func TestLineOverlapNearDuplicateRules(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want float64
+	}{
+		{"a has no non-empty line", "  \n\t\n\n", "keep the rules short\n", 0},
+		{"both empty", "", "", 0},
+		{"identical", "use make, not raw go\nrun make ci before a PR\n", "use make, not raw go\nrun make ci before a PR\n", 1},
+		{"a is a subset of b", "use make, not raw go\n", "global rules\n\nuse make, not raw go\nno pushes from the hands\n", 1},
+		{"half of a is in b", "use make, not raw go\ncommit per repo\n", "use make, not raw go\nother line\n", 0.5},
+		{"disjoint", "alpha\nbeta\n", "gamma\ndelta\n", 0},
+		{"whitespace and blank lines ignored", "\t use make \n\n   commit per repo  \n", "use make\n   COMMIT   \ncommit per repo\n\n", 1},
+		{"a repeated line counts once", "use make\nuse make\ncommit per repo\n", "use make\n", 0.5},
+		{"crlf lines", "use make\r\ncommit per repo\r\n", "use make\ncommit per repo\n", 1},
+		{"only inside a longer line is not a restatement", "make\n", "always run make ci before a PR\n", 0},
+		{"warn threshold at 0.8", "l1\nl2\nl3\nl4\nl5\n", "l1\nl2\nl3\nl4\nelsewhere\n", 0.8},
+	}
+	for _, c := range cases {
+		if got := LineOverlap(c.a, c.b); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("%s: LineOverlap = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
