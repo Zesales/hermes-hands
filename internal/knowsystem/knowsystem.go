@@ -733,6 +733,41 @@ func (s *System) UseGlobal(path string) {
 	s.Guidance = append([]GuideFile{g}, s.Guidance...)
 }
 
+// LineOverlap is the share of a's distinct non-empty lines that also appear
+// as a whole line in b: both sides are cut with strings.TrimSpace, so
+// indentation, CRLF and blank lines never matter. 0 when a has no non-empty
+// line. A line repeated in a counts once, so a file that repeats itself does
+// not inflate the share. A short line of a that merely sits INSIDE a longer
+// line of b is not a restatement and does not count.
+//
+// It measures near-duplicates, not identity — meant for the global rules
+// import, to warn (from 0.8) when one imported file mostly restates another,
+// e.g. an older copy of the same rules. Not wired in yet.
+func LineOverlap(a, b string) float64 {
+	want := map[string]bool{}
+	for _, l := range strings.Split(a, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			want[l] = true
+		}
+	}
+	if len(want) == 0 {
+		return 0
+	}
+	have := map[string]bool{}
+	for _, l := range strings.Split(b, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			have[l] = true
+		}
+	}
+	hits := 0
+	for l := range want {
+		if have[l] {
+			hits++
+		}
+	}
+	return float64(hits) / float64(len(want))
+}
+
 var notFoundRe = regexp.MustCompile(`: ([A-Za-z0-9_][A-Za-z0-9_.+/-]*): command not found`)
 
 // ObserveShell watches tool results for the one signal that matters at run
