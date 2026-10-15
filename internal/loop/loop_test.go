@@ -12,6 +12,7 @@ import (
 
 	"github.com/Zesales/hermes-hands/internal/api"
 	"github.com/Zesales/hermes-hands/internal/dispatch"
+	"github.com/Zesales/hermes-hands/internal/knowsystem"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/redact"
 	"github.com/Zesales/hermes-hands/internal/session"
@@ -561,5 +562,30 @@ func TestRunEmitsCallBeforeResultWithSessionRefs(t *testing.T) {
 	}
 	if !strings.Contains(sa.msgs[1], `"id":"c1","ref":42`) || !strings.Contains(sa.msgs[1], `"id":"c2","ref":43`) {
 		t.Errorf("results must carry the refs: %s", trunc(sa.msgs[1], 400))
+	}
+}
+
+func TestRunWriteHeldUntilRulesSeen(t *testing.T) {
+	// round 1 writes into a directory with its own rules, unseen: held back,
+	// the rules come along; round 2 sends the write again and it goes through
+	d := realDisp(t, prompt.AutoApprover{})
+	os.MkdirAll(filepath.Join(d.RepoRoot, "api"), 0o755)
+	os.WriteFile(filepath.Join(d.RepoRoot, "api", "AGENTS.md"), []byte("every file here starts with // owner: api"), 0o644)
+	d.Rules = (&knowsystem.System{Cwd: d.RepoRoot}).Scoped()
+	write := `{"calls":[{"tool":"local_write","args":{"path":"api/ping.go","content":"// owner: api\n"}}],"final":null}`
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(write, true),
+		reply(write, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	out, _, s := run(t, sa, d, 8)
+	if !out.OK || len(s.msgs) != 3 {
+		t.Fatalf("out = %+v, %d asks", out, len(s.msgs))
+	}
+	if !strings.Contains(s.msgs[1], "held back") || !strings.Contains(s.msgs[1], "owner: api") {
+		t.Errorf("round 2 msg lacks the held-back result with the rules: %q", s.msgs[1])
+	}
+	if !strings.Contains(s.msgs[2], "wrote api/ping.go") {
+		t.Errorf("round 3 msg: the repeated write did not go through: %q", s.msgs[2])
 	}
 }

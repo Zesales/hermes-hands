@@ -479,6 +479,7 @@ func newApp() (*app, error) {
 		Deny:       cfg.Deny,
 		MaxOutput:  cfg.MaxOutput,
 		RunTimeout: time.Duration(cfg.RunTimeout) * time.Second,
+		Rules:      known.Scoped(), // a subdirectory's rules, at the first call into it
 	}
 	lp := &loop.Loop{
 		API: client, Dispatch: disp,

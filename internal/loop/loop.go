@@ -272,6 +272,7 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 		}
 
 		elems := make([]resultElem, 0, callsN)
+		l.Dispatch.NextRound() // rules handed out before now were seen when this batch was written
 		for i := 0; i < callsN; i++ {
 			id := mkID(i, calls[i].id())
 			tool := firstNonEmpty(calls[i].Tool, calls[i].Name)

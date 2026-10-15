@@ -119,8 +119,21 @@ scripts and plugins — see **Sessions** and **REPL**.
   the home directory (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
   `~/AGENTS.md`, …) into `~/hermes-hands/guidance.md` (re-import:
   `hermes-hands guidance`), then the **repo's own** `AGENTS.md` / `CLAUDE.md`
-  (repo root down to cwd), read fresh at every session start. Identical copies
-  once; capped.
+  / `.claude/CLAUDE.md` / `CLAUDE.local.md` (repo root down to cwd; the
+  personal `CLAUDE.local.md` is read from disk even when gitignored), read
+  fresh at every session start. Identical copies once; capped.
+- Claude Code's **`@path` imports** in those files are inlined too, after the
+  rules files proper (the budget goes to those first): resolved relative to
+  the importing file, outside code, 5 hops deep, from inside the repo only.
+- **Rules of a subdirectory** (an `AGENTS.md` / `CLAUDE.md` deeper than cwd)
+  reach Hermes **with the first call into that directory**, in the result's
+  `context` — looked up on disk at call time, each file once. A `local_write` /
+  `local_edit` there that was composed before Hermes saw them (in an earlier
+  round, not the same batch) is **held back**: nothing changes, the operator
+  is not asked, Hermes sends it again. A `local_shell` call only brings them
+  along (its paths are a guess: the command's words and the shell's directory
+  after it ran). The instructions name these files with their scope (`git
+  ls-files`, shallow first, at most 20; `known-system.json`: `more_rules`).
 - **macOS**: the brief names the release (`macOS 15.1`, Apple Silicon), the
   hands' bash version (bash 3.2's caveats spelled out), the **BSD userland**
   traps (`sed -i ''`, no `grep -P`, `date -v`, `stat -f`) and the installed GNU
