@@ -6,3 +6,5 @@
 # `go build ./...` drops the module binary here; the real target is dist/
 /hermes-hands
 .hermes-review/
+# local work list for the next session (not part of the repo)
+/todo.md
