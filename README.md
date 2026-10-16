@@ -26,7 +26,7 @@ hermes-hands setup            # your gateway URL + API key, stored machine-bound
 cd ~/projects/myrepo && hermes-hands
 ```
 
-The story behind it — one brain on the server, hands on the laptop that carry
+The design behind it — one brain on a server, hands on your machine that carry
 no model: [Remote Brain, Local Hands](docs/remote-brain-local-hands.md).
 
 > **Status.** A native "remote brain, local hands" path for Hermes is still
