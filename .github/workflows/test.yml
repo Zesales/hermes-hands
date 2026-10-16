@@ -7,9 +7,20 @@ name: test
 on:
   pull_request:
 
+# Read-only token: the gate reads the code and never writes — release.yml
+# carries its own contents: write.
+permissions:
+  contents: read
+
+# A newer push to the same PR replaces the run still in flight.
+concurrency:
+  group: test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       # actions/checkout v4.2.2, pinned by commit
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -26,6 +37,11 @@ jobs:
       # watchdog and the turn share state across goroutines.
       - name: go test -race
         run: make race
+      # Per package: the unit tests' coverage, then what the golden runs (the
+      # real REPL + --rpc) reach — shown on the run's summary page.
+      - name: Coverage (job summary)
+        run: |
+          { echo '### Coverage'; echo '```'; make cover; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       # The exact build release.yml runs after a merge (linux+darwin ×
       # amd64+arm64 + SHA256SUMS), minus the publish — so a green `test`
       # guarantees the release build will succeed and release.yml can skip
