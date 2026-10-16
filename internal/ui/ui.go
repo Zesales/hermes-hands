@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/ttyio"
+	"hermes-hands/internal/ttyio"
 )
 
 // lookPath is indirected so tests can force the plain (no-renderer) path.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/session"
 )
 
 // Show draws one event of a session's log. Live turns and reopened sessions

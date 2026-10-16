@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Zesales/hermes-hands/internal/knowsystem"
+	"hermes-hands/internal/knowsystem"
 )
 
 // GlobalGuidanceFile (in the hermes-hands home) holds the operator's global

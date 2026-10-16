@@ -9,6 +9,16 @@ gateway runs.
 No change for the operator; the code is reorganised so that every package and
 type does one job.
 
+### The module is `hermes-hands`
+
+- `go.mod` says `module hermes-hands` (was `github.com/Zesales/hermes-hands`),
+  so the imports name the project, not where it is hosted:
+  `hermes-hands/internal/api`. Nothing was ever fetched through that path —
+  the packages are this repo's `internal/` and builds are vendored and
+  offline — but the import no longer reads like a dependency on GitHub.
+  `go install github.com/Zesales/hermes-hands@…` stops working with it;
+  installs go through `install.sh` (a release, or a clone built here).
+
 ### Safety net
 
 - **Golden transcripts** (`testdata/golden/`, `golden_test.go`): one full turn

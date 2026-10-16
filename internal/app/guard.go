@@ -1,6 +1,6 @@
 package app
 
-import "github.com/Zesales/hermes-hands/internal/guard"
+import "hermes-hands/internal/guard"
 
 // sandboxGuard is the policy for Hermes' own tool calls in a hands run
 // (HERMES_HANDS_SANDBOX): smart steers only what is aimed at the operator's

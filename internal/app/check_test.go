@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Zesales/hermes-hands/internal/api"
+	"hermes-hands/internal/api"
 )
 
 func TestCheckLineCompat(t *testing.T) {

@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Zesales/hermes-hands/internal/app"
-	"github.com/Zesales/hermes-hands/internal/config"
-	"github.com/Zesales/hermes-hands/internal/prompt"
+	"hermes-hands/internal/app"
+	"hermes-hands/internal/config"
+	"hermes-hands/internal/prompt"
 )
 
 // command is one slash command: its names and what it does with the rest of

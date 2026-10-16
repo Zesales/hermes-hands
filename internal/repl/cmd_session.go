@@ -6,8 +6,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/Zesales/hermes-hands/internal/app"
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/app"
+	"hermes-hands/internal/session"
 )
 
 // session: no argument shows the open session's detail (local and, when the

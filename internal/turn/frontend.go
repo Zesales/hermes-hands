@@ -5,7 +5,7 @@
 // writes JSON lines.
 package turn
 
-import "github.com/Zesales/hermes-hands/internal/session"
+import "hermes-hands/internal/session"
 
 // Frontend shows a turn as it happens.
 type Frontend interface {

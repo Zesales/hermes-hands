@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/session"
 )
 
 // OpenSession makes rec the open session: loads its event log, continues the

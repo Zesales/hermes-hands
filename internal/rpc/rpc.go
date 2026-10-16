@@ -43,11 +43,11 @@ import (
 	"io"
 	"os"
 
-	"github.com/Zesales/hermes-hands/internal/app"
-	"github.com/Zesales/hermes-hands/internal/compat"
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/turn"
+	"hermes-hands/internal/app"
+	"hermes-hands/internal/compat"
+	"hermes-hands/internal/prompt"
+	"hermes-hands/internal/session"
+	"hermes-hands/internal/turn"
 )
 
 type request struct {

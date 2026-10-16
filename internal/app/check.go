@@ -1,8 +1,8 @@
 package app
 
 import (
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/compat"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/compat"
 )
 
 // CheckLine is `check` / `/check`'s success line; the server's version is

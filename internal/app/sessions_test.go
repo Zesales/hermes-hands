@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/session"
 )
 
 func TestFormatSessionCompare(t *testing.T) {

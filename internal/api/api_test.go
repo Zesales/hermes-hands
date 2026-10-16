@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/hermesmock"
+	"hermes-hands/internal/hermesmock"
 
-	"github.com/Zesales/hermes-hands/internal/guard"
+	"hermes-hands/internal/guard"
 )
 
 func testClient(baseURL string) *Client {

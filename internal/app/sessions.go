@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/session"
 )
 
 // maxSessionLookups bounds the per-session GETs of a verbose list: a local

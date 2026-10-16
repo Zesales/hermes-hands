@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/config"
+	"hermes-hands/internal/config"
 )
 
 // base ports hh_api_base: strip exactly one trailing slash, then append

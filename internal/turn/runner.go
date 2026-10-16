@@ -9,10 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/loop"
-	"github.com/Zesales/hermes-hands/internal/redact"
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/loop"
+	"hermes-hands/internal/redact"
+	"hermes-hands/internal/session"
 )
 
 // Runner runs the operator's turns in one open session.

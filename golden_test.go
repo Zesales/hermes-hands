@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/hermesmock"
+	"hermes-hands/internal/hermesmock"
 )
 
 // The golden tests pin what the operator sees: one full turn through the
