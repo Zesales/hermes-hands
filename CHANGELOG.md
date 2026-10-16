@@ -4,7 +4,15 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.12.1 — (unreleased, `bump:patch`) every PR is a release
+## 0.12.2 — (unreleased, `bump:patch`) a license badge that always renders
+
+- The README's license badge is static (`license: MIT`). The dynamic one
+  asked the GitHub API through shields.io's token pool on every view and
+  showed "Unable to select next GitHub token from pool" / "invalid" when
+  that pool ran dry; GitHub itself detects the LICENSE as MIT. The license
+  never changes, so the badge needs no lookup.
+
+## 0.12.1 — 2026-10-16 — every PR is a release
 
 - **`bump:none` is gone**: a PR carries exactly one of `bump:patch`,
   `bump:minor`, `bump:major` — `pr-label.yml` requires it, `release.yml`
