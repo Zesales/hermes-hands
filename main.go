@@ -450,7 +450,7 @@ func prepareResume(a *app, rec *session.Record, evs []session.Event) {
 		return // nothing has been said in this session yet
 	}
 	if idle := session.IdleFor(rec, time.Now()); idle > session.StaleAfter {
-		logf("session %s: idle %s — model prompt caches (Bifrost/hermes-agent/Claude-style) likely expired; the first turn re-reads the full conversation (token cost)", rec.ID, idle.Round(time.Minute))
+		logf("session %s: idle %s — model prompt caches (gateway/hermes-agent/Claude-style) likely expired; the first turn re-reads the full conversation (token cost)", rec.ID, idle.Round(time.Minute))
 	}
 	if si, err := a.client.SessionInfo(context.Background(), rec.HermesSessionID); err == nil && si.Messages > 0 {
 		return

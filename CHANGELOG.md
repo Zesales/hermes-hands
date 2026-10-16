@@ -91,6 +91,9 @@ hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).
   three-line quick start under the diagram, a link to the
   [Remote Brain, Local Hands](docs/remote-brain-local-hands.md) write-up, a
   Contributing section; the layout line names every package.
+- The write-up describes the design only — no particular setup, hosts or
+  hardware. Model: tested with `qwen3.6-35b-a3b`, currently runs best on
+  `qwen3.8-flash-next`. Its tool names are `local_*`.
 - `CONTRIBUTING.md` (build, the PR gate, bump labels, CHANGELOG, pinning),
   `SECURITY.md` (private reporting, what is in scope), issue templates (a bug
   report asks for the hermes-hands and hermes-agent versions; upstream issues
@@ -424,7 +427,7 @@ kannst du?" by listing its own tools. 0.8.0 reframes the whole relationship:
   hands**. Every turn you are handed a **problem**. Your reply is always the
   same shape: reason it through, then **one instruction** — `{"calls":[…]}` or
   `{"calls":[],"final":"…"}`. That is your only output contract: no chat, no
-  self-description." Verified against a live Bifrost trace: "lies die todo.md"
+  self-description." Verified against a live gateway trace: "lies die todo.md"
   → clean `{"calls":[{"tool":"read_file",…}]}` on the first model call, correct
   reasoning, zero `tool_search` / `skill_view` / sandbox detour.
 - `frame()` is now a thin **task wrapper** around the operator's message

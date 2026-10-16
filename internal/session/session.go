@@ -269,7 +269,7 @@ func FormatListWith(recs []Record, under func(i int) string) string {
 }
 
 // StaleAfter is an informational idle threshold, not a hard expiry: gateway
-// and model layers (Bifrost, hermes-agent, Claude-style provider prompt caches
+// and model layers (a model gateway, hermes-agent, Claude-style provider prompt caches
 // with a ~1h TTL) cache the running conversation. After 1h idle that cache has
 // very likely expired, so resuming re-reads the whole transcript — the first
 // turn then pays full input tokens instead of cached ones. The flag reminds
