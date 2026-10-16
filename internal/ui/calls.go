@@ -103,6 +103,26 @@ func (u *UI) HermesTool(tool, preview, action string) {
 	})
 }
 
+// Approval re-draws an answered approval prompt from the event log, the way
+// the prompt itself drew it live (internal/prompt for the hands' calls,
+// askServerApproval for Hermes' own): the summary, its detail, the choices
+// and the answer given. Hermes' server prompts answer once | session | deny.
+func (u *UI) Approval(summary, detail, answer string) {
+	key := map[string]string{"yes": "y", "no": "n", "all": "a", "quit": "q", "once": "o", "session": "s", "deny": "n"}[answer]
+	u.sync(func() {
+		fmt.Fprintf(u.w, "\n  ⚠  %s\n", summary)
+		switch answer {
+		case "once", "session", "deny":
+			fmt.Fprintf(u.w, "      %s\n  [o]nce  [s]ession  [n]o > %s\n", detail, key)
+		default:
+			if detail != "" {
+				io.WriteString(u.w, indentLines(detail, "      "))
+			}
+			fmt.Fprintf(u.w, "  [y]es  [n]o  [a]ll  [q]uit turn > %s\n", key)
+		}
+	})
+}
+
 // Note is one dim line inside a turn (a capped round budget, a cancel, …).
 func (u *UI) Note(msg string) {
 	u.sync(func() { fmt.Fprintf(u.w, " %s%s%s\n", u.cDim, msg, u.cR) })

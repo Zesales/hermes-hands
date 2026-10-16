@@ -95,7 +95,9 @@ type Client struct {
 }
 
 // CheckResult is the outcome of a successful preflight.
-type CheckResult struct{ Model, Base string }
+// Version is hermes-agent's own version from GET /health ("" when the
+// gateway doesn't say) — what a bug report or a "works with" note names.
+type CheckResult struct{ Model, Base, Version string }
 
 // Caps is the parsed /v1/capabilities surface — used to gate features that a
 // given Hermes build may not have (SSE run events, session compress, …).
@@ -252,7 +254,7 @@ func (c *Client) Check(ctx context.Context) (CheckResult, error) {
 			nil, map[string]string{"Accept": "application/json"})
 		if err == nil && is2xx(code) && looksJSON(body) {
 			c.Caps = parseCaps(body)
-			return CheckResult{Model: checkModel(body), Base: base}, nil
+			return CheckResult{Model: checkModel(body), Base: base, Version: c.serverVersion(ctx)}, nil
 		}
 		switch code {
 		case 401, 403:
@@ -267,6 +269,19 @@ func (c *Client) Check(ctx context.Context) (CheckResult, error) {
 			return CheckResult{}, serr
 		}
 	}
+}
+
+// serverVersion reads hermes-agent's version from its health endpoint
+// (GET /health -> {"version": "0.22.0"}), best-effort: "" on any failure.
+func (c *Client) serverVersion(ctx context.Context) string {
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodGet, c.titleBase()+"/health",
+		nil, map[string]string{"Accept": "application/json"})
+	if err != nil || !is2xx(code) {
+		return ""
+	}
+	return jsonString(body, "version")
 }
 
 // SetTitle ports hh_api_set_title: a best-effort PATCH, all output and errors

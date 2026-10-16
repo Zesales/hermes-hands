@@ -219,11 +219,16 @@ func (s *Store) List() ([]Record, error) {
 // (informational cache hint, * past StaleAfter), the repo directory name, and
 // the title. An untitled session shows a blank title (not its cwd) — the DIR
 // column carries the location instead.
-func FormatList(recs []Record) string {
+func FormatList(recs []Record) string { return FormatListWith(recs, nil) }
+
+// FormatListWith is FormatList with extra lines under each row: under(i)
+// returns what goes below recs[i] (each line newline-terminated, or "").
+// `--session-list-verbose` puts the matching hermes-agent session there.
+func FormatListWith(recs []Record, under func(i int) string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%-24s  %5s  %8s  %-19s  %-7s  %-14s  %s\n", "ID", "TURNS", "TOKENS", "UPDATED", "IDLE", "DIR", "TITLE")
 	anyStale := false
-	for _, r := range recs {
+	for i, r := range recs {
 		upd := r.Updated
 		if len(upd) > 19 {
 			upd = upd[:19]
@@ -240,15 +245,22 @@ func FormatList(recs []Record) string {
 			tok = "~" + strconv.Itoa(r.LastTokens)
 		}
 		idle := IdleFor(&r, time.Now())
-		idleCol := idle.Round(time.Minute).String()
-		if idle >= 24*time.Hour {
+		m := int(idle.Round(time.Minute) / time.Minute)
+		idleCol := strconv.Itoa(m) + "m" // 24m, 21h28m, 3d — fits the column
+		switch {
+		case idle >= 24*time.Hour:
 			idleCol = strconv.Itoa(int(idle.Hours()/24)) + "d"
+		case m >= 60:
+			idleCol = fmt.Sprintf("%dh%02dm", m/60, m%60)
 		}
 		if idle > StaleAfter {
 			idleCol += "*"
 			anyStale = true
 		}
 		fmt.Fprintf(&b, "%-24s  %5d  %8s  %-19s  %-7s  %-14s  %s\n", r.ID, r.Turns, tok, upd, idleCol, dir, r.Title)
+		if under != nil {
+			b.WriteString(under(i))
+		}
 	}
 	if anyStale {
 		fmt.Fprintf(&b, "\n* idle >1h: the gateway/model prompt cache has likely expired — the first resumed turn re-reads the full transcript and can cost full-price tokens. Informational only.\n")
