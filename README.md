@@ -473,7 +473,7 @@ your phone and web UI never see it.
 ```sh
 git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
 make                 # list targets, grouped (Develop / Verify / Artifacts)
-make toolchain       # once: docker pull the pinned Go image (golang:1.26.7-bookworm)
+make toolchain       # once: docker pull the pinned Go image (golang:1.26.9-bookworm)
 make dev             # build in the container, run it on this host out of ./.dev/
 make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
@@ -500,7 +500,7 @@ prompts for a separate one. The prompt is read straight from
 incrementally on every `make dev`). `make clean` wipes `./.dev/`, including the
 toolchain cache.
 
-Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
+Go 1.26.9, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
 never fetch modules (the one download is the pinned Go image). Layout: `main.go`
 (the build-time version, then `internal/cli`) +

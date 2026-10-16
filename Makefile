@@ -50,7 +50,7 @@ ARGS      ?=
 GO_MODE  ?= docker
 # GO_IMAGE version MUST equal go.mod's `go` line. Debian, not alpine: the
 # shell / dispatch / loop tests need bash and skip silently without it.
-GO_IMAGE ?= golang:1.26.7-bookworm
+GO_IMAGE ?= golang:1.26.9-bookworm
 # persistent build+module cache, host-owned, wiped by `make clean`
 GO_CACHE := $(CURDIR)/.dev/gocache
 
@@ -122,6 +122,15 @@ cover: | $(GO_CACHE)  ## coverage per package: the unit tests, then what the gol
 	@$(call tc) go test -count=1 -cover ./... | awk '/%/ {p=$$2; sub("hermes-hands/?","",p); if (p=="") p="(main)"; for (i=1; i<=NF; i++) if ($$i ~ /%$$/) c=$$i; printf "  %-22s %7s\n", p, c}'
 	@echo "golden runs (the real REPL + --rpc, in a subprocess):"
 	@$(call tc) sh -c 'd=$$(mktemp -d) && trap "rm -rf $$d" EXIT && HH_GOLDEN_COVERDIR=$$d go test -count=1 -coverpkg=./... -run "^TestGolden" . >/dev/null && go tool covdata percent -i=$$d' | awk '{p=$$1; sub("hermes-hands/?","",p); if (p=="") p="(main)"; printf "  %-22s %7s\n", p, $$3}'
+
+# govulncheck, pinned: known vulnerabilities in the code paths hermes-hands
+# actually calls (stdlib + the vendored deps) — the one check that needs the
+# network (the Go module proxy and vuln.go.dev). x/vuln ships no patch
+# releases; this one is weeks old and has a successor.
+GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+vuln: | $(GO_CACHE)  ## govulncheck (pinned) — known vulnerabilities in the code paths we call; needs network
+	$(call tc,GOFLAGS=) go run $(GOVULNCHECK) ./...
 
 race: | $(GO_CACHE)  ## go test -race ./... — data races between the stream, the watchdog and the turn (CGO on, the image's gcc)
 	$(call tc,CGO_ENABLED=1) go test -race ./...
