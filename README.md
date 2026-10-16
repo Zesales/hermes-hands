@@ -514,7 +514,7 @@ job is a required check for merging), plus `make race`, `make vuln` and the
 coverage table; a second job runs the tests on macOS itself (bash 3.2, BSD
 userland). `codeql.yml` scans the code with CodeQL (PRs, main, weekly; results
 in the Security tab); Dependabot proposes updates of the pinned Actions, never
-before a release is 14 days old. `release.yml` tags + publishes on merge (see
+before a release is 14 days old, labelled `bump:patch`. `release.yml` tags + publishes on merge (see
 Releasing).
 
 **Golden transcripts** (`testdata/golden/`) pin what the operator sees: one
@@ -541,9 +541,9 @@ between; `install.sh --version 0.11.0` pins one).
 `pull_request` → closed & merged):
 
 1. **next version** = the highest `v*.*.*` tag, bumped by the PR's label —
-   exactly one of `bump:patch` / `bump:minor` / `bump:major` (`bump:none` = no
-   release). `pr-label.yml`'s `bump-label` job enforces the label as a required
-   check.
+   exactly one of `bump:patch` / `bump:minor` / `bump:major` — there is no
+   "no release" label. `pr-label.yml`'s `bump-label` job enforces the label as
+   a required check.
 2. puts an **annotated tag `vX.Y.Z`** on the merge commit and pushes **only the
    tag** — nothing is committed to `main`, so branch protection needs no
    bypass,
@@ -558,7 +558,7 @@ explicit bump level.
 
 > One-time repo setup: Settings → Actions → Workflow permissions → **Read and
 > write**; make `test` and `bump-label` required status checks; create the
-> labels `bump:patch` / `bump:minor` / `bump:major` / `bump:none`. The first
+> labels `bump:patch` / `bump:minor` / `bump:major`. The first
 > release's baseline is `MIN_VERSION` in `release.yml` (used only until the
 > first tag exists).
 
