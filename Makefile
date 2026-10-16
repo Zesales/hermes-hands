@@ -114,6 +114,9 @@ uninstall:  ## remove the installed binary from your PATH
 test: | $(GO_CACHE)  ## go test ./... — offline (vendored), no network, no model
 	$(call tc) go test ./...
 
+golden: | $(GO_CACHE)  ## rewrite testdata/golden/ (REPL + rpc transcripts) after an intended UI change
+	$(call tc) go test -run '^TestGolden' . -update
+
 lint: | $(GO_CACHE)  ## gofmt check + go vet for linux AND darwin   (STATICCHECK=1 also runs staticcheck — needs network)
 	@bad=$$($(call tc) sh -c 'find . -name "*.go" -not -path "./vendor/*" -not -path "./.dev/*" -exec gofmt -l {} +'); \
 	 test -z "$$bad" || { echo "gofmt needs a run on:"; echo "$$bad"; exit 1; }
