@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Zesales/hermes-hands/internal/compat"
 	"github.com/Zesales/hermes-hands/internal/debuglog"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/redact"
@@ -35,13 +36,14 @@ import (
 //
 // Responses:
 //
-//	{"type":"ready","session":"hh_...","cwd":"/repo","version":"X.Y.Z","approvals":"off"}
-//	{"type":"call","id":1,"ref":14,"tool":"shell","preview":"npm test"}       before it runs
-//	{"type":"tool","id":1,"ref":14,"tool":"shell","preview":"npm test","exit":0,"lines":12}
+//	{"type":"ready","session":"hh_...","cwd":"/repo","version":"X.Y.Z","approvals":"off","hermes_agent":"0.22.2"}
+//	                                     (+ "compat":"…" when hermes_agent is outside the supported range)
+//	{"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}       before it runs
+//	{"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 //	{"type":"hermes_tool","id":1,"tool":"terminal","preview":"...","action":"steered"}
 //	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"..."}
 //	{"type":"session","id":2,"session":"hh_...","hermes_session":"..."}
-//	{"type":"check","id":4,"ok":true,"model":"...","base":"..."}
+//	{"type":"check","id":4,"ok":true,"model":"...","base":"...","version":"0.22.2"}   (+ "compat" as above)
 //	{"type":"history","id":5,"session":"hh_...","events":[...]}  (session.Event objects)
 //	{"type":"debug","id":6,"on":true,"path":".../debug.jsonl"}
 //	{"type":"error","id":1,"message":"..."}
@@ -79,7 +81,8 @@ func runRPC(smode string) int {
 	// Preflight like the REPL: it also reads /v1/capabilities, without which
 	// the client never streams — and only the SSE stream carries Hermes' tool
 	// events (the sandbox guard) and live deltas.
-	if _, err := a.client.Check(context.Background()); err != nil {
+	srv, err := a.client.Check(context.Background())
+	if err != nil {
 		emit(map[string]any{"type": "error", "message": err.Error()})
 		return 1
 	}
@@ -105,10 +108,14 @@ func runRPC(smode string) int {
 	}
 	evlog := openSession(a, rec, false)
 
-	emit(map[string]any{
+	ready := map[string]any{
 		"type": "ready", "session": rec.ID, "cwd": a.repoRoot,
-		"version": bareVersion(), "approvals": approvals,
-	})
+		"version": bareVersion(), "approvals": approvals, "hermes_agent": srv.Version,
+	}
+	if w := compatWarning(srv.Version); w != "" {
+		ready["compat"] = w
+	}
+	emit(ready)
 
 	// SIGINT cancels the in-flight turn (like the REPL): the turn context, the
 	// shell child AND the server run. The caller drives the lifetime by
@@ -208,6 +215,7 @@ func runRPC(smode string) int {
 			evlog.add(session.Event{Kind: session.KindUser, Text: redact.Scrub(req.Text)})
 			curID = id
 			heads := map[int]string{} // ref -> the call's preview; a result event carries no args
+			var local int64           // ms the hands' calls ran (turn_end's local share)
 			a.loop.Emit = func(ev session.Event) {
 				wd.bump()
 				ev = evlog.add(ev)
@@ -216,6 +224,7 @@ func runRPC(smode string) int {
 					heads[ev.Ref], _ = ui.Summarize(ev.Tool, ev.Args)
 					emit(map[string]any{"type": "call", "id": id, "ref": ev.Ref, "tool": ev.Tool, "preview": heads[ev.Ref]})
 				case session.KindResult:
+					local += ev.Ms
 					exit := 0
 					if ev.Exit != nil {
 						exit = *ev.Exit
@@ -250,7 +259,7 @@ func runRPC(smode string) int {
 			a.loop.Emit = nil
 			a.client.OnHermesTool = nil
 			a.client.OnDelta = nil
-			end := session.Event{Kind: session.KindTurnEnd, Ms: time.Since(turnStart).Milliseconds()}
+			end := session.Event{Kind: session.KindTurnEnd, Ms: time.Since(turnStart).Milliseconds(), LocalMs: local}
 
 			if timedOut {
 				end.Outcome, end.Limit = "timeout", int(a.cfg.ResponseTimeout/time.Second)
@@ -335,7 +344,11 @@ func runRPC(smode string) int {
 				emit(map[string]any{"type": "check", "id": id, "ok": false, "message": e.Error()})
 				continue
 			}
-			emit(map[string]any{"type": "check", "id": id, "ok": true, "model": res.Model, "base": res.Base})
+			msg := map[string]any{"type": "check", "id": id, "ok": true, "model": res.Model, "base": res.Base, "version": res.Version}
+			if n := compat.Note(res.Version); n != "" {
+				msg["compat"] = n
+			}
+			emit(msg)
 
 		case "compact", "compress":
 			emit(map[string]any{"type": "compact", "id": id, "ok": false,

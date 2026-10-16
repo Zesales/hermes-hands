@@ -240,17 +240,20 @@ func TestHold_AccumulatesPausedTime(t *testing.T) {
 
 func TestTurnDone(t *testing.T) {
 	for _, tc := range []struct {
-		d       time.Duration
-		outcome string
-		limit   int
-		want    string
+		d           time.Duration
+		outcome     string
+		limit       int
+		local, wait time.Duration
+		want        string
 	}{
-		{12 * time.Second, "", 0, "— worked for 12s —"},
-		{8500 * time.Millisecond, "interrupted", 0, "— interrupted after 9s —"},
-		{603 * time.Second, "timeout", 600, "— timeout after 10m03s — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=600s) —"},
+		{12 * time.Second, "", 0, 0, 0, "— worked for 12s —"},
+		{66 * time.Second, "", 0, 8 * time.Second, 108 * time.Second, "— worked for 1m06s · hermes 58s · local 8s · waited on you 1m48s —"},
+		{9 * time.Second, "", 0, 40 * time.Millisecond, 0, "— worked for 9s · hermes 9s · local <1s —"},
+		{8500 * time.Millisecond, "interrupted", 0, 3 * time.Second, 0, "— interrupted after 9s —"},
+		{603 * time.Second, "timeout", 600, 0, 0, "— timeout after 10m03s — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=600s) —"},
 	} {
 		var b strings.Builder
-		newUI(&b, false, false).TurnDone(tc.d, tc.outcome, tc.limit)
+		newUI(&b, false, false).TurnDone(tc.d, tc.outcome, tc.limit, tc.local, tc.wait)
 		if got := strings.TrimRight(b.String(), "\n"); got != tc.want {
 			t.Errorf("TurnDone(%v,%q,%d) = %q, want %q", tc.d, tc.outcome, tc.limit, got, tc.want)
 		}

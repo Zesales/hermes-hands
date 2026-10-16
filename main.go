@@ -25,10 +25,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/peterh/liner"
 
 	"github.com/Zesales/hermes-hands/internal/api"
+	"github.com/Zesales/hermes-hands/internal/compat"
 	"github.com/Zesales/hermes-hands/internal/config"
 	"github.com/Zesales/hermes-hands/internal/debuglog"
 	"github.com/Zesales/hermes-hands/internal/dispatch"
@@ -52,8 +55,8 @@ var (
 // usageText is what `hermes-hands -h` prints. Everything past first-run config
 // happens inside the session with /commands; the shell surface stays small.
 const usageText = `hermes-hands - terminal chat with a central Hermes brain over its Runs API.
-Hermes holds the plan/memory; it drives a persistent local shell plus
-read_file / write_file / edit_file to see and act on the repo you're in.
+Hermes holds the plan/memory; it drives its hands here — local_shell (a
+persistent bash), local_read / local_write / local_edit — in the repo you're in.
 
 A session is one task. There is no one-shot, and no auto-resume: a bare run
 starts a fresh session — resume an old one by its id only (plugins keep the id).
@@ -63,7 +66,9 @@ starts a fresh session — resume an old one by its id only (plugins keep the id
   hermes-hands --new              start a fresh session  (same as a bare run)
   hermes-hands --rpc              JSON-lines session server for an editor/plugin
 
-  hermes-hands --session-list     list sessions with id / turns / tokens / idle
+  hermes-hands --session-list     list this machine's sessions: id / turns / tokens / idle
+  hermes-hands --session-list-verbose
+                                  … each with its hermes-agent session (local vs. server)
   hermes-hands sessions new       mint a session id (for --session / --rpc)
   hermes-hands setup              first-run config  (also: /setup in-session)
   hermes-hands guidance           (re-)import your global agent rules (~/.claude/CLAUDE.md, …)
@@ -75,11 +80,12 @@ starts a fresh session — resume an old one by its id only (plugins keep the id
 
 // parsed is the outcome of the argv scan.
 type parsed struct {
-	action string // "" | help | version | check | sessions | sessionnew | setup
-	errMsg string // non-empty => fatal (unknown option / stray argument)
-	smode  string // "" (== new) | new | continue | <id>
-	rpc    bool
-	yolo   bool
+	action  string // "" | help | version | check | sessions | sessionnew | setup
+	errMsg  string // non-empty => fatal (unknown option / stray argument)
+	smode   string // "" (== new) | new | continue | <id>
+	rpc     bool
+	yolo    bool
+	verbose bool // sessions: --session-list-verbose / sessions -v
 }
 
 // parseArgs scans argv, first match winning; the eager subcommands return
@@ -115,11 +121,17 @@ func parseArgs(args []string) parsed {
 		case "check", "--check":
 			p.action = "check"
 			return p
-		case "sessions", "--list", "--session-list":
-			if a == "sessions" && i+1 < len(args) && args[i+1] == "new" {
+		case "sessions", "--list", "--session-list", "--session-list-verbose":
+			next := ""
+			if i+1 < len(args) {
+				next = args[i+1]
+			}
+			switch {
+			case a == "sessions" && next == "new":
 				p.action = "sessionnew"
-			} else {
+			default:
 				p.action = "sessions"
+				p.verbose = a == "--session-list-verbose" || next == "-v" || next == "--verbose"
 			}
 			return p
 		case "setup":
@@ -172,7 +184,7 @@ func main() {
 	case "check":
 		os.Exit(runCheck())
 	case "sessions":
-		os.Exit(runSessions())
+		os.Exit(runSessions(p.verbose))
 	case "sessionnew":
 		os.Exit(runSessionNew())
 	case "setup":
@@ -250,35 +262,41 @@ func (f *finalStreamer) feed(chunk string) {
 		if k < 0 {
 			return
 		}
-		q := strings.IndexByte(s[k+7:], '"') // opening quote of the value
-		if q < 0 {
+		v := strings.TrimLeft(s[k+7:], " \t\r\n")
+		if v == "" {
+			return
+		}
+		if v[0] != ':' {
+			f.done = true // not a key after all — nothing safe to preview
+			return
+		}
+		v = strings.TrimLeft(v[1:], " \t\r\n")
+		if v == "" {
+			return
+		}
+		if v[0] != '"' { // "final": null — a calls-round written final-first
+			f.done = true
 			return
 		}
 		f.started = true
-		f.pos = k + 7 + q + 1
+		f.pos = len(s) - len(v) + 1
 	}
 
-	// walk from f.pos, emitting decoded chars until an unescaped closing quote
+	// walk from f.pos, emitting decoded chars until an unescaped closing quote.
+	// An escape cut off by the chunk boundary (`\` or `\u00` at the very end)
+	// waits for the next chunk — emitting its `\` early used to print `\n`
+	// literally and could take a later `\"` for the closing quote.
 	var out strings.Builder
 	i := f.pos
 	for i < len(s) {
 		c := s[i]
-		if c == '\\' && i+1 < len(s) {
-			switch s[i+1] {
-			case 'n':
-				out.WriteByte('\n')
-			case 't':
-				out.WriteByte('\t')
-			case '"':
-				out.WriteByte('"')
-			case '\\':
-				out.WriteByte('\\')
-			case '/':
-				out.WriteByte('/')
-			default:
-				out.WriteByte(s[i+1])
+		if c == '\\' {
+			r, n := jsonEscape(s[i:])
+			if n == 0 {
+				break // incomplete escape: wait for more
 			}
-			i += 2
+			out.WriteString(r)
+			i += n
 			continue
 		}
 		if c == '"' { // end of the final string
@@ -292,6 +310,51 @@ func (f *finalStreamer) feed(chunk string) {
 	f.pos = i
 	if out.Len() > 0 && f.emit != nil {
 		f.emit(out.String())
+	}
+}
+
+// jsonEscape decodes the JSON string escape at the start of s (s[0] == '\\')
+// and returns its text and length — n == 0 when s ends before the escape does.
+// \uXXXX handles UTF-16 surrogate pairs; a malformed escape yields its char.
+func jsonEscape(s string) (string, int) {
+	if len(s) < 2 {
+		return "", 0
+	}
+	switch s[1] {
+	case 'n':
+		return "\n", 2
+	case 't':
+		return "\t", 2
+	case 'r':
+		return "\r", 2
+	case 'b':
+		return "\b", 2
+	case 'f':
+		return "\f", 2
+	case 'u':
+		if len(s) < 6 {
+			return "", 0
+		}
+		r1, err := strconv.ParseUint(s[2:6], 16, 32)
+		if err != nil {
+			return "u", 2
+		}
+		if utf16.IsSurrogate(rune(r1)) {
+			if len(s) < 12 {
+				return "", 0
+			}
+			if s[6] == '\\' && s[7] == 'u' {
+				if r2, err := strconv.ParseUint(s[8:12], 16, 32); err == nil {
+					if r := utf16.DecodeRune(rune(r1), rune(r2)); r != utf8.RuneError {
+						return string(r), 12
+					}
+				}
+			}
+			return string(utf8.RuneError), 6
+		}
+		return string(rune(r1)), 6
+	default: // \" \\ \/ and anything malformed
+		return s[1:2], 2
 	}
 }
 
@@ -531,18 +594,35 @@ func askServerApproval(ap prompt.Approver, tool, what string) string {
 	if tool == "" {
 		tool = "a tool"
 	}
-	fmt.Fprintf(out, "\n  ⚠  hermes wants to run %s on its SERVER sandbox (not your machine):\n      %s\n", tool, what)
+	summary := "hermes wants to run " + tool + " on its SERVER sandbox (not your machine):"
+	asked := time.Now()
+	fmt.Fprintf(out, "\n  ⚠  %s\n      %s\n", summary, what)
 	line, err := ta.AskLine("  [o]nce  [s]ession  [n]o > ")
-	if err != nil {
-		return "deny"
+	answer := "deny"
+	if err == nil {
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "o", "y", "once":
+			answer = "once"
+		case "s", "session":
+			answer = "session"
+		}
 	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "o", "y", "once":
-		return "once"
-	case "s", "session":
-		return "session"
+	if ta.OnAnswer != nil {
+		ta.OnAnswer(summary, what, answer, time.Since(asked))
 	}
-	return "deny"
+	return answer
+}
+
+// maxApprovalDetail caps the diff an approval event keeps for its replay.
+const maxApprovalDetail = 200
+
+// clipLines keeps the first n lines of s and says how many it dropped.
+func clipLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n… %d more lines", len(lines)-n)
 }
 
 // pruneFiles deletes the files in dir older than maxAge, then dir itself once
@@ -627,10 +707,14 @@ func runREPL(smode string) int {
 
 	configured := !notConfigured(a.cfg)
 	if configured {
-		if _, err := a.client.Check(context.Background()); err != nil {
+		res, err := a.client.Check(context.Background())
+		if err != nil {
 			fmt.Printf("BLOCKED: %v\n", err)
 			fmt.Fprintln(os.Stderr, "(fix the URL/key: `hermes-hands setup`, or /setup in-session)")
 			return 1
+		}
+		if w := compatWarning(res.Version); w != "" {
+			warnf("%s", w)
 		}
 	}
 
@@ -660,6 +744,7 @@ func runREPL(smode string) int {
 		cancelTurn context.CancelFunc
 		runID      string          // in-flight Hermes run, for POST /v1/runs/{id}/stop
 		streamBuf  strings.Builder // this turn's live-previewed answer text (dedupes the final render)
+		turnLocal  int64           // ms the hands' calls ran this turn (the footer's "local" share)
 		stopWork   = func() {}     // stops this turn's animated "working" line (set per turn)
 	)
 	// The first streamed chunk means output is flowing — retire the spinner.
@@ -727,14 +812,24 @@ func runREPL(smode string) int {
 			ta.Out = os.Stderr
 			ta.AskLine = func(q string) (string, error) { return ln.Prompt(q) }
 			ta.Pause = a.ui.Hold
+			// the prompt is on screen already: store it, so a replay shows it too
+			ta.OnAnswer = func(summary, detail, answer string, waited time.Duration) {
+				evlog.add(session.Event{Kind: session.KindApproval, Text: redact.Scrub(summary),
+					Detail: clipLines(redact.Scrub(detail), maxApprovalDetail), Action: answer, Ms: waited.Milliseconds()})
+			}
 		}
+		a.loop.Paused = a.ui.Paused
 		a.client.OnRunStart = func(id string) {
 			turnMu.Lock()
 			runID = id
 			turnMu.Unlock()
 			// each round is a fresh envelope: a calls-round must not keep the
-			// preview muted for the final round that follows it
+			// preview muted for the final round that follows it. A preview a
+			// previous round left open (a prose reply sent back for a fix-up)
+			// is closed, so the dedupe below compares this round's text only.
 			fs.reset()
+			a.ui.StreamDone()
+			streamBuf.Reset()
 			wd.bump()
 		}
 		a.client.OnDelta = func(s string) { wd.bump(); fs.feed(s) } // previews the `final` text; any token = progress
@@ -749,6 +844,9 @@ func runREPL(smode string) int {
 			wd.bump() // a call starting or finishing = progress
 			ev = evlog.add(ev)
 			evlog.show(ev, ev.Out)
+			if ev.Kind == session.KindResult {
+				turnLocal += ev.Ms
+			}
 			if ev.Kind == session.KindCall {
 				a.ui.SetActivity(fmt.Sprintf("#%d %s", ev.Ref, ev.Tool))
 			} else {
@@ -915,7 +1013,7 @@ func runREPL(smode string) int {
 				fmt.Fprintf(os.Stderr, "BLOCKED: %s\n", e)
 			} else {
 				configured = true
-				fmt.Fprintf(os.Stderr, "API OK: %s @ %s\n", res.Model, res.Base)
+				fmt.Fprintln(os.Stderr, checkLine(res))
 			}
 			fmt.Fprintln(os.Stderr)
 			continue
@@ -958,11 +1056,7 @@ func runREPL(smode string) int {
 			applyDebug()
 			continue
 		case "/sessions":
-			recs, _ := a.store.List()
-			fmt.Fprint(os.Stderr, session.FormatList(recs))
-			if ss, e := a.client.ListSessions(context.Background()); e == nil && len(ss) > 0 {
-				fmt.Fprint(os.Stderr, "\n"+formatSrvList(ss))
-			}
+			fmt.Fprint(os.Stderr, sessionList(a.store, a.client, rest == "-v" || rest == "--verbose"))
 			fmt.Fprintln(os.Stderr)
 			continue
 		case "/config", "/hh-settings":
@@ -995,6 +1089,7 @@ func runREPL(smode string) int {
 
 		streamBuf.Reset()
 		fs.reset()
+		turnLocal = 0
 		ctx, cancel := context.WithCancel(context.Background())
 		turnMu.Lock()
 		cancelTurn = cancel
@@ -1019,9 +1114,11 @@ func runREPL(smode string) int {
 		// Exclude time spent waiting on the operator's y/n/a/q answer at an
 		// approval prompt — that is the operator deciding, not hermes-agent
 		// working, and shouldn't inflate "worked for Xs".
-		turnDur := time.Since(turnStart) - a.ui.Paused()
+		waited := a.ui.Paused()
+		turnDur := time.Since(turnStart) - waited
 
-		end := session.Event{Kind: session.KindTurnEnd, Ms: turnDur.Milliseconds()}
+		end := session.Event{Kind: session.KindTurnEnd, Ms: turnDur.Milliseconds(),
+			LocalMs: turnLocal, WaitMs: waited.Milliseconds()}
 		switch {
 		case timedOut:
 			end.Outcome, end.Limit = "timeout", int(a.cfg.ResponseTimeout/time.Second)
@@ -1045,6 +1142,34 @@ func runREPL(smode string) int {
 	return 0
 }
 
+// checkLine is `check` / `/check`'s success line; the server's version is
+// named when its /health says it, and a second line says when that version
+// is outside the range hermes-hands is built for (internal/compat).
+func checkLine(res api.CheckResult) string {
+	line := "API OK: " + res.Model + " @ " + res.Base
+	if res.Version != "" {
+		line += " · hermes-agent " + res.Version
+	}
+	switch compat.Check(res.Version) {
+	case compat.TooOld:
+		line += "\nWARNING: " + compat.Note(res.Version)
+	case compat.Newer, compat.Unknown:
+		line += "\nnote: " + compat.Note(res.Version)
+	}
+	return line
+}
+
+// compatWarning is what a session start says about the server's version:
+// only a known version outside the range — an unreported one (a /health that
+// didn't answer) is left to `check`, not repeated at every start.
+func compatWarning(version string) string {
+	switch compat.Check(version) {
+	case compat.TooOld, compat.Newer:
+		return compat.Note(version)
+	}
+	return ""
+}
+
 // --- subcommands ---
 
 func runCheck() int {
@@ -1054,7 +1179,7 @@ func runCheck() int {
 		fmt.Printf("BLOCKED: %s\n", err)
 		return 1
 	}
-	fmt.Printf("API OK: %s @ %s\n", res.Model, res.Base)
+	fmt.Println(checkLine(res))
 	return 0
 }
 
@@ -1074,27 +1199,26 @@ func checkClient(cfg *config.Config) *api.Client {
 	}
 }
 
-func runSessions() int {
+func runSessions(verbose bool) int {
 	cfg := loadCfgOrExit()
 	store, err := session.Open(cfg.StateDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
 		return 0
 	}
-	recs, _ := store.List()
-	fmt.Print(session.FormatList(recs))
-	if !notConfigured(cfg) {
-		if ss, e := checkClient(cfg).ListSessions(context.Background()); e == nil && len(ss) > 0 {
-			fmt.Print("\n" + formatSrvList(ss))
-		}
+	var client *api.Client
+	if verbose && !notConfigured(cfg) {
+		client = checkClient(cfg)
 	}
+	fmt.Print(sessionList(store, client, verbose))
 	return 0
 }
 
-// formatSrvList renders the server-side session list (from GET /api/sessions).
-func formatSrvList(ss []api.SrvSession) string {
+// formatSrvList renders server-side sessions (from GET /api/sessions) under
+// a heading line.
+func formatSrvList(head string, ss []api.SrvSession) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "hermes-agent sessions (%d):\n", len(ss))
+	b.WriteString(head + "\n")
 	fmt.Fprintf(&b, "%-40s  %5s  %7s  %s\n", "SESSION", "MSGS", "TOKENS", "TITLE")
 	for _, s := range ss {
 		id := s.ID

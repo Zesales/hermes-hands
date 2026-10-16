@@ -1,9 +1,96 @@
 # Changelog
 
-## 0.11.0 — (unreleased, `bump:minor`) session event log, live tool calls, sandbox guard, known system
+hermes-hands keeps its own version line. Each release names the hermes-agent
+range it is built and tested for; `hermes-hands check` prints the version your
+gateway runs.
 
-One minor release for the whole `better-instructions` line. Breaking for
-scripts and plugins — see **Sessions** and **REPL**.
+## 0.12.0 — (unreleased, `bump:minor`) the answer once; approvals in the replay; local vs. server sessions
+
+hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).
+
+### The answer is printed once
+
+- **The live answer preview no longer garbles and then repeats the answer.**
+  It decodes the `final` string out of the streamed envelope chunk by chunk;
+  an escape cut by a chunk boundary (`\` ending one chunk, `n` starting the
+  next) came out as two plain characters — the preview showed `\n` / `\"`
+  literally, and a `\\\"` cut after its first `\` was taken for the end of
+  the string, so the preview stopped mid-answer. Then it no longer matched the
+  final answer, which was printed a second time below it. An escape now waits
+  for its second half; `\uXXXX` (surrogate pairs included), `\r`, `\b`, `\f`
+  decode too, and a `"final": null` written ahead of the calls previews
+  nothing.
+- A preview an earlier round left open (a prose reply sent back for a fix-up)
+  is closed when the next round starts; the dedupe compares the last round's
+  text only.
+- `instructions.md`: `final` is a plain JSON string — a quote is escaped once
+  (`\"`). The model sometimes wrote `\\\"`, which the operator reads as a
+  stray backslash.
+
+### The replay shows what the terminal showed
+
+- **Answered approval prompts are in the event log** (`approval`: the
+  summary, the diff it showed — first 200 lines —, the answer, the wait), and a
+  reopened session draws them where they stood: `⚠ local_shell: …` /
+  `[y]es [n]o [a]ll [q]uit turn > a`. Before, the replay skipped them. Hermes'
+  own server-tool prompts (`[o]nce [s]ession [n]o`) too. A test pins replay ==
+  live, byte for byte.
+- The hands' approval prompts name the tools `local_shell:` / `local_write:` /
+  `local_edit:` — they still said `shell:` / `write_file:` / `edit_file:`,
+  right under a `#2 local_shell` line.
+
+### Where the time went
+
+- **A call's duration leaves the approval wait out.** `#2 ✓ exit 0 · 1m48s`
+  was the operator's 1m40s at the prompt plus the command; now it is the
+  command.
+- **The turn footer splits the time**: `— worked for 1m06s · hermes 58s ·
+  local 8s · waited on you 1m48s —` — Hermes' share (model, server tools,
+  network), the hands' calls, and the approval wait ("worked for" already left
+  it out). A turn without calls keeps `— worked for 8s —`. `turn_end` events
+  carry `local_ms` / `wait_ms`; `--rpc` records the local share too.
+
+### Sessions
+
+- **`--session-list` lists this machine's sessions only** — offline, no server
+  call. The server's whole list (cron jobs, other clients, sessions retention
+  removed) no longer runs on below it.
+- **`--session-list-verbose`** (also `sessions -v`, `/sessions -v`) is the
+  local-vs-server view for debugging: under every local session its
+  hermes-agent session (messages, context tokens, model, last activity,
+  lineage) — or that the server doesn't have it, or that no turn was sent yet.
+  A session missing from the server's latest-100 listing is looked up by id
+  (at most 20). Then the `hh-*` sessions the server holds without a local one
+  ("continued as …" for a split the local session moved on to). The rest is
+  only counted.
+- The IDLE column stays narrow: `24m`, `21h28m`, `3d` (was `24m0s`,
+  `21h28m0s`).
+
+### Versions
+
+- **Supported hermes-agent: 0.21.0 and newer, tested through 0.22.x.**
+  Releases before 0.21.0 are not supported and not recommended — hermes-hands
+  was never tested against their Runs API and session handling. Newer ones
+  should work until hermes-agent changes that API (its session rework, due
+  with 0.23, touches `/v1/runs`); the release that adapts to it names the new
+  range. `internal/compat` holds the range.
+- `hermes-hands check` / `/check` name the gateway's hermes-agent version
+  (`GET /health`, best effort): `API OK: hermes-agent @ https://… ·
+  hermes-agent 0.22.0`, plus a `WARNING:` line before 0.21.0 and a `note:`
+  past 0.22.x or when the gateway doesn't say. A session start warns for a
+  known version outside the range. rpc: `check` carries `version` (+ `compat`),
+  `ready` carries `hermes_agent` (+ `compat`). README: **Works with**.
+- The usage text, the README (diagram, requirements, security model, config
+  table, rpc examples) and the rpc doc comment name the hands' tools
+  `local_*` — they still said `shell` / `read_file` / `write_file` /
+  `edit_file`. The install example pins `0.11.0` (`0.9.3` was never tagged).
+
+## 0.11.0 — 2026-10-16 — session event log, live tool calls, sandbox guard, known system
+
+hermes-agent: 0.21.x – 0.22.x (built on 0.21.5, live-tested on 0.22.0).
+
+One minor release for the whole `better-instructions` line (PR #4). Breaking
+for scripts and plugins — see **Sessions** and **REPL**.
 
 ### Tool calls in the terminal
 
@@ -198,7 +285,19 @@ scripts and plugins — see **Sessions** and **REPL**.
   `setup-go` is gone, so `GO_IMAGE` (= go.mod's `go` line) is the one place
   the build's Go version is pinned.
 
-## 0.10.0 — continuous releases; pre-public cleanup
+### Docs
+
+- README **Scheduled jobs on your machine**: a cron job set up in Hermes runs
+  on the server, without the hands; for a job on the operator's machine a local
+  crontab line feeds `use` + `turn` into `hermes-hands --rpc`, fenced with
+  `HERMES_HANDS_DENY`.
+
+## 0.10.1 — 2026-09-04 — the "Remote Brain, Local Hands" write-up
+
+- `docs/remote-brain-local-hands.md`: why the hands are a separate outbound
+  CLI, how the envelope loop works, where split-runtime fits. Docs only.
+
+## 0.10.0 — 2026-09-03 — continuous releases; pre-public cleanup
 
 (first public release — 0.9.x was never tagged; `MIN_VERSION` 0.9.4 + a
 `bump:minor` PR lands here.)
