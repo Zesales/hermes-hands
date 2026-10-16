@@ -501,8 +501,8 @@ toolchain cache.
 Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
 never fetch modules (the one download is the pinned Go image). Layout: `main.go`
-(CLI + REPL + setup), `rpc.go`, `frontends.go`, `sessionlist.go` +
-`internal/{api,compat,config,debuglog,dispatch,guard,knowsystem,loop,prompt,redact,session,shell,ttyio,turn,ui}` +
+(CLI + REPL + setup), `rpc.go`, `frontends.go` +
+`internal/{api,app,compat,config,debuglog,dispatch,guard,knowsystem,loop,prompt,redact,session,shell,ttyio,turn,ui}` +
 `share/instructions.md` (embedded via `//go:embed`). `.github/workflows/test.yml`
 runs gofmt, `go vet` (for linux **and** darwin), `go test` and
 `./build.sh release` (the linux+darwin × amd64+arm64 cross-compile) on every

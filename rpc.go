@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Zesales/hermes-hands/internal/app"
 	"github.com/Zesales/hermes-hands/internal/compat"
-	"github.com/Zesales/hermes-hands/internal/debuglog"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/session"
 	"github.com/Zesales/hermes-hands/internal/turn"
@@ -67,23 +67,23 @@ func runRPC(smode string) int {
 		emit(map[string]any{"type": "error", "message": err.Error()})
 		return 1
 	}
-	defer a.shell.Stop()
+	defer a.Shell.Stop()
 
-	if notConfigured(a.cfg) {
+	if !a.Cfg.Configured() {
 		emit(map[string]any{"type": "error", "message": "not configured - run `hermes-hands setup`"})
 		return 1
 	}
 	// Preflight like the REPL: it also reads /v1/capabilities, without which
 	// the client never streams — and only the SSE stream carries Hermes' tool
 	// events (the sandbox guard) and live deltas.
-	srv, err := a.client.Check(context.Background())
+	srv, err := a.Client.Check(context.Background())
 	if err != nil {
 		emit(map[string]any{"type": "error", "message": err.Error()})
 		return 1
 	}
 
 	approvals := "never"
-	if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
+	if ta, ok := a.Disp.Approver.(*prompt.TTYApprover); ok {
 		switch ta.Mode {
 		case "auto":
 			approvals = "off"
@@ -94,20 +94,20 @@ func runRPC(smode string) int {
 			return 1
 		}
 	}
-	a.ui = nil // no terminal frames in rpc mode: the event log only records
+	a.UI = nil // no terminal frames in rpc mode: the event log only records
 
-	rec, err := a.store.Resolve(smode, a.repoRoot)
+	rec, err := a.Store.Resolve(smode, a.RepoRoot)
 	if err != nil {
 		emit(map[string]any{"type": "error", "message": err.Error()})
 		return 1
 	}
-	evlog := openSession(a, rec, false)
+	evlog := a.OpenSession(rec, false)
 
 	ready := map[string]any{
-		"type": "ready", "session": rec.ID, "cwd": a.repoRoot,
+		"type": "ready", "session": rec.ID, "cwd": a.RepoRoot,
 		"version": bareVersion(), "approvals": approvals, "hermes_agent": srv.Version,
 	}
-	if w := compatWarning(srv.Version); w != "" {
+	if w := app.CompatWarning(srv.Version); w != "" {
 		ready["compat"] = w
 	}
 	emit(ready)
@@ -117,18 +117,12 @@ func runRPC(smode string) int {
 	// closing stdin. The runner's silence watchdog keeps a gateway that goes
 	// quiet from hanging the editor's turn forever.
 	runner := &turn.Runner{}
-	bindRunner(runner, a)
+	a.Bind(runner)
 	runner.Use(evlog)
 	defer runner.CancelOnInterrupt()()
 
-	debugOn := a.cfg.Debug
-	applyDebug := func() {
-		if debugOn {
-			a.client.Trace = debuglog.New(a.store.DebugPath(rec), a.cfg.APIKey).Write
-		} else {
-			a.client.Trace = nil
-		}
-	}
+	debugOn := a.Cfg.Debug
+	applyDebug := func() { a.SetDebug(rec, debugOn) }
 	applyDebug()
 
 	sc := bufio.NewScanner(os.Stdin)
@@ -169,7 +163,7 @@ func runRPC(smode string) int {
 			}
 
 		case "history":
-			evs, e := a.store.LoadEvents(rec)
+			evs, e := a.Store.LoadEvents(rec)
 			if e != nil {
 				emit(map[string]any{"type": "error", "id": id, "message": e.Error()})
 				continue
@@ -183,13 +177,13 @@ func runRPC(smode string) int {
 			})
 
 		case "new":
-			nr, e := a.store.Resolve("new", a.repoRoot)
+			nr, e := a.Store.Resolve("new", a.RepoRoot)
 			if e != nil {
 				emit(map[string]any{"type": "error", "id": id, "message": e.Error()})
 				continue
 			}
 			rec = nr
-			runner.Use(openSession(a, rec, false))
+			runner.Use(a.OpenSession(rec, false))
 			applyDebug()
 			emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
 
@@ -198,13 +192,13 @@ func runRPC(smode string) int {
 				emit(map[string]any{"type": "error", "id": id, "message": "use needs a session id"})
 				continue
 			}
-			nr, e := a.store.Resolve(req.Session, a.repoRoot)
+			nr, e := a.Store.Resolve(req.Session, a.RepoRoot)
 			if e != nil {
 				emit(map[string]any{"type": "error", "id": id, "message": e.Error()})
 				continue
 			}
 			rec = nr
-			runner.Use(openSession(a, rec, false))
+			runner.Use(a.OpenSession(rec, false))
 			applyDebug()
 			emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
 
@@ -218,10 +212,10 @@ func runRPC(smode string) int {
 				debugOn = !debugOn
 			}
 			applyDebug()
-			emit(map[string]any{"type": "debug", "id": id, "on": debugOn, "path": a.store.DebugPath(rec)})
+			emit(map[string]any{"type": "debug", "id": id, "on": debugOn, "path": a.Store.DebugPath(rec)})
 
 		case "check":
-			res, e := a.client.Check(context.Background())
+			res, e := a.Client.Check(context.Background())
 			if e != nil {
 				emit(map[string]any{"type": "check", "id": id, "ok": false, "message": e.Error()})
 				continue
