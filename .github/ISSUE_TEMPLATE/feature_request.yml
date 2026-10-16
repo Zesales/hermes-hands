@@ -1,0 +1,21 @@
+name: Feature request
+description: An idea for hermes-hands
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: How could hermes-hands help? Rough is fine.
+  - type: textarea
+    id: hermes
+    attributes:
+      label: hermes-agent side
+      description: Does it need something from hermes-agent (an API, an event)? Which version do you run?

@@ -1,10 +1,16 @@
 # hermes-hands
 
-**Terminal coding with a remote [Hermes](https://github.com/NousResearch/hermes-agent)
-brain.** Your Hermes gateway holds the plan, the memory and the persona; a small
-CLI on your machine lets it read files and run commands in the repo you're
-standing in — over Hermes' own HTTP API, outbound only, nothing listening on your
-box.
+[![release](https://img.shields.io/github/v/release/Zesales/hermes-hands)](https://github.com/Zesales/hermes-hands/releases/latest)
+[![tests](https://github.com/Zesales/hermes-hands/actions/workflows/test.yml/badge.svg?event=pull_request)](https://github.com/Zesales/hermes-hands/actions/workflows/test.yml)
+[![hermes-agent](https://img.shields.io/badge/hermes--agent-0.21%2B%20%C2%B7%20tested%200.22-blue)](#works-with)
+[![go](https://img.shields.io/github/go-mod/go-version/Zesales/hermes-hands)](go.mod)
+[![license](https://img.shields.io/github/license/Zesales/hermes-hands)](LICENSE)
+
+**Terminal coding with a remote [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+brain.** Your Hermes gateway (NousResearch's hermes-agent) holds the plan, the
+memory and the persona; a small Go CLI on your machine gives it hands — a
+persistent shell plus file read / write / edit in the repo you're standing in —
+over Hermes' own HTTP API, outbound only, nothing listening on your box.
 
 ```
 you type ──▶ POST /v1/runs ──────────────▶ Hermes  (plans, decides, remembers)
@@ -13,6 +19,15 @@ you type ──▶ POST /v1/runs ──────────────▶ H
              └─ runs the calls in your repo (with your approval for run/write),
                 feeds {"results":[…]} back, loops, until Hermes answers.
 ```
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.sh | sh
+hermes-hands setup            # your gateway URL + API key, stored machine-bound
+cd ~/projects/myrepo && hermes-hands
+```
+
+The story behind it — one brain on the server, hands on the laptop that carry
+no model: [Remote Brain, Local Hands](docs/remote-brain-local-hands.md).
 
 > **Status.** A native "remote brain, local hands" path for Hermes is still
 > being decided upstream —
@@ -23,6 +38,7 @@ you type ──▶ POST /v1/runs ──────────────▶ H
 > a tighter local↔remote loop and this bridge becomes the fallback — the local
 > dispatcher doesn't change either way.
 
+<a id="works-with"></a>
 > **Works with hermes-agent 0.21.0 and newer** — tested through **0.22.x**.
 > Releases before 0.21.0 are not supported and not recommended: hermes-hands
 > was never tested against their Runs API and session handling. Newer releases
@@ -484,8 +500,8 @@ toolchain cache.
 Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
 never fetch modules (the one download is the pinned Go image). Layout: `main.go`
-(CLI + REPL + setup) +
-`internal/{config,redact,ttyio,prompt,ui,api,session,knowsystem,debuglog,shell,dispatch,loop}` +
+(CLI + REPL + setup), `rpc.go`, `session{log,list}.go`, `watchdog.go` +
+`internal/{api,compat,config,debuglog,dispatch,guard,knowsystem,loop,prompt,redact,session,shell,ttyio,ui}` +
 `share/instructions.md` (embedded via `//go:embed`). `.github/workflows/test.yml`
 runs gofmt, `go vet` (for linux **and** darwin), `go test` and
 `./build.sh release` (the linux+darwin × amd64+arm64 cross-compile) on every
@@ -534,6 +550,11 @@ produces the exact artifact set the workflow publishes. `install.sh`:
 - `--version X.Y.Z` — pin to release `vX.Y.Z`;
 - `--local` — build from the current checkout;
 - `--source` — git-clone + build.
+
+## Contributing
+
+Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) (one
+`make ci` is the whole PR gate). Security issues: [SECURITY.md](SECURITY.md).
 
 ## License
 
