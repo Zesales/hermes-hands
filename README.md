@@ -4,7 +4,7 @@
 [![tests](https://github.com/Zesales/hermes-hands/actions/workflows/test.yml/badge.svg?event=pull_request)](https://github.com/Zesales/hermes-hands/actions/workflows/test.yml)
 [![hermes-agent](https://img.shields.io/badge/hermes--agent-0.21%2B%20%C2%B7%20tested%200.22-blue)](#works-with)
 [![go](https://img.shields.io/github/go-mod/go-version/Zesales/hermes-hands)](go.mod)
-[![license](https://img.shields.io/github/license/Zesales/hermes-hands)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 **Terminal coding with a remote [Hermes Agent](https://github.com/NousResearch/hermes-agent)
 brain.** Your Hermes gateway (NousResearch's hermes-agent) holds the plan, the
