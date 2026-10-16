@@ -21,6 +21,18 @@ type does one job.
   in mode `golden` Hermes' own tool events (a server call, a steered call, a
   server-tool approval request); `/steer` and `/approval` answer.
 
+### One turn, once
+
+- **`internal/turn`**: the `Runner` runs a turn for every front end — event
+  log, silence watchdog, the run id Ctrl-C stops, the answer preview and its
+  dedupe, local / wait timing, title, footer. A `Frontend` only shows it
+  (`Show` / `Preview` / `EndPreview` / `Quiet`): the REPL draws the terminal,
+  `--rpc` writes JSON lines. Before, `runREPL` and `runRPC` each carried that
+  whole turn — the copy is where the last fixes had to be made twice.
+- The stream-preview decoder and the watchdog moved into `internal/turn`;
+  `session.Log` records a session (`Store.OpenLog`, `BeginTurn`, `Add`),
+  `ui.Show` / `ui.Replay` draw its events. `sessionlog.go` is gone.
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).

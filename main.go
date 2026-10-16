@@ -16,17 +16,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
-	"unicode/utf16"
-	"unicode/utf8"
 
 	"github.com/peterh/liner"
 
@@ -43,6 +38,7 @@ import (
 	"github.com/Zesales/hermes-hands/internal/session"
 	"github.com/Zesales/hermes-hands/internal/shell"
 	"github.com/Zesales/hermes-hands/internal/ttyio"
+	"github.com/Zesales/hermes-hands/internal/turn"
 	"github.com/Zesales/hermes-hands/internal/ui"
 )
 
@@ -222,142 +218,6 @@ func orElse(s, def string) string {
 	return s
 }
 
-// finalStreamer turns the raw SSE token stream (which carries the JSON
-// envelope `{"calls":...,"final":"..."}`) into a live preview of just the
-// `final` answer text. On a tool-call round (non-empty "calls") it emits
-// nothing — the tool lines speak for it.
-type finalStreamer struct {
-	emit    func(string) // e.g. ui.Delta
-	raw     strings.Builder
-	started bool // found the opening quote of the final value
-	done    bool // hit its closing quote, or it's a calls-round
-	pos     int  // index in raw where unparsed value bytes begin
-}
-
-func (f *finalStreamer) reset() { *f = finalStreamer{emit: f.emit} }
-
-func (f *finalStreamer) feed(chunk string) {
-	if f.done {
-		return
-	}
-	f.raw.WriteString(chunk)
-	s := f.raw.String()
-
-	if !f.started {
-		// a real tool-call round -> never a final to stream
-		if i := strings.Index(s, `"calls"`); i >= 0 {
-			after := strings.TrimLeft(s[i+7:], " :\t\r\n")
-			if strings.HasPrefix(after, "[") {
-				rest := strings.TrimLeft(after[1:], " \t\r\n")
-				if rest == "" {
-					return // the chunk ended at "[" — can't tell an empty array yet
-				}
-				if !strings.HasPrefix(rest, "]") {
-					f.done = true
-					return
-				}
-			}
-		}
-		k := strings.Index(s, `"final"`)
-		if k < 0 {
-			return
-		}
-		v := strings.TrimLeft(s[k+7:], " \t\r\n")
-		if v == "" {
-			return
-		}
-		if v[0] != ':' {
-			f.done = true // not a key after all — nothing safe to preview
-			return
-		}
-		v = strings.TrimLeft(v[1:], " \t\r\n")
-		if v == "" {
-			return
-		}
-		if v[0] != '"' { // "final": null — a calls-round written final-first
-			f.done = true
-			return
-		}
-		f.started = true
-		f.pos = len(s) - len(v) + 1
-	}
-
-	// walk from f.pos, emitting decoded chars until an unescaped closing quote.
-	// An escape cut off by the chunk boundary (`\` or `\u00` at the very end)
-	// waits for the next chunk — emitting its `\` early used to print `\n`
-	// literally and could take a later `\"` for the closing quote.
-	var out strings.Builder
-	i := f.pos
-	for i < len(s) {
-		c := s[i]
-		if c == '\\' {
-			r, n := jsonEscape(s[i:])
-			if n == 0 {
-				break // incomplete escape: wait for more
-			}
-			out.WriteString(r)
-			i += n
-			continue
-		}
-		if c == '"' { // end of the final string
-			f.done = true
-			i++
-			break
-		}
-		out.WriteByte(c)
-		i++
-	}
-	f.pos = i
-	if out.Len() > 0 && f.emit != nil {
-		f.emit(out.String())
-	}
-}
-
-// jsonEscape decodes the JSON string escape at the start of s (s[0] == '\\')
-// and returns its text and length — n == 0 when s ends before the escape does.
-// \uXXXX handles UTF-16 surrogate pairs; a malformed escape yields its char.
-func jsonEscape(s string) (string, int) {
-	if len(s) < 2 {
-		return "", 0
-	}
-	switch s[1] {
-	case 'n':
-		return "\n", 2
-	case 't':
-		return "\t", 2
-	case 'r':
-		return "\r", 2
-	case 'b':
-		return "\b", 2
-	case 'f':
-		return "\f", 2
-	case 'u':
-		if len(s) < 6 {
-			return "", 0
-		}
-		r1, err := strconv.ParseUint(s[2:6], 16, 32)
-		if err != nil {
-			return "u", 2
-		}
-		if utf16.IsSurrogate(rune(r1)) {
-			if len(s) < 12 {
-				return "", 0
-			}
-			if s[6] == '\\' && s[7] == 'u' {
-				if r2, err := strconv.ParseUint(s[8:12], 16, 32); err == nil {
-					if r := utf16.DecodeRune(rune(r1), rune(r2)); r != utf8.RuneError {
-						return string(r), 12
-					}
-				}
-			}
-			return string(utf8.RuneError), 6
-		}
-		return string(rune(r1)), 6
-	default: // \" \\ \/ and anything malformed
-		return s[1:2], 2
-	}
-}
-
 // splitCmd separates a REPL line into its first word (the /command) and the
 // rest. A plain message returns (firstWord, rest) too; only the switch's
 // /command cases act on it, everything else is sent as-is.
@@ -429,14 +289,49 @@ type app struct {
 // openSession makes rec the open session: loads its event log, continues the
 // call numbering, replays the last turns into the terminal when show is set,
 // and prepares the first turn when the server lost the conversation.
-func openSession(a *app, rec *session.Record, show bool) *sessionLog {
-	evlog, evs := openLog(a.store, a.ui, rec)
+func openSession(a *app, rec *session.Record, show bool) *session.Log {
+	log, evs := a.store.OpenLog(rec)
 	a.loop.Ref = session.LastRef(evs)
 	if show && len(evs) > 0 {
-		evlog.replay(evs, replayTurns)
+		a.ui.Replay(evs, replayTurns, rec.ID, storedOutput(a.store, rec))
 	}
 	prepareResume(a, rec, evs)
-	return evlog
+	return log
+}
+
+// replayTurns is how many turns a reopened session shows; /history shows all.
+const replayTurns = 5
+
+// storedOutput reads a call's stored output back for a replay.
+func storedOutput(st *session.Store, rec *session.Record) func(ref int) string {
+	return func(ref int) string {
+		out, _ := st.LoadOutput(rec, ref)
+		return out
+	}
+}
+
+// showOutput prints the stored full output of call #ref (`/out <ref>`).
+func showOutput(u *ui.UI, st *session.Store, rec *session.Record, arg string) {
+	ref, err := strconv.Atoi(arg)
+	if err != nil || ref <= 0 {
+		u.Note("usage: /out <n> — n is the #number of a call")
+		u.Line("")
+		return
+	}
+	out, err := st.LoadOutput(rec, ref)
+	if err != nil {
+		u.Note(fmt.Sprintf("no stored output for #%d in this session", ref))
+		u.Line("")
+		return
+	}
+	u.OutputBlock(ref, out)
+	u.Line("")
+}
+
+// bindRunner points r at a's parts — again after /setup rebuilt a.
+func bindRunner(r *turn.Runner, a *app) {
+	r.Client, r.Loop, r.Store, r.Shell = a.client, a.loop, a.store, a.shell
+	r.Timeout, r.Interval = a.cfg.ResponseTimeout, a.cfg.WatchdogInterval
 }
 
 // prepareResume: hermes-agent holds the conversation the model sees; when it
@@ -739,56 +634,15 @@ func runREPL(smode string) int {
 	defer func() { ln.Close() }()
 	ln.SetCtrlCAborts(true)
 
-	var (
-		turnMu     sync.Mutex
-		cancelTurn context.CancelFunc
-		runID      string          // in-flight Hermes run, for POST /v1/runs/{id}/stop
-		streamBuf  strings.Builder // this turn's live-previewed answer text (dedupes the final render)
-		turnLocal  int64           // ms the hands' calls ran this turn (the footer's "local" share)
-		stopWork   = func() {}     // stops this turn's animated "working" line (set per turn)
-	)
-	// The first streamed chunk means output is flowing — retire the spinner.
-	fs := &finalStreamer{emit: func(s string) { stopWork(); streamBuf.WriteString(s); a.ui.Delta(s) }}
-
-	// Silence watchdog: cancel a turn if hermes-agent goes quiet past
-	// HERMES_HANDS_RESPONSE_TIMEOUT, but keep pushing that deadline back while
-	// there are signs of life (streamed text, tool rounds, fresh sub-runs) or a
-	// periodic out-of-band probe still finds the server run running.
-	wd := &watchdog{timeout: a.cfg.ResponseTimeout, interval: a.cfg.WatchdogInterval}
-
-	// abortTurn is what Ctrl-C does: cancel the turn context, kill the shell
-	// child, stop the server run. Shared by the SIGINT handler and the watchdog.
-	abortTurn := func() {
-		turnMu.Lock()
-		rid := runID
-		if cancelTurn != nil {
-			cancelTurn()
-			a.shell.Kill()
-		}
-		turnMu.Unlock()
-		if rid != "" { // stop the server run too, not just the local wait
-			go a.client.StopRun(context.Background(), rid)
-		}
+	// One runner for the REPL's lifetime; /setup re-binds it to the rebuilt
+	// app. Ctrl-C mid-turn cancels the turn, the shell child and the server run.
+	runner := &turn.Runner{
+		Paused:         func() time.Duration { return a.ui.Paused() },
+		ServerApproval: func(tool, what string) string { return askServerApproval(a.disp.Approver, tool, what) },
 	}
-	wd.onFire = abortTurn
-	wd.check = func(ctx context.Context) bool {
-		turnMu.Lock()
-		rid := runID
-		turnMu.Unlock()
-		if rid == "" {
-			return true // between rounds: local dispatch is the holdup, not the brain
-		}
-		st, err := a.client.RunState(ctx, rid)
-		if err != nil {
-			return false // can't confirm it's alive — let the deadline run down
-		}
-		switch st {
-		case "completed", "failed", "cancelled":
-			return false
-		default: // "", queued, started, running, stopping, or anything unknown
-			return true
-		}
-	}
+	bindRunner(runner, a)
+	runner.Use(evlog)
+	defer runner.CancelOnInterrupt()()
 
 	// /debug: a redacted wire trace of the connection into the open session's
 	// debug.jsonl (HERMES_HANDS_DEBUG=1 starts with it on). Re-pointed on every
@@ -802,72 +656,23 @@ func runREPL(smode string) int {
 		}
 	}
 
-	// Per-app wiring that must be redone when /setup swaps `a`:
-	//  - the approval gate reads its answer through liner (one terminal owner;
-	//    a separate /dev/tty reader deadlocks against liner's input goroutine),
-	//  - OnRunStart records the run id so Ctrl-C / the watchdog can stop the
-	//    server run; every run/delta/tool event bumps the watchdog.
+	// Per-app wiring that must be redone when /setup swaps `a`: the approval
+	// gate reads its answer through liner (one terminal owner; a separate
+	// /dev/tty reader deadlocks against liner's input goroutine), and an
+	// answered prompt — on screen already — is recorded, so a replay shows it.
 	wireApp := func() {
 		if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
 			ta.Out = os.Stderr
 			ta.AskLine = func(q string) (string, error) { return ln.Prompt(q) }
 			ta.Pause = a.ui.Hold
-			// the prompt is on screen already: store it, so a replay shows it too
 			ta.OnAnswer = func(summary, detail, answer string, waited time.Duration) {
-				evlog.add(session.Event{Kind: session.KindApproval, Text: redact.Scrub(summary),
+				runner.Record(session.Event{Kind: session.KindApproval, Text: redact.Scrub(summary),
 					Detail: clipLines(redact.Scrub(detail), maxApprovalDetail), Action: answer, Ms: waited.Milliseconds()})
-			}
-		}
-		a.loop.Paused = a.ui.Paused
-		a.client.OnRunStart = func(id string) {
-			turnMu.Lock()
-			runID = id
-			turnMu.Unlock()
-			// each round is a fresh envelope: a calls-round must not keep the
-			// preview muted for the final round that follows it. A preview a
-			// previous round left open (a prose reply sent back for a fix-up)
-			// is closed, so the dedupe below compares this round's text only.
-			fs.reset()
-			a.ui.StreamDone()
-			streamBuf.Reset()
-			wd.bump()
-		}
-		a.client.OnDelta = func(s string) { wd.bump(); fs.feed(s) } // previews the `final` text; any token = progress
-		a.client.OnEvent = func(string) { wd.bump() }               // any SSE frame is a sign of life
-		a.client.OnApproval = func(tool, what string) string { return askServerApproval(a.disp.Approver, tool, what) }
-		a.client.OnHermesTool = func(tool, preview, action string) {
-			ev := evlog.add(session.Event{Kind: session.KindHermesTool, Tool: tool, Text: preview, Action: action})
-			evlog.show(ev, "")
-		}
-		// every hands call: shown (and stored) BEFORE it runs, then its result
-		a.loop.Emit = func(ev session.Event) {
-			wd.bump() // a call starting or finishing = progress
-			ev = evlog.add(ev)
-			evlog.show(ev, ev.Out)
-			if ev.Kind == session.KindResult {
-				turnLocal += ev.Ms
-			}
-			if ev.Kind == session.KindCall {
-				a.ui.SetActivity(fmt.Sprintf("#%d %s", ev.Ref, ev.Tool))
-			} else {
-				a.ui.SetActivity("")
 			}
 		}
 		applyDebug()
 	}
 	wireApp()
-
-	// SIGINT during a turn -> cancel the turn context, kill the shell child,
-	// and stop the server run. At the prompt, liner turns Ctrl-C into
-	// ErrPromptAborted itself (raw mode, no signal).
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT)
-	defer signal.Stop(sigCh)
-	go func() {
-		for range sigCh {
-			abortTurn()
-		}
-	}()
 
 	for {
 		input, err := ln.Prompt(a.ui.SessionPrompt(rec.ID))
@@ -898,9 +703,8 @@ func runREPL(smode string) int {
 				if na, e := newApp(); e == nil {
 					a.shell.Stop()
 					a = na
+					bindRunner(runner, a)
 					wireApp()
-					wd.timeout = a.cfg.ResponseTimeout
-					wd.interval = a.cfg.WatchdogInterval
 					configured = !notConfigured(a.cfg)
 					if _, e2 := a.client.Check(context.Background()); e2 != nil {
 						fmt.Fprintf(os.Stderr, "BLOCKED: %v\n", e2)
@@ -908,7 +712,7 @@ func runREPL(smode string) int {
 					if nr, e3 := a.store.Resolve(smode, a.repoRoot); e3 == nil {
 						rec = nr
 					}
-					evlog = openSession(a, rec, true)
+					runner.Use(openSession(a, rec, true))
 					applyDebug()
 				}
 			}
@@ -949,34 +753,34 @@ func runREPL(smode string) int {
 			}
 			rec = nr
 			a.ui.NewSessionNote(rec.ID)
-			evlog = openSession(a, rec, true)
+			runner.Use(openSession(a, rec, true))
 			applyDebug()
 			continue
 		case "/history", "/chat-history":
 			// /history = this session, every turn; /history <n> = its last n
 			// turns; /history <id> = another session's (read-only — it never
 			// switches the REPL to it)
-			target, n := evlog, 0
+			target, n := rec, 0
 			if rest != "" {
 				if k, e := strconv.Atoi(rest); e == nil && k > 0 {
 					n = k
 				} else if other, e := a.store.Load(rest); e == nil {
-					target = &sessionLog{store: a.store, ui: a.ui, rec: other}
+					target = other
 				} else {
 					fmt.Fprintf(os.Stderr, "  no such session: %s\n\n", rest)
 					continue
 				}
 			}
-			evs, e := a.store.LoadEvents(target.rec)
+			evs, e := a.store.LoadEvents(target)
 			if e != nil {
 				warnf("history: %v", e)
 				continue
 			}
-			target.replay(evs, n)
+			a.ui.Replay(evs, n, target.ID, storedOutput(a.store, target))
 			fmt.Fprintln(os.Stderr)
 			continue
 		case "/out":
-			evlog.showOutput(rest)
+			showOutput(a.ui, a.store, rec, rest)
 			continue
 		case "/yolo":
 			if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
@@ -1040,7 +844,7 @@ func runREPL(smode string) int {
 			nr.HermesSessionID = newID
 			_, _ = a.store.SetTitleLocal(nr, "fork of "+rec.ID)
 			rec = nr
-			evlog = openSession(a, rec, false)
+			runner.Use(openSession(a, rec, false))
 			applyDebug()
 			fmt.Fprintf(os.Stderr, "  forked → hermes-agent session %s (local %s)\n\n", newID, rec.ID)
 			continue
@@ -1052,7 +856,7 @@ func runREPL(smode string) int {
 			}
 			rec = nr
 			a.ui.NewSessionNote(rec.ID)
-			evlog = openSession(a, rec, false)
+			runner.Use(openSession(a, rec, false))
 			applyDebug()
 			continue
 		case "/sessions":
@@ -1082,62 +886,7 @@ func runREPL(smode string) int {
 		ln.AppendHistory(input)
 		// Everything a turn prints goes through the session's event log
 		// (stored, scrubbed) — so reopening the session replays it 1:1.
-		evlog.beginTurn()
-		evlog.show(evlog.add(session.Event{Kind: session.KindUser, Text: redact.Scrub(input)}), "")
-		turnStart := time.Now()
-		stopWork = a.ui.StartWorking()
-
-		streamBuf.Reset()
-		fs.reset()
-		turnLocal = 0
-		ctx, cancel := context.WithCancel(context.Background())
-		turnMu.Lock()
-		cancelTurn = cancel
-		runID = "" // no in-flight run yet this turn (the watchdog probe / Ctrl-C read this)
-		turnMu.Unlock()
-
-		wdStop := make(chan struct{})
-		go wd.guard(wdStop)
-
-		out := a.loop.Run(ctx, input, rec, func(runID, sid string, tok int) { _ = a.store.BumpTurn(rec, runID, sid, tok) })
-
-		close(wdStop)
-		timedOut := wd.disarm() // barrier: authoritative "did the watchdog fire?"
-		stopWork()
-		a.ui.SetActivity("")
-		streamed := a.ui.StreamDone()
-		turnMu.Lock()
-		cancelTurn = nil
-		turnMu.Unlock()
-		interrupted := ctx.Err() != nil
-		cancel()
-		// Exclude time spent waiting on the operator's y/n/a/q answer at an
-		// approval prompt — that is the operator deciding, not hermes-agent
-		// working, and shouldn't inflate "worked for Xs".
-		waited := a.ui.Paused()
-		turnDur := time.Since(turnStart) - waited
-
-		end := session.Event{Kind: session.KindTurnEnd, Ms: turnDur.Milliseconds(),
-			LocalMs: turnLocal, WaitMs: waited.Milliseconds()}
-		switch {
-		case timedOut:
-			end.Outcome, end.Limit = "timeout", int(a.cfg.ResponseTimeout/time.Second)
-		case interrupted:
-			end.Outcome = "interrupted"
-		default:
-			if out.OK {
-				if changed, _ := a.store.SetTitleLocal(rec, input); changed && rec.HermesSessionID != "" {
-					a.client.SetTitle(context.Background(), rec.HermesSessionID, rec.Title)
-				}
-			}
-			ans := evlog.add(session.Event{Kind: session.KindAnswer, Text: redact.Scrub(out.Answer), OK: session.Bool(out.OK)})
-			// The streamed preview already showed exactly this answer, in
-			// the same shape — don't print it twice.
-			if !streamed || strings.TrimSpace(streamBuf.String()) != strings.TrimSpace(out.Answer) {
-				evlog.show(ans, "")
-			}
-		}
-		evlog.show(evlog.add(end), "")
+		runner.Run(input, &replFront{ui: a.ui})
 	}
 	return 0
 }
