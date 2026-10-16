@@ -4,7 +4,7 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.12.0 — (unreleased, `bump:minor`) the answer once; approvals in the replay; local vs. server sessions
+## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).
 
