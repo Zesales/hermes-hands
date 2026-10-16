@@ -40,25 +40,7 @@ type App struct {
 func New(cfg *config.Config, builtin string) (*App, error) {
 	repoRoot := PhysicalCwd()
 	u := ui.New(os.Stderr)
-
-	// known system: probe the machine once per session so the brain is told
-	// what exists instead of rediscovering it with tool rounds (internal/
-	// knowsystem). The previous session's learned-missing facts are merged in,
-	// stale ones dropped by the fresh probe; the record lives in the home dir.
-	knownPath := cfg.Home + "/known-system.json"
-	known := knowsystem.Probe(repoRoot, gitBranch(repoRoot))
-	known.UseGlobal(filepath.Join(cfg.Home, GlobalGuidanceFile)) // the rules imported at setup
-	if old, err := knowsystem.Load(knownPath); err == nil {
-		known.MergeLearned(old)
-	} else if !os.IsNotExist(err) {
-		Warnf("known-system: %v", err)
-	}
-	if err := os.MkdirAll(cfg.Home, 0o700); err != nil {
-		Warnf("known-system: home: %v", err)
-	}
-	if err := known.Save(knownPath); err != nil {
-		Warnf("known-system: save: %v", err)
-	}
+	known, knownPath := probeKnown(cfg, repoRoot)
 
 	var vlogf func(string, ...any)
 	if cfg.Verbose {
@@ -83,19 +65,9 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 	}
 	client.Guard = sandboxGuard(cfg.Sandbox, repoRoot, os.Getenv("HOME"))
 
-	store, err := session.Open(cfg.StateDir)
+	store, err := openStore(cfg)
 	if err != nil {
 		return nil, err
-	}
-	store.Warnf = Warnf
-	// Retention: sessions idle past the window go — events, tool output and
-	// debug trace with them — so nothing typed by mistake lingers forever.
-	if cfg.RetentionDays > 0 {
-		maxAge := time.Duration(cfg.RetentionDays) * 24 * time.Hour
-		if gone := store.Prune(maxAge); len(gone) > 0 {
-			Logf("retention: removed %d local session(s) idle more than %d days", len(gone), cfg.RetentionDays)
-		}
-		pruneFiles(cfg.Home+"/verbose", maxAge) // the dropped /reasoning logs
 	}
 
 	sh := shell.New(repoRoot, 2*cfg.MaxOutput)
@@ -122,6 +94,47 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 		},
 	}
 	return &App{Cfg: cfg, RepoRoot: repoRoot, UI: u, Client: client, Store: store, Shell: sh, Disp: disp, Loop: lp}, nil
+}
+
+// probeKnown probes the machine once per session, so the brain is told what
+// exists instead of rediscovering it with tool rounds (internal/knowsystem).
+// The previous session's learned-missing facts are merged in, stale ones
+// dropped by the fresh probe; the record lives in the home dir.
+func probeKnown(cfg *config.Config, repoRoot string) (known *knowsystem.System, path string) {
+	path = cfg.Home + "/known-system.json"
+	known = knowsystem.Probe(repoRoot, gitBranch(repoRoot))
+	known.UseGlobal(filepath.Join(cfg.Home, GlobalGuidanceFile)) // the rules imported at setup
+	if old, err := knowsystem.Load(path); err == nil {
+		known.MergeLearned(old)
+	} else if !os.IsNotExist(err) {
+		Warnf("known-system: %v", err)
+	}
+	if err := os.MkdirAll(cfg.Home, 0o700); err != nil {
+		Warnf("known-system: home: %v", err)
+	}
+	if err := known.Save(path); err != nil {
+		Warnf("known-system: save: %v", err)
+	}
+	return known, path
+}
+
+// openStore opens the session store and applies the retention window:
+// sessions idle past it go — events, tool output and debug trace with them —
+// so nothing typed by mistake lingers forever.
+func openStore(cfg *config.Config) (*session.Store, error) {
+	store, err := session.Open(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	store.Warnf = Warnf
+	if cfg.RetentionDays > 0 {
+		maxAge := time.Duration(cfg.RetentionDays) * 24 * time.Hour
+		if gone := store.Prune(maxAge); len(gone) > 0 {
+			Logf("retention: removed %d local session(s) idle more than %d days", len(gone), cfg.RetentionDays)
+		}
+		pruneFiles(cfg.Home+"/verbose", maxAge) // the dropped /reasoning logs
+	}
+	return store, nil
 }
 
 // Bind points the turn runner at a's parts — again after /setup rebuilt a.
