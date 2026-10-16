@@ -477,6 +477,7 @@ make toolchain       # once: docker pull the pinned Go image (golang:1.26.7-book
 make dev             # build in the container, run it on this host out of ./.dev/
 make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
+make golden          # rewrite testdata/golden/ after an intended UI change
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
 make ci              # the PR gate locally: lint + test + release cross-build
 make dev-install     # build + copy dist/hermes-hands onto your PATH
@@ -508,6 +509,13 @@ runs gofmt, `go vet` (for linux **and** darwin), `go test` and
 PR, all in the pinned Go container (the `test`
 job is a required check for merging); `release.yml` tags + publishes on merge
 (see Releasing).
+
+**Golden transcripts** (`testdata/golden/`) pin what the operator sees: one
+full turn through the real `main()` — the REPL and `--rpc` — against the
+streaming mock (Hermes' own tool events, a steered call, both kinds of
+approval prompt, a final whose escapes the 5-byte deltas cut), masked for
+paths, ids and times. `make test` fails on any difference; an intended change
+is `make golden` plus a reviewed diff of those files.
 
 `test/mock_hermes.py` is a manual-only stand-in for the Runs API — the Go suite
 has its own in-process mock (`internal/hermesmock`) and needs no `python3`.

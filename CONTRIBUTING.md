@@ -24,7 +24,10 @@ make ci         # the whole PR gate: lint (linux + darwin) + test + cross-build
 ```
 
 `make test` is offline — no network, no model (`internal/hermesmock` stands
-in for hermes-agent). If your change touches how hermes-hands talks to
+in for hermes-agent). It includes the **golden transcripts** in
+`testdata/golden/`: what the REPL and `--rpc` show for one full turn. A change
+that is meant to alter that output runs `make golden` and commits the
+rewritten files — the diff is part of the review. If your change touches how hermes-hands talks to
 hermes-agent, also try it against a real gateway and name its version in the
 PR.
 

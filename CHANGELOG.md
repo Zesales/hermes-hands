@@ -4,6 +4,23 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
+## Unreleased (`bump:none`) — refactor: one job per unit
+
+No change for the operator; the code is reorganised so that every package and
+type does one job.
+
+### Safety net
+
+- **Golden transcripts** (`testdata/golden/`, `golden_test.go`): one full turn
+  through the real `main()` — REPL and `--rpc` — against the streaming mock,
+  compared byte for byte after masking paths, ids and times. `make golden`
+  rewrites them after an intended change. Checked to fail on the old
+  stream-preview escape bug.
+- `internal/hermesmock`: `NewStream` serves the SSE run events like a live
+  gateway — `run_events_sse` advertised, the envelope in 5-byte deltas, and
+  in mode `golden` Hermes' own tool events (a server call, a steered call, a
+  server-tool approval request); `/steer` and `/approval` answer.
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).
