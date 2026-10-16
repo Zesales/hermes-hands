@@ -248,13 +248,16 @@ func (u *UI) NewSessionNote(id string) {
 }
 
 // TurnDone prints the one-line turn footer: how long the turn ran (from the
-// operator's message to the answer / cancel) and how it ended.
+// operator's message to the answer / cancel, approval waits left out) and how
+// it ended. A turn whose hands ran calls splits that time into Hermes' share
+// and the hands' (local) share, and names the approval wait it left out:
 //
 //	outcome ""          -> "— worked for 12s —"
+//	                       "— worked for 1m06s · hermes 58s · local 8s · waited on you 1m48s —"
 //	outcome "interrupted" -> "— interrupted after 8s —"  (Ctrl-C)
 //	outcome "timeout"     -> "— timeout after 603s — no reply from hermes-agent
 //	                          (HERMES_HANDS_RESPONSE_TIMEOUT=600) —"
-func (u *UI) TurnDone(d time.Duration, outcome string, limitSec int) {
+func (u *UI) TurnDone(d time.Duration, outcome string, limitSec int, local, wait time.Duration) {
 	var msg string
 	switch outcome {
 	case "interrupted":
@@ -263,8 +266,23 @@ func (u *UI) TurnDone(d time.Duration, outcome string, limitSec int) {
 		msg = fmt.Sprintf("timeout after %s — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=%ds)", humanDur(d), limitSec)
 	default:
 		msg = "worked for " + humanDur(d)
+		if local > 0 {
+			msg += " · hermes " + shortDur(max(d-local, 0)) + " · local " + shortDur(local)
+		}
+		if wait >= time.Second {
+			msg += " · waited on you " + humanDur(wait)
+		}
 	}
 	u.sync(func() { fmt.Fprintf(u.w, "%s— %s —%s\n\n", u.cDim, msg, u.cR) })
+}
+
+// shortDur is humanDur that says "<1s" for a share below half a second
+// instead of a misleading "0s".
+func shortDur(d time.Duration) string {
+	if d > 0 && d < 500*time.Millisecond {
+		return "<1s"
+	}
+	return humanDur(d)
 }
 
 // humanDur is a compact turn duration: "8s" under a minute, "3m07s" over.
@@ -324,7 +342,7 @@ func (u *UI) Help(cwd string) {
 	io.WriteString(u.w, "    /new          start a fresh session in this directory\n")
 	io.WriteString(u.w, "    /session      show this session's detail (turns, tokens, splits)\n")
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
-	io.WriteString(u.w, "    /sessions     list this machine's + hermes-agent's sessions\n")
+	io.WriteString(u.w, "    /sessions     list this machine's sessions  (/sessions -v: each with its hermes-agent session)\n")
 	io.WriteString(u.w, "    /history      replay this session (/history <n> = last n turns, /history <id> = another)\n")
 	io.WriteString(u.w, "    /out <n>      full output of call #n\n")
 	io.WriteString(u.w, "    /fork         branch this session on the server, switch to it\n")

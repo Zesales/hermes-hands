@@ -43,6 +43,11 @@ type Loop struct {
 	// The caller stores and renders them.
 	Emit func(ev session.Event)
 
+	// Paused, when set, reports how long this turn has waited on approval
+	// prompts so far; a call's Ms leaves that wait out, so "#14 ✓ · 3s" is
+	// the time the call ran, not the time the operator took to answer.
+	Paused func() time.Duration
+
 	// Ref is the last session-wide call number handed out; every call takes
 	// the next one (#Ref). The caller seeds it from the session's event log.
 	Ref int
@@ -64,6 +69,13 @@ type Loop struct {
 
 	Vlogf func(string, ...any)
 	Warnf func(string, ...any)
+}
+
+func (l *Loop) paused() time.Duration {
+	if l.Paused == nil {
+		return 0
+	}
+	return l.Paused()
 }
 
 // frame presents the operator's message to Hermes as a *problem* to solve —
@@ -284,11 +296,12 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			ref := l.Ref
 			l.emit(session.Event{Kind: session.KindCall, Ref: ref, ID: id, Tool: tool, Args: args})
 
-			start := time.Now()
+			start, held := time.Now(), l.paused()
 			result, derr := l.Dispatch.Dispatch(tool, args)
+			ran := max(time.Since(start)-(l.paused()-held), 0).Milliseconds()
 			if errors.Is(derr, dispatch.ErrAbortTurn) {
 				l.emit(session.Event{Kind: session.KindResult, Ref: ref, Tool: tool, Exit: session.Int(125),
-					Ms: time.Since(start).Milliseconds(), Out: "(declined by the operator — turn stopped)"})
+					Ms: ran, Out: "(declined by the operator — turn stopped)"})
 				// Ctrl-C / "q" at an approval = decline this call AND stop the
 				// turn. Nothing more runs; Hermes is told at the start of the
 				// next turn so its transcript stays coherent.
@@ -298,7 +311,7 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			}
 			out := l.scrub(result.Out)
 			l.emit(session.Event{Kind: session.KindResult, Ref: ref, Tool: tool, Exit: session.Int(result.Exit),
-				Ms: time.Since(start).Milliseconds(), Out: out})
+				Ms: ran, Out: out})
 			if l.OnResult != nil { // knowsystem learner: sees raw output + exit
 				l.OnResult(tool, result.Out, result.Exit)
 			}

@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in hermes-hands doesn't work as described
+labels: [bug]
+body:
+  - type: input
+    id: hh-version
+    attributes:
+      label: hermes-hands version
+      description: "`hermes-hands --version`"
+      placeholder: hermes-hands 0.12.0 (abc1234)
+    validations:
+      required: true
+  - type: input
+    id: agent-version
+    attributes:
+      label: hermes-agent version
+      description: "`hermes-hands check` prints it (`· hermes-agent X.Y.Z`). Supported: 0.21.0 and newer."
+      placeholder: "0.22.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Where the hands run
+      options:
+        - Linux
+        - WSL
+        - macOS
+    validations:
+      required: true
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Front end
+      options:
+        - REPL (terminal)
+        - --rpc (editor / plugin / script)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. hermes-hands in a repo with …
+        2. ask "…"
+        3. …
+  - type: textarea
+    id: transcript
+    attributes:
+      label: Terminal output
+      description: >
+        The turn as the terminal showed it (`/history` replays it), or the
+        session's `events.jsonl`. For connection problems, a `/debug` trace
+        (`debug.jsonl`) helps — it is redacted, but read it before posting:
+        a bare password typed into a message matches no redaction pattern.
+      render: text
