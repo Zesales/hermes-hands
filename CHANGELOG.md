@@ -85,6 +85,17 @@ hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).
   `local_*` — they still said `shell` / `read_file` / `write_file` /
   `edit_file`. The install example pins `0.11.0` (`0.9.3` was never tagged).
 
+### On GitHub
+
+- README: badges (release, tests, hermes-agent range, Go, license), a
+  three-line quick start under the diagram, a link to the
+  [Remote Brain, Local Hands](docs/remote-brain-local-hands.md) write-up, a
+  Contributing section; the layout line names every package.
+- `CONTRIBUTING.md` (build, the PR gate, bump labels, CHANGELOG, pinning),
+  `SECURITY.md` (private reporting, what is in scope), issue templates (a bug
+  report asks for the hermes-hands and hermes-agent versions; upstream issues
+  go to hermes-agent) and a PR template.
+
 ## 0.11.0 — 2026-10-16 — session event log, live tool calls, sandbox guard, known system
 
 hermes-agent: 0.21.x – 0.22.x (built on 0.21.5, live-tested on 0.22.0).
