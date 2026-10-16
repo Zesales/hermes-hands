@@ -94,6 +94,7 @@ var goldenMasks = []struct {
 	re *regexp.Regexp
 	to string
 }{
+	{regexp.MustCompile(`http://127\.0\.0\.1:\d+`), "<GATEWAY>"},
 	{regexp.MustCompile(`hh_\d{8}T\d{6}_[0-9a-f]{6}`), "<SESSION>"},
 	{regexp.MustCompile(`session \d{8}T\d{6}_[0-9a-f]{6}`), "session <SESSION>"},
 	{regexp.MustCompile(`hh-[0-9a-f]{8}-\d{8}T\d{6}`), "<HERMES-SESSION>"},
@@ -166,11 +167,24 @@ func TestGoldenREPL(t *testing.T) {
 
 // The same turn through --rpc: the JSON lines an editor plugin reads, the
 // server approval denied (no prompt over the pipe), then the session's
-// recorded events.
+// recorded events — and every other request type once, including the
+// mistakes (an empty turn, a use without an id, an unknown type).
 func TestGoldenRPC(t *testing.T) {
 	srv := hermesmock.NewStream("golden")
 	defer srv.Close()
 	g := newGoldenRun(t, srv.URL, "auto")
-	golden(t, "rpc_turn.txt", g.run(t, "--rpc",
-		`{"id":1,"type":"turn","text":"show me the readme"}`+"\n"+`{"id":2,"type":"history"}`+"\n"))
+	golden(t, "rpc_turn.txt", g.run(t, "--rpc", strings.Join([]string{
+		`{"id":1,"type":"turn","text":"show me the readme"}`,
+		`{"id":2,"type":"history"}`,
+		`{"id":3,"type":"check"}`,
+		`{"id":4,"type":"debug","text":"on"}`,
+		`{"id":5,"type":"debug","text":"off"}`,
+		`{"id":6,"type":"compact"}`,
+		`{"id":7,"type":"turn","text":""}`,
+		`{"id":8,"type":"use"}`,
+		`{"id":9,"type":"use","session":"hh_19990101T000000_000000"}`,
+		`{"id":10,"type":"new"}`,
+		`{"id":11,"type":"bogus"}`,
+		`not json`,
+	}, "\n")+"\n"))
 }

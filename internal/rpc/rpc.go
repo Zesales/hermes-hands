@@ -40,6 +40,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/Zesales/hermes-hands/internal/app"
@@ -76,20 +77,44 @@ func Run(smode string, d Deps) int {
 		return 1
 	}
 	defer a.Shell.Stop()
-
-	if !a.Cfg.Configured() {
-		emit(map[string]any{"type": "error", "message": "not configured - run `hermes-hands setup`"})
+	s, ok := start(a, smode, d.Version, emit)
+	if !ok {
 		return 1
 	}
-	// Preflight like the REPL: it also reads /v1/capabilities, without which
-	// the client never streams — and only the SSE stream carries Hermes' tool
-	// events (the sandbox guard) and live deltas.
+	// SIGINT cancels the in-flight turn (like the REPL): the turn context, the
+	// shell child AND the server run. The caller drives the lifetime by
+	// closing stdin. The runner's silence watchdog keeps a gateway that goes
+	// quiet from hanging the editor's turn forever.
+	defer s.runner.CancelOnInterrupt()()
+	s.serve(os.Stdin)
+	return 0
+}
+
+// server is one --rpc process: the app, the open session and its runner.
+type server struct {
+	a       *app.App
+	rec     *session.Record
+	runner  *turn.Runner
+	emit    func(map[string]any)
+	debugOn bool
+}
+
+// start preflights like the REPL — /v1/capabilities, without which the
+// client never streams, and only the SSE stream carries Hermes' tool events
+// (the sandbox guard) and live deltas — opens the session and says ready.
+// On a failure it has written the error line.
+func start(a *app.App, smode, version string, emit func(map[string]any)) (*server, bool) {
+	fail := func(msg string) (*server, bool) {
+		emit(map[string]any{"type": "error", "message": msg})
+		return nil, false
+	}
+	if !a.Cfg.Configured() {
+		return fail("not configured - run `hermes-hands setup`")
+	}
 	srv, err := a.Client.Server().Check(context.Background())
 	if err != nil {
-		emit(map[string]any{"type": "error", "message": err.Error()})
-		return 1
+		return fail(err.Error())
 	}
-
 	approvals := "never"
 	if ta, ok := a.Disp.Approver.(*prompt.TTYApprover); ok {
 		switch ta.Mode {
@@ -98,42 +123,35 @@ func Run(smode string, d Deps) int {
 		case "never":
 			approvals = "never"
 		default:
-			emit(map[string]any{"type": "error", "message": "--rpc needs --yolo (HERMES_HANDS_APPROVE=auto) or HERMES_HANDS_APPROVE=never - interactive approval over the pipe is not supported"})
-			return 1
+			return fail("--rpc needs --yolo (HERMES_HANDS_APPROVE=auto) or HERMES_HANDS_APPROVE=never - interactive approval over the pipe is not supported")
 		}
 	}
 	a.UI = nil // no terminal frames in rpc mode: the event log only records
 
 	rec, err := a.Store.Resolve(smode, a.RepoRoot)
 	if err != nil {
-		emit(map[string]any{"type": "error", "message": err.Error()})
-		return 1
+		return fail(err.Error())
 	}
-	evlog := a.OpenSession(rec, false)
-
+	log := a.OpenSession(rec, false)
 	ready := map[string]any{
 		"type": "ready", "session": rec.ID, "cwd": a.RepoRoot,
-		"version": d.Version, "approvals": approvals, "hermes_agent": srv.Version,
+		"version": version, "approvals": approvals, "hermes_agent": srv.Version,
 	}
 	if w := app.CompatWarning(srv.Version); w != "" {
 		ready["compat"] = w
 	}
 	emit(ready)
 
-	// SIGINT cancels the in-flight turn (like the REPL): the turn context, the
-	// shell child AND the server run. The caller drives the lifetime by
-	// closing stdin. The runner's silence watchdog keeps a gateway that goes
-	// quiet from hanging the editor's turn forever.
-	runner := &turn.Runner{}
-	a.Bind(runner)
-	runner.Use(evlog)
-	defer runner.CancelOnInterrupt()()
+	s := &server{a: a, rec: rec, runner: &turn.Runner{}, emit: emit, debugOn: a.Cfg.Debug}
+	a.Bind(s.runner)
+	s.runner.Use(log)
+	s.applyDebug()
+	return s, true
+}
 
-	debugOn := a.Cfg.Debug
-	applyDebug := func() { a.SetDebug(rec, debugOn) }
-	applyDebug()
-
-	sc := bufio.NewScanner(os.Stdin)
+// serve answers one request per line until in closes.
+func (s *server) serve(in io.Reader) {
+	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -142,105 +160,134 @@ func Run(smode string, d Deps) int {
 		}
 		var req request
 		if json.Unmarshal(line, &req) != nil {
-			emit(map[string]any{"type": "error", "message": "invalid JSON request"})
+			s.emit(map[string]any{"type": "error", "message": "invalid JSON request"})
 			continue
 		}
 		id := any(nil)
 		if len(req.ID) > 0 {
 			_ = json.Unmarshal(req.ID, &id)
 		}
-
-		switch req.Type {
-		case "turn":
-			if req.Text == "" {
-				emit(map[string]any{"type": "error", "id": id, "message": "turn needs a non-empty text"})
-				continue
-			}
-			res := runner.Run(req.Text, &front{emit: emit, id: id, heads: map[int]string{}})
-			switch res.End.Outcome {
-			case "timeout":
-				emit(map[string]any{"type": "error", "id": id, "message": fmt.Sprintf(
-					"turn timed out — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=%ds)", res.End.Limit)})
-			case "interrupted":
-				emit(map[string]any{"type": "error", "id": id, "message": "turn interrupted"})
-			default:
-				emit(map[string]any{
-					"type": "answer", "id": id, "ok": res.Out.OK, "text": res.Out.Answer,
-					"session": rec.ID, "hermes_session": rec.HermesSessionID,
-				})
-			}
-
-		case "history":
-			evs, e := a.Store.LoadEvents(rec)
-			if e != nil {
-				emit(map[string]any{"type": "error", "id": id, "message": e.Error()})
-				continue
-			}
-			if evs == nil {
-				evs = []session.Event{}
-			}
-			emit(map[string]any{
-				"type": "history", "id": id, "session": rec.ID,
-				"hermes_session": rec.HermesSessionID, "events": evs,
-			})
-
-		case "new":
-			nr, e := a.Store.Resolve("new", a.RepoRoot)
-			if e != nil {
-				emit(map[string]any{"type": "error", "id": id, "message": e.Error()})
-				continue
-			}
-			rec = nr
-			runner.Use(a.OpenSession(rec, false))
-			applyDebug()
-			emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
-
-		case "use":
-			if req.Session == "" {
-				emit(map[string]any{"type": "error", "id": id, "message": "use needs a session id"})
-				continue
-			}
-			nr, e := a.Store.Resolve(req.Session, a.RepoRoot)
-			if e != nil {
-				emit(map[string]any{"type": "error", "id": id, "message": e.Error()})
-				continue
-			}
-			rec = nr
-			runner.Use(a.OpenSession(rec, false))
-			applyDebug()
-			emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
-
-		case "debug":
-			switch req.Text {
-			case "on", "true":
-				debugOn = true
-			case "off", "false":
-				debugOn = false
-			default:
-				debugOn = !debugOn
-			}
-			applyDebug()
-			emit(map[string]any{"type": "debug", "id": id, "on": debugOn, "path": a.Store.DebugPath(rec)})
-
-		case "check":
-			res, e := a.Client.Server().Check(context.Background())
-			if e != nil {
-				emit(map[string]any{"type": "check", "id": id, "ok": false, "message": e.Error()})
-				continue
-			}
-			msg := map[string]any{"type": "check", "id": id, "ok": true, "model": res.Model, "base": res.Base, "version": res.Version}
-			if n := compat.Note(res.Version); n != "" {
-				msg["compat"] = n
-			}
-			emit(msg)
-
-		case "compact", "compress":
-			emit(map[string]any{"type": "compact", "id": id, "ok": false,
-				"message": "this gateway exposes no REST compaction endpoint; Hermes compacts automatically"})
-
-		default:
-			emit(map[string]any{"type": "error", "id": id, "message": fmt.Sprintf("unknown request type %q", req.Type)})
+		h, ok := handlers[req.Type]
+		if !ok {
+			s.emit(map[string]any{"type": "error", "id": id, "message": fmt.Sprintf("unknown request type %q", req.Type)})
+			continue
 		}
+		h(s, req, id)
 	}
-	return 0
 }
+
+// handlers answers each request type; id is the request's id, echoed back.
+var handlers = map[string]func(s *server, req request, id any){
+	"turn":     (*server).turn,
+	"history":  (*server).history,
+	"new":      (*server).newSession,
+	"use":      (*server).use,
+	"debug":    (*server).debug,
+	"check":    (*server).check,
+	"compact":  (*server).compact,
+	"compress": (*server).compact,
+}
+
+func (s *server) fail(id any, msg string) {
+	s.emit(map[string]any{"type": "error", "id": id, "message": msg})
+}
+
+// turn runs one turn; the answer — or why there is none — closes it.
+func (s *server) turn(req request, id any) {
+	if req.Text == "" {
+		s.fail(id, "turn needs a non-empty text")
+		return
+	}
+	res := s.runner.Run(req.Text, &front{emit: s.emit, id: id, heads: map[int]string{}})
+	switch res.End.Outcome {
+	case "timeout":
+		s.fail(id, fmt.Sprintf("turn timed out — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=%ds)", res.End.Limit))
+	case "interrupted":
+		s.fail(id, "turn interrupted")
+	default:
+		s.emit(map[string]any{
+			"type": "answer", "id": id, "ok": res.Out.OK, "text": res.Out.Answer,
+			"session": s.rec.ID, "hermes_session": s.rec.HermesSessionID,
+		})
+	}
+}
+
+// history returns the open session's event log.
+func (s *server) history(_ request, id any) {
+	evs, err := s.a.Store.LoadEvents(s.rec)
+	if err != nil {
+		s.fail(id, err.Error())
+		return
+	}
+	if evs == nil {
+		evs = []session.Event{}
+	}
+	s.emit(map[string]any{
+		"type": "history", "id": id, "session": s.rec.ID,
+		"hermes_session": s.rec.HermesSessionID, "events": evs,
+	})
+}
+
+func (s *server) newSession(_ request, id any) {
+	nr, err := s.a.Store.Resolve("new", s.a.RepoRoot)
+	if err != nil {
+		s.fail(id, err.Error())
+		return
+	}
+	s.switchTo(nr, id)
+}
+
+func (s *server) use(req request, id any) {
+	if req.Session == "" {
+		s.fail(id, "use needs a session id")
+		return
+	}
+	nr, err := s.a.Store.Resolve(req.Session, s.a.RepoRoot)
+	if err != nil {
+		s.fail(id, err.Error())
+		return
+	}
+	s.switchTo(nr, id)
+}
+
+// switchTo makes rec the open session and says which one it is.
+func (s *server) switchTo(rec *session.Record, id any) {
+	s.rec = rec
+	s.runner.Use(s.a.OpenSession(rec, false))
+	s.applyDebug()
+	s.emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
+}
+
+// debug switches the redacted wire trace: on | off | anything else = toggle.
+func (s *server) debug(req request, id any) {
+	switch req.Text {
+	case "on", "true":
+		s.debugOn = true
+	case "off", "false":
+		s.debugOn = false
+	default:
+		s.debugOn = !s.debugOn
+	}
+	s.applyDebug()
+	s.emit(map[string]any{"type": "debug", "id": id, "on": s.debugOn, "path": s.a.Store.DebugPath(s.rec)})
+}
+
+func (s *server) check(_ request, id any) {
+	res, err := s.a.Client.Server().Check(context.Background())
+	if err != nil {
+		s.emit(map[string]any{"type": "check", "id": id, "ok": false, "message": err.Error()})
+		return
+	}
+	msg := map[string]any{"type": "check", "id": id, "ok": true, "model": res.Model, "base": res.Base, "version": res.Version}
+	if n := compat.Note(res.Version); n != "" {
+		msg["compat"] = n
+	}
+	s.emit(msg)
+}
+
+func (s *server) compact(_ request, id any) {
+	s.emit(map[string]any{"type": "compact", "id": id, "ok": false,
+		"message": "this gateway exposes no REST compaction endpoint; Hermes compacts automatically"})
+}
+
+func (s *server) applyDebug() { s.a.SetDebug(s.rec, s.debugOn) }

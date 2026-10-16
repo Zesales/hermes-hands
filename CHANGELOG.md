@@ -36,8 +36,8 @@ type does one job.
 ### One place that builds the app
 
 - **`internal/app`**: `App` and `New(cfg, instructions)` — the composition
-  root (UI, API client, store, shell, dispatcher, loop, the known-system
-  probe, retention); `Bind` points a turn runner at it, `SetDebug` switches
+  root (UI, API client, store, shell, dispatcher, loop; the known-system
+  probe and the retention window as their own steps); `Bind` points a turn runner at it, `SetDebug` switches
   the wire trace (a copy each in the REPL and `--rpc` before), `OpenSession`
   / resume, the instructions ladder, the sandbox guard, the `check` line and
   compat warning, the session list. `sessionlist.go` moved in.
@@ -52,7 +52,11 @@ type does one job.
   ones in `cmd_session.go`) instead of a 14-case `switch` inside a 440-line
   `runREPL`; `front.go` draws a turn and asks Hermes' server approvals.
 - **`internal/rpc`**: `Run` serves the JSON lines; its `front` writes a turn.
-  `rpc.go` / `frontends.go` left the root package.
+  `rpc.go` / `frontends.go` left the root package. Like the REPL's slash
+  commands, each request type is a small handler in one table (`start`
+  preflights and says ready, `serve` reads the lines); the rpc golden
+  transcript now sends every request type once, mistakes included — written
+  with the old code, passed by the new.
 - Both get what they need from outside as `Deps` (build the app, the setup
   wizard, the version).
 
