@@ -18,7 +18,11 @@ hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
   says `go 1.26.9`.
 - **`make vuln`**: govulncheck, pinned (v1.8.0) — known vulnerabilities in
   the code paths actually called, stdlib and the vendored deps. The one
-  check that needs the network. Clean now.
+  check that needs the network. Clean now. It downloads with
+  `-modcacherw`, and `make clean` makes an older read-only module cache
+  deletable first: the Go module cache is read-only by default, which broke
+  `make clean` — and with it `./build.sh release` — once something had been
+  downloaded into it.
 
 Apart from that, no change for the operator; the code is reorganised so that
 every package and type does one job.
