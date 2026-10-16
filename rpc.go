@@ -6,17 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
-	"sync"
-	"syscall"
-	"time"
 
 	"github.com/Zesales/hermes-hands/internal/compat"
 	"github.com/Zesales/hermes-hands/internal/debuglog"
 	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/redact"
 	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/ui"
+	"github.com/Zesales/hermes-hands/internal/turn"
 )
 
 // --rpc: a persistent JSON-lines session server for an editor / plugin. The
@@ -119,64 +114,12 @@ func runRPC(smode string) int {
 
 	// SIGINT cancels the in-flight turn (like the REPL): the turn context, the
 	// shell child AND the server run. The caller drives the lifetime by
-	// closing stdin.
-	var (
-		turnMu     sync.Mutex
-		cancelTurn context.CancelFunc
-		runID      string // in-flight Hermes run, for POST /v1/runs/{id}/stop
-	)
-	abortTurn := func() {
-		turnMu.Lock()
-		rid := runID
-		if cancelTurn != nil {
-			cancelTurn()
-			a.shell.Kill()
-		}
-		turnMu.Unlock()
-		if rid != "" {
-			go a.client.StopRun(context.Background(), rid)
-		}
-	}
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT)
-	defer signal.Stop(sigCh)
-	go func() {
-		for range sigCh {
-			abortTurn()
-		}
-	}()
-
-	// The same silence watchdog as the REPL: a streamed run has no overall
-	// deadline of its own, so without it a gateway that goes quiet would hang
-	// the editor's turn forever. Every sign of life pushes it back.
-	wd := &watchdog{timeout: a.cfg.ResponseTimeout, interval: a.cfg.WatchdogInterval, onFire: abortTurn}
-	wd.check = func(ctx context.Context) bool {
-		turnMu.Lock()
-		rid := runID
-		turnMu.Unlock()
-		if rid == "" {
-			return true // between rounds: local dispatch is the holdup, not the brain
-		}
-		st, err := a.client.RunState(ctx, rid)
-		if err != nil {
-			return false
-		}
-		return st != "completed" && st != "failed" && st != "cancelled"
-	}
-	a.client.OnEvent = func(string) { wd.bump() }
-
-	// Deltas carry the raw envelope ({"calls":…,"final":"…"}); the editor gets
-	// only the final answer text, like the REPL's live preview. Reset per run,
-	// so the final round of a multi-round turn streams too.
-	var curID any
-	fs := &finalStreamer{emit: func(t string) { emit(map[string]any{"type": "delta", "id": curID, "text": t}) }}
-	a.client.OnRunStart = func(id string) {
-		turnMu.Lock()
-		runID = id
-		turnMu.Unlock()
-		fs.reset()
-		wd.bump()
-	}
+	// closing stdin. The runner's silence watchdog keeps a gateway that goes
+	// quiet from hanging the editor's turn forever.
+	runner := &turn.Runner{}
+	bindRunner(runner, a)
+	runner.Use(evlog)
+	defer runner.CancelOnInterrupt()()
 
 	debugOn := a.cfg.Debug
 	applyDebug := func() {
@@ -211,80 +154,19 @@ func runRPC(smode string) int {
 				emit(map[string]any{"type": "error", "id": id, "message": "turn needs a non-empty text"})
 				continue
 			}
-			evlog.beginTurn()
-			evlog.add(session.Event{Kind: session.KindUser, Text: redact.Scrub(req.Text)})
-			curID = id
-			heads := map[int]string{} // ref -> the call's preview; a result event carries no args
-			var local int64           // ms the hands' calls ran (turn_end's local share)
-			a.loop.Emit = func(ev session.Event) {
-				wd.bump()
-				ev = evlog.add(ev)
-				switch ev.Kind {
-				case session.KindCall:
-					heads[ev.Ref], _ = ui.Summarize(ev.Tool, ev.Args)
-					emit(map[string]any{"type": "call", "id": id, "ref": ev.Ref, "tool": ev.Tool, "preview": heads[ev.Ref]})
-				case session.KindResult:
-					local += ev.Ms
-					exit := 0
-					if ev.Exit != nil {
-						exit = *ev.Exit
-					}
-					emit(map[string]any{"type": "tool", "id": id, "ref": ev.Ref, "tool": ev.Tool, "preview": heads[ev.Ref], "exit": exit, "lines": ev.Lines})
-				}
-			}
-			a.client.OnHermesTool = func(tool, preview, action string) {
-				evlog.add(session.Event{Kind: session.KindHermesTool, Tool: tool, Text: preview, Action: action})
-				emit(map[string]any{"type": "hermes_tool", "id": id, "tool": tool, "preview": preview, "action": action})
-			}
-			a.client.OnDelta = func(t string) { wd.bump(); fs.feed(t) }
-			fs.reset()
-			turnStart := time.Now()
-			ctx, cancel := context.WithCancel(context.Background())
-			turnMu.Lock()
-			cancelTurn = cancel
-			runID = ""
-			turnMu.Unlock()
-			wdStop := make(chan struct{})
-			go wd.guard(wdStop)
-
-			out := a.loop.Run(ctx, req.Text, rec, func(runID, sid string, tok int) { _ = a.store.BumpTurn(rec, runID, sid, tok) })
-
-			close(wdStop)
-			timedOut := wd.disarm()
-			turnMu.Lock()
-			cancelTurn = nil
-			turnMu.Unlock()
-			interrupted := ctx.Err() != nil
-			cancel()
-			a.loop.Emit = nil
-			a.client.OnHermesTool = nil
-			a.client.OnDelta = nil
-			end := session.Event{Kind: session.KindTurnEnd, Ms: time.Since(turnStart).Milliseconds(), LocalMs: local}
-
-			if timedOut {
-				end.Outcome, end.Limit = "timeout", int(a.cfg.ResponseTimeout/time.Second)
-				evlog.add(end)
+			res := runner.Run(req.Text, &rpcFront{emit: emit, id: id, heads: map[int]string{}})
+			switch res.End.Outcome {
+			case "timeout":
 				emit(map[string]any{"type": "error", "id": id, "message": fmt.Sprintf(
-					"turn timed out — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=%ds)", end.Limit)})
-				continue
-			}
-			if interrupted {
-				end.Outcome = "interrupted"
-				evlog.add(end)
+					"turn timed out — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=%ds)", res.End.Limit)})
+			case "interrupted":
 				emit(map[string]any{"type": "error", "id": id, "message": "turn interrupted"})
-				continue
+			default:
+				emit(map[string]any{
+					"type": "answer", "id": id, "ok": res.Out.OK, "text": res.Out.Answer,
+					"session": rec.ID, "hermes_session": rec.HermesSessionID,
+				})
 			}
-			if out.OK {
-				if changed, _ := a.store.SetTitleLocal(rec, req.Text); changed && rec.HermesSessionID != "" {
-					a.client.SetTitle(context.Background(), rec.HermesSessionID, rec.Title)
-				}
-			}
-			evlog.add(session.Event{Kind: session.KindAnswer, Text: redact.Scrub(out.Answer), OK: session.Bool(out.OK)})
-			evlog.add(end)
-			emit(map[string]any{
-				"type": "answer", "id": id, "ok": out.OK, "text": out.Answer,
-				"session": rec.ID, "hermes_session": rec.HermesSessionID,
-			})
 
 		case "history":
 			evs, e := a.store.LoadEvents(rec)
@@ -307,7 +189,7 @@ func runRPC(smode string) int {
 				continue
 			}
 			rec = nr
-			evlog = openSession(a, rec, false)
+			runner.Use(openSession(a, rec, false))
 			applyDebug()
 			emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
 
@@ -322,7 +204,7 @@ func runRPC(smode string) int {
 				continue
 			}
 			rec = nr
-			evlog = openSession(a, rec, false)
+			runner.Use(openSession(a, rec, false))
 			applyDebug()
 			emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
 
