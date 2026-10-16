@@ -1,0 +1,145 @@
+hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
+hermes-hands 0.0.0-dev  ·  <TMP>
+hermes-agent · session (pending — confirmed on the first turn)
+/help  /new  /sessions  /check  /exit
+
+hermes-hands - session <SESSION> >   Type a message to your Hermes brain. It works this directory through
+  you — local_shell, local_read, local_write, local_edit in <TMP>,
+  each with your approval.
+    /new          start a fresh session in this directory
+    /session      show this session's detail (turns, tokens, splits)
+    /session <id> switch to another session  (ids from /sessions)
+    /sessions     list this machine's sessions  (/sessions -v: each with its hermes-agent session)
+    /history      replay this session (/history <n> = last n turns, /history <id> = another)
+    /out <n>      full output of call #n
+    /fork         branch this session on the server, switch to it
+    /yolo         toggle approvals for shell / write / edit
+    /debug        toggle the redacted connection trace (session debug.jsonl)
+    /setup        (re)configure the gateway URL + key
+    /config       config file path + effective settings (read-only; edit by hand)
+    /check        re-test the gateway connection
+    /help         show this
+    /exit         quit  (Ctrl-D too; Ctrl-C cancels the running turn)
+
+hermes-hands - session <SESSION> >   approvals: OFF (yolo) — shell / write run unattended
+
+hermes-hands - session <SESSION> >   approvals: ON — shell / write ask first
+
+hermes-hands - session <SESSION> >   unknown command /bogus — /help lists the commands, /exit leaves
+
+hermes-hands - session <SESSION> > 
+────────────────────────────────────────────────────────────────────────────────────────────────
+you
+   show me the readme
+   ⋯ working  ·  Ctrl+C to cancel
+hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
+ · hermes server-sandbox terminal  echo probe
+ ⚠ hermes-sandbox terminal  make test
+     ↳ not your machine — steered back to the hands
+
+  ⚠  hermes wants to run terminal on its SERVER sandbox (not your machine):
+      rm -rf /tmp/scratch
+  [o]nce  [s]ession  [n]o >  ✓ hermes-sandbox approval granted  rm -rf /tmp/scratch
+ #1 local_read  README.md
+ #1 ✓ exit 0 · 1 line
+ #2 local_shell  printf 'one\ntwo\n'
+
+  ⚠  local_shell: printf 'one\ntwo\n'
+  [y]es  [n]o  [a]ll  [q]uit turn >  #2 ✓ exit 0 · 2 lines
+     │ one
+     │ two
+hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
+
+hermes
+   Read the README ("demo readme") and ran the shell.
+   Two lines — ä ✓.
+— worked for <DUR> · hermes <DUR> · local <DUR> —
+
+hermes-hands - session <SESSION> >  #2 output (7 bytes)
+     one
+     two
+
+hermes-hands - session <SESSION> >  usage: /out <n> — n is the #number of a call
+
+hermes-hands - session <SESSION> > 
+────────────────────────────────────────────────────────────────────────────────────────────────
+you
+   show me the readme
+ · hermes server-sandbox terminal  echo probe
+ ⚠ hermes-sandbox terminal  make test
+     ↳ not your machine — steered back to the hands
+
+  ⚠  hermes wants to run terminal on its SERVER sandbox (not your machine):
+      rm -rf /tmp/scratch
+  [o]nce  [s]ession  [n]o > o
+ ✓ hermes-sandbox approval granted  rm -rf /tmp/scratch
+ #1 local_read  README.md
+ #1 ✓ exit 0 · 1 line
+ #2 local_shell  printf 'one\ntwo\n'
+
+  ⚠  local_shell: printf 'one\ntwo\n'
+  [y]es  [n]o  [a]ll  [q]uit turn > y
+ #2 ✓ exit 0 · 2 lines
+     │ one
+     │ two
+
+hermes
+   Read the README ("demo readme") and ran the shell.
+   Two lines — ä ✓.
+— worked for <DUR> · hermes <DUR> · local <DUR> —
+
+
+hermes-hands - session <SESSION> > ID                        TURNS    TOKENS  UPDATED              IDLE     DIR             TITLE
+<SESSION>      2       ~42  <TIME>  <DUR>       002             show me the readme
+
+hermes-hands - session <SESSION> >   hermes-hands session : <SESSION>
+  hermes-agent session : <HERMES-SESSION>
+  title                : show me the readme
+  turns                : 2
+  splits (~compactions): 0
+  tokens               : ~42 (last run, billing usage)
+  created / updated    : <TIME>  /  <TIME>
+  idle                 : <DUR>
+  dir                  : <TMP>
+
+hermes-hands - session <SESSION> >   debug: ON — redacted connection trace → <TMP>/hermes-hands/sessions/<SESSION>/debug.jsonl
+  (local only, 0600, deleted with the session after 14 idle days)
+
+hermes-hands - session <SESSION> >   debug: OFF
+
+hermes-hands - session <SESSION> > hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
+API OK: hermes-agent @ <GATEWAY> · hermes-agent 0.22.2
+
+hermes-hands - session <SESSION> >   home         : <TMP>/hermes-hands
+  config file  : <TMP>/hermes-hands/config
+  secrets      : (from the environment / config file — no secrets file)
+  instructions : (built-in default)
+  sessions     : <TMP>/hermes-hands/sessions
+
+  effective settings — edit the config file by hand; hermes-hands never writes these:
+    HERMES_API_URL                 <GATEWAY>
+    HERMES_API_PROFILE             (none)
+    HERMES_HANDS_APPROVE           ask
+    HERMES_HANDS_STREAM            (none)
+    HERMES_HANDS_RESPONSE_TIMEOUT  <DUR>
+    HERMES_HANDS_WATCHDOG_INTERVAL <DUR>
+    HERMES_HANDS_RETENTION_DAYS    14 days
+    HERMES_HANDS_DEBUG             off
+    HERMES_HANDS_SANDBOX           smart
+    HERMES_HANDS_MAX_ROUNDS        25
+    HERMES_HANDS_RUN_TIMEOUT       <DUR>
+    HERMES_API_RUN_TIMEOUT         <DUR>
+    HERMES_HANDS_MAX_OUTPUT        20000
+    HERMES_HANDS_DENY              (none)
+
+hermes-hands - session <SESSION> >   this Hermes doesn't expose compaction over the API —
+  it compacts automatically; use /new for a new task.
+
+hermes-hands - session <SESSION> >   BLOCKED: fork -> HTTP 404: {"error":"nf"}
+
+hermes-hands - session <SESSION> > — new session <SESSION> —
+
+hermes-hands - session <SESSION> >  no history yet for <SESSION>
+
+
+hermes-hands - session <SESSION> > 
