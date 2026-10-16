@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -41,7 +43,9 @@ type encBlob struct {
 	CT    string   `json:"ct"`
 }
 
-// resolveMachineID returns the host's machine id, or "" when none is available.
+// resolveMachineID returns the host's machine id, or "" when none is available:
+// /etc/machine-id (then the dbus copy) on Linux / WSL, the hardware
+// IOPlatformUUID on macOS (which has no machine-id file).
 func resolveMachineID() string {
 	if machineIDForTest != "" {
 		return machineIDForTest
@@ -52,6 +56,22 @@ func resolveMachineID() string {
 				return s
 			}
 		}
+	}
+	if runtime.GOOS == "darwin" {
+		if out, err := exec.Command("/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output(); err == nil {
+			return platformUUID(string(out))
+		}
+	}
+	return ""
+}
+
+var platformUUIDRe = regexp.MustCompile(`"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{36})"`)
+
+// platformUUID extracts the IOPlatformUUID from `ioreg -rd1 -c
+// IOPlatformExpertDevice` output ("" when absent).
+func platformUUID(ioreg string) string {
+	if m := platformUUIDRe.FindStringSubmatch(ioreg); m != nil {
+		return strings.ToUpper(m[1])
 	}
 	return ""
 }
@@ -173,11 +193,8 @@ func WriteEncryptedSecrets(dir, url, key string) error {
 }
 
 // warnIfLoose warns (without failing) when a secret file is group/other
-// readable. POSIX only — Windows perm bits are not meaningful here.
+// readable.
 func warnIfLoose(path string) {
-	if runtime.GOOS == "windows" {
-		return
-	}
 	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		Warnf("%s is not 0600", path)
 	}

@@ -87,7 +87,21 @@ func (c *Client) Ask(ctx context.Context, msg, sess, skey string) (AskResult, er
 	}
 
 	threaded := !dropSess
+	c.trace("run.start", map[string]any{"run_id": runID, "session_id": sess, "threaded": threaded,
+		"input": msg, "instructions_bytes": len(c.Instructions)})
 
+	res, err := c.awaitRun(ctx, base, runID, threaded)
+	f := map[string]any{"run_id": runID, "tokens": res.Tokens, "output": res.Text}
+	if err != nil {
+		f["err"] = err.Error()
+	}
+	c.trace("run.end", f)
+	return res, err
+}
+
+// awaitRun waits for a submitted run: the SSE stream when wanted, else (or
+// when the stream is unusable) the authoritative poll.
+func (c *Client) awaitRun(ctx context.Context, base, runID string, threaded bool) (AskResult, error) {
 	if c.wantStream() {
 		if res, serr := c.streamRun(ctx, base, runID, threaded); serr == nil {
 			return res, nil
@@ -98,6 +112,12 @@ func (c *Client) Ask(ctx context.Context, msg, sess, skey string) (AskResult, er
 		}
 	}
 	return c.pollRun(ctx, base, runID, threaded)
+}
+
+func (c *Client) trace(kind string, fields map[string]any) {
+	if c.Trace != nil {
+		c.Trace(kind, fields)
+	}
 }
 
 // pollRun rides GET /v1/runs/{id} to a terminal status (the pre-SSE path, and

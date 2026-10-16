@@ -12,6 +12,7 @@ import (
 
 	"github.com/Zesales/hermes-hands/internal/api"
 	"github.com/Zesales/hermes-hands/internal/dispatch"
+	"github.com/Zesales/hermes-hands/internal/knowsystem"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/redact"
 	"github.com/Zesales/hermes-hands/internal/session"
@@ -124,19 +125,6 @@ func TestLtrimFirstLine(t *testing.T) {
 	}
 }
 
-func TestPreviewOf(t *testing.T) {
-	if got := previewOf(json.RawMessage(`{"cmd":"ls -la\nfoo"}`)); got != "ls -la foo" {
-		t.Errorf("previewOf cmd = %q", got)
-	}
-	if got := previewOf(json.RawMessage(`{"path":"src/x.go"}`)); got != "src/x.go" {
-		t.Errorf("previewOf path = %q", got)
-	}
-	long := strings.Repeat("z", 100)
-	if got := previewOf(json.RawMessage(`{"pattern":"` + long + `"}`)); len(got) != 72 {
-		t.Errorf("previewOf clip len = %d", len(got))
-	}
-}
-
 // --- Run: terminal outcomes ---
 
 func TestRunPlainFinal(t *testing.T) {
@@ -175,8 +163,38 @@ func TestRunFixupThenAccept(t *testing.T) {
 	if !out.OK || out.Answer != "ok now" {
 		t.Fatalf("out = %+v", out)
 	}
-	if s.msgs[1] != fixupMsg {
-		t.Errorf("round 2 msg = %q, want the fixup error", s.msgs[1])
+	if !strings.HasPrefix(s.msgs[1], fixupMsg) {
+		t.Errorf("round 2 msg = %q, want it to start with the fixup error", s.msgs[1])
+	}
+	if !strings.Contains(s.msgs[1], `verbatim, was: "hello"`) {
+		t.Errorf("round 2 msg should still restate the operator's question, got: %q", s.msgs[1])
+	}
+}
+
+// TestRunFixupNudgeCarriesOperatorQuestion pins a real production bug seen
+// against the live gateway: round 1 produced a botched envelope while trying
+// to do actual work (write a file with an explanation around it - exactly the
+// kind of reply where a small model tangles prose and JSON), the loop sent
+// back the bare fixupMsg with zero task context, and the model - now able to
+// format correctly but with no idea what it was asked - answered "what can I
+// do for you?" instead of finishing the task. The fixup nudge must restate
+// the question so recovering the format doesn't also mean abandoning the job.
+func TestRunFixupNudgeCarriesOperatorQuestion(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply("```json\n{\"tool\": broken", true), // round 1: botched envelope
+		reply(`{"calls":[],"final":"created test.md"}`, true),
+	}}
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 8}
+	task := "lege eine test.md mit einer hallo-world bash anleitung an"
+	out := l.Run(context.Background(), task, rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "created test.md" {
+		t.Fatalf("out = %+v", out)
+	}
+	if !strings.HasPrefix(sa.msgs[1], fixupMsg) {
+		t.Errorf("round 2 msg = %q, want it to start with the fixup error", sa.msgs[1])
+	}
+	if !strings.Contains(sa.msgs[1], task) {
+		t.Errorf("fixup nudge should restate the operator's question, got: %q", sa.msgs[1])
 	}
 }
 
@@ -190,8 +208,33 @@ func TestRunFixupExhaustedFallsToProse(t *testing.T) {
 	if !strings.Contains(out.Answer, "still broken") {
 		t.Errorf("answer = %q", out.Answer)
 	}
-	if len(s.msgs) != 3 {
-		t.Errorf("want 3 rounds (2 fixups then accept), got %d", len(s.msgs))
+	if len(s.msgs) != maxFixups+1 {
+		t.Errorf("want %d rounds (%d fixups then accept), got %d", maxFixups+1, maxFixups, len(s.msgs))
+	}
+}
+
+// TestRunFixupBudgetCoversThreeAttempts pins another real production
+// observation: after the fixup nudge started restating the task, a model
+// spent two attempts on genuinely malformed JSON, then landed a third attempt
+// that was a real write_file call with real content but truncated - missing
+// its closing brackets. Under the old 2-attempt budget that third reply was
+// already past the limit, so the loop gave up and showed the raw, unexecuted
+// JSON to the operator as if it were the final answer (nothing was ever
+// written). maxFixups=3 gives that close-but-truncated attempt one more shot.
+func TestRunFixupBudgetCoversThreeAttempts(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply("```json\n{\"tool\": broken1", true),
+		reply("```json\n{\"tool\": broken2", true),
+		reply(`{"calls":[{"id":"c1","tool":"write_file","args":{"path":"foo.txt","content":"z"}}]`, true), // truncated: missing the final "}"
+		reply(`{"calls":[],"final":"created"}`, true),
+	}}
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 8}
+	out := l.Run(context.Background(), "write foo.txt", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "created" {
+		t.Fatalf("out = %+v", out)
+	}
+	if len(sa.msgs) != maxFixups+1 {
+		t.Errorf("want %d rounds (%d fixups then success), got %d", maxFixups+1, maxFixups, len(sa.msgs))
 	}
 }
 
@@ -202,8 +245,39 @@ func TestRunEmptyEnvelopeNudgeThenBlocked(t *testing.T) {
 	if out.OK || out.Answer != "BLOCKED: Hermes returned an empty envelope repeatedly." {
 		t.Fatalf("out = %+v", out)
 	}
-	if s.msgs[1] != emptyMsg || s.msgs[2] != emptyMsg {
-		t.Errorf("nudge messages = %q / %q", s.msgs[1], s.msgs[2])
+	for i, m := range []string{s.msgs[1], s.msgs[2]} {
+		if !strings.HasPrefix(m, emptyMsg) {
+			t.Errorf("nudge message %d = %q, want it to start with the empty-envelope error", i+1, m)
+		}
+		if !strings.Contains(m, `verbatim, was: "hello"`) {
+			t.Errorf("nudge message %d should still restate the operator's question, got: %q", i+1, m)
+		}
+	}
+}
+
+func TestRoundBudgetNotes(t *testing.T) {
+	callEnv := reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true)
+	sa := &scriptAsker{replies: []api.AskResult{callEnv}}
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 7}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if out.OK {
+		t.Fatalf("want the capped BLOCKED outcome, got %+v", out)
+	}
+	// Ask 6 (5 rounds ran): inside the last-5 window — soft countdown.
+	if !strings.Contains(sa.msgs[5], "5/7 rounds used, 2 left") {
+		t.Errorf("ask 6 should carry the countdown, got: %q", trunc(sa.msgs[5], 300))
+	}
+	// Ask 7 (6 rounds ran): its reply is the last round whose calls run.
+	if !strings.Contains(sa.msgs[6], "LAST round (7/7)") {
+		t.Errorf("ask 7 should demand a final after the last round, got: %q", trunc(sa.msgs[6], 300))
+	}
+	// Ask 8 (7 rounds ran): nothing left — final only (a final here still
+	// lands, it is only a calls envelope that gets capped).
+	if !strings.Contains(sa.msgs[7], "no tool rounds remain") {
+		t.Errorf("ask 8 should allow only a final, got: %q", trunc(sa.msgs[7], 300))
+	}
+	if !strings.Contains(l.PendingNote, "round budget (7 rounds)") {
+		t.Errorf("a capped turn should leave a resume note, got: %q", l.PendingNote)
 	}
 }
 
@@ -242,6 +316,34 @@ func TestRunRecapLatchesAfterUnthreadedRound(t *testing.T) {
 	}
 }
 
+// TestRunOperatorQuestionSurvivesFalseThreading pins the fix for a real
+// gateway bug: a server can accept our session_id (so Threaded=true on every
+// round) without actually replaying the transcript to the model. Before this
+// fix that meant round 2+ carried only "[hands results] {...}" with no trace
+// of what the operator asked, and the model fell back to describing the repo
+// instead of answering. The reminder below must survive even though every
+// round here reports Threaded:true (recap never latches).
+func TestRunOperatorQuestionSurvivesFalseThreading(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 8}
+	out := l.Run(context.Background(), "check the version on GitHub, in one sentence", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "done" {
+		t.Fatalf("out = %+v", out)
+	}
+	for i, m := range sa.msgs[1:] {
+		if !strings.Contains(m, "check the version on GitHub, in one sentence") {
+			t.Errorf("round %d msg should restate the operator's question, got: %q", i+2, m)
+		}
+		if strings.HasPrefix(m, "[conversation so far this turn]") {
+			t.Errorf("round %d: recap should not have latched (every round is Threaded:true), got: %q", i+2, m)
+		}
+	}
+}
+
 func TestRunResultsShape(t *testing.T) {
 	sa := &scriptAsker{replies: []api.AskResult{
 		reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
@@ -275,7 +377,7 @@ func TestRunResultsShape(t *testing.T) {
 		t.Fatalf("results len = %d", len(payload.Results))
 	}
 	r := payload.Results[0]
-	if r.ID != "c1" || r.Tool != "read_file" || r.ExitCode != 0 || r.Output != "filecontent" ||
+	if r.ID != "c1" || r.Tool != "local_read" || r.ExitCode != 0 || r.Output != "filecontent" || // old name in, canonical name out
 		string(r.Args) != `{"path":"foo.txt"}` || r.Context != nil {
 		t.Errorf("result element = %+v (args %s)", r, r.Args)
 	}
@@ -367,11 +469,11 @@ func TestRunTurnAbortedByOperator(t *testing.T) {
 	}}
 	l := &Loop{API: sa, Dispatch: d, MaxRounds: 8}
 	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
-	if !out.OK || !strings.Contains(out.Answer, "declined write_file") {
+	if !out.OK || !strings.Contains(out.Answer, "declined local_write") {
 		t.Errorf("out = %+v", out)
 	}
-	if !strings.Contains(l.PendingNote, "write_file") || !strings.Contains(l.PendingNote, "cancelled") {
-		t.Errorf("PendingNote = %q, want a cancellation note naming write_file", l.PendingNote)
+	if !strings.Contains(l.PendingNote, "local_write") || !strings.Contains(l.PendingNote, "cancelled") {
+		t.Errorf("PendingNote = %q, want a cancellation note naming local_write", l.PendingNote)
 	}
 	// the note is consumed and prepended to the next turn's message
 	sa.replies = []api.AskResult{reply(`{"calls":[],"final":"ok"}`, true)}
@@ -407,7 +509,7 @@ func TestRunFramesFirstMessage(t *testing.T) {
 		"PROBLEM — operator's working directory: cwd /home/me/proj (git branch: main)",
 		"was hälst du von der readme ?", // the message, verbatim, as the problem body
 		"reason it through, then ONE instruction",
-		`{"id":"c1","tool":"shell|read_file|write_file|edit_file"`,
+		`{"id":"c1","tool":"local_shell|local_read|local_write|local_edit"`,
 		`"final":null}`,
 		"not a description of yourself or your tools",
 	} {
@@ -427,5 +529,63 @@ func TestRunNoFrameWithoutRepoRoot(t *testing.T) {
 	_ = l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
 	if sa.msgs[0] != "hello" {
 		t.Errorf("without RepoRoot the message must pass through, got %q", sa.msgs[0])
+	}
+}
+
+func TestRunEmitsCallBeforeResultWithSessionRefs(t *testing.T) {
+	// Two calls in one envelope: each is announced (KindCall) before it runs
+	// and reported (KindResult) after, numbered on from the session's last
+	// ref; Hermes sees the same number as "ref" in its results.
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(`{"calls":[{"id":"c1","tool":"read_file","args":{"path":"foo.txt"}},{"id":"c2","tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	var evs []session.Event
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 5, Ref: 41,
+		Emit: func(ev session.Event) { evs = append(evs, ev) }}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "done" {
+		t.Fatalf("out = %+v", out)
+	}
+	var got []string
+	for _, e := range evs {
+		got = append(got, fmt.Sprintf("%s#%d", e.Kind, e.Ref))
+	}
+	if strings.Join(got, " ") != "call#42 result#42 call#43 result#43" {
+		t.Errorf("events = %v", got)
+	}
+	if evs[1].Exit == nil || *evs[1].Exit != 0 || evs[1].Out != "filecontent" || evs[0].ID != "c1" {
+		t.Errorf("result payload = %+v / call = %+v", evs[1], evs[0])
+	}
+	if l.Ref != 43 {
+		t.Errorf("l.Ref = %d, want 43", l.Ref)
+	}
+	if !strings.Contains(sa.msgs[1], `"id":"c1","ref":42`) || !strings.Contains(sa.msgs[1], `"id":"c2","ref":43`) {
+		t.Errorf("results must carry the refs: %s", trunc(sa.msgs[1], 400))
+	}
+}
+
+func TestRunWriteHeldUntilRulesSeen(t *testing.T) {
+	// round 1 writes into a directory with its own rules, unseen: held back,
+	// the rules come along; round 2 sends the write again and it goes through
+	d := realDisp(t, prompt.AutoApprover{})
+	os.MkdirAll(filepath.Join(d.RepoRoot, "api"), 0o755)
+	os.WriteFile(filepath.Join(d.RepoRoot, "api", "AGENTS.md"), []byte("every file here starts with // owner: api"), 0o644)
+	d.Rules = (&knowsystem.System{Cwd: d.RepoRoot}).Scoped()
+	write := `{"calls":[{"tool":"local_write","args":{"path":"api/ping.go","content":"// owner: api\n"}}],"final":null}`
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(write, true),
+		reply(write, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	out, _, s := run(t, sa, d, 8)
+	if !out.OK || len(s.msgs) != 3 {
+		t.Fatalf("out = %+v, %d asks", out, len(s.msgs))
+	}
+	if !strings.Contains(s.msgs[1], "held back") || !strings.Contains(s.msgs[1], "owner: api") {
+		t.Errorf("round 2 msg lacks the held-back result with the rules: %q", s.msgs[1])
+	}
+	if !strings.Contains(s.msgs[2], "wrote api/ping.go") {
+		t.Errorf("round 3 msg: the repeated write did not go through: %q", s.msgs[2])
 	}
 }
