@@ -8,7 +8,7 @@ name: release
 #
 # Next version = the highest existing v*.*.* tag (or MIN_VERSION before the
 # first release), bumped by the merged PR's label — exactly one of
-#   bump:patch | bump:minor | bump:major   (bump:none = no release).
+#   bump:patch | bump:minor | bump:major — every merged PR is a release.
 # pr-label.yml makes that a required check; a missing/ambiguous label still
 # fails this job as a backstop. A manual workflow_dispatch picks the level.
 on:
@@ -56,21 +56,15 @@ jobs:
             [ "$level" = choose ] && { echo "::error::pick a real bump level (patch | minor | major)"; exit 1; }
           else
             level=; n=0
-            for l in patch minor major none; do
+            for l in patch minor major; do
               case " $LABELS " in *" bump:$l "*) n=$((n + 1)); level="$l" ;; esac
             done
-            [ "$n" = 1 ] || { echo "::error::PR needs exactly one label: bump:patch | bump:minor | bump:major | bump:none  (found $n)"; exit 1; }
-          fi
-          if [ "$level" = none ]; then
-            echo "::notice::bump:none — no release"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            [ "$n" = 1 ] || { echo "::error::PR needs exactly one label: bump:patch | bump:minor | bump:major  (found $n)"; exit 1; }
           fi
           echo "level=$level" >> "$GITHUB_OUTPUT"
 
       - name: Compute next version + annotated tag
         id: v
-        if: steps.lvl.outputs.skip != 'true'
         env:
           PR: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -97,7 +91,6 @@ jobs:
           git push origin "v$new"   # a tag, not a branch update
 
       - name: Build
-        if: steps.lvl.outputs.skip != 'true'
         env:
           VERSION: ${{ steps.v.outputs.version }}
         # cross-compiles in the Makefile's pinned Go container (GO_IMAGE) — the
@@ -105,7 +98,6 @@ jobs:
         run: ./build.sh release
 
       - name: Publish
-        if: steps.lvl.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

@@ -4,7 +4,15 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.12.0 — (unreleased, `bump:minor`) Go 1.26.9 security fixes; refactor: one job per unit
+## 0.12.1 — (unreleased, `bump:patch`) every PR is a release
+
+- **`bump:none` is gone**: a PR carries exactly one of `bump:patch`,
+  `bump:minor`, `bump:major` — `pr-label.yml` requires it, `release.yml`
+  cuts a release for every merge (its "no release" path is removed).
+  Dependabot's PRs carry `bump:patch`. README, CONTRIBUTING and the PR
+  template say so.
+
+## 0.12.0 — 2026-10-16 — Go 1.26.9 security fixes; refactor: one job per unit
 
 hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
