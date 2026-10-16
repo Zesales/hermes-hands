@@ -33,6 +33,17 @@ type does one job.
   `session.Log` records a session (`Store.OpenLog`, `BeginTurn`, `Add`),
   `ui.Show` / `ui.Replay` draw its events. `sessionlog.go` is gone.
 
+### One place that builds the app
+
+- **`internal/app`**: `App` and `New(cfg, instructions)` — the composition
+  root (UI, API client, store, shell, dispatcher, loop, the known-system
+  probe, retention); `Bind` points a turn runner at it, `SetDebug` switches
+  the wire trace (a copy each in the REPL and `--rpc` before), `OpenSession`
+  / resume, the instructions ladder, the sandbox guard, the `check` line and
+  compat warning, the session list. `sessionlist.go` moved in.
+- `config.Describe` is the `/config` view, `Config.Configured` replaces
+  `notConfigured`.
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).

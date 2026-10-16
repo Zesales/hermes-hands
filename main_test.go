@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,8 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/config"
+	"github.com/Zesales/hermes-hands/internal/app"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/session"
 	"github.com/Zesales/hermes-hands/internal/ui"
@@ -150,24 +148,6 @@ func TestDoSetupEncryptedDefault(t *testing.T) {
 	}
 }
 
-func TestNotConfigured(t *testing.T) {
-	for _, tc := range []struct {
-		url, key string
-		want     bool
-	}{
-		{"", "", true},
-		{"https://h.example.net", "", true},
-		{"", "sk-real", true},
-		{"https://h.example.net", "<REPLACE_ME>", true},
-		{"https://h.example.net", "sk-real", false},
-	} {
-		got := notConfigured(&config.Config{APIURL: tc.url, APIKey: tc.key})
-		if got != tc.want {
-			t.Errorf("notConfigured(%q,%q) = %v, want %v", tc.url, tc.key, got, tc.want)
-		}
-	}
-}
-
 func TestDoSetupRejectsEmpty(t *testing.T) {
 	stdinTTY = func() bool { return false }
 	defer func() { stdinTTY = func() bool { return true } }()
@@ -253,49 +233,6 @@ func TestRPCReqUnmarshal(t *testing.T) {
 	}
 }
 
-func TestFormatConfig(t *testing.T) {
-	cfg := &config.Config{
-		Home: "/app/hh", ConfigPath: "/app/hh/config", SecretsPath: "/app/hh/secrets",
-		SecretsSource: "secrets.enc",
-		InstrPath:     "/nope/instructions.md", StateDir: "/app/hh",
-		APIURL: "https://hermes-api.example.net", APIKey: "sk-should-not-appear",
-		Approve: "ask", Stream: "auto",
-		ResponseTimeout: 600 * time.Second, WatchdogInterval: 200 * time.Second,
-		APIRunTimeout: 600 * time.Second, MaxRounds: 8, RunTimeout: 120, MaxOutput: 20000,
-	}
-	out := formatConfig(cfg)
-
-	for _, want := range []string{
-		"home         : /app/hh",
-		"/app/hh/config",
-		"/app/hh/secrets.enc  (encrypted, machine-bound)",
-		"sessions     : /app/hh/sessions",
-		"(built-in default)",
-		"hermes-hands never writes these",
-		"HERMES_HANDS_RESPONSE_TIMEOUT", "600s",
-		"HERMES_HANDS_WATCHDOG_INTERVAL", "200s",
-		"https://hermes-api.example.net",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("formatConfig missing %q\n---\n%s", want, out)
-		}
-	}
-	if strings.Contains(out, "sk-should-not-appear") {
-		t.Errorf("formatConfig leaked the API key:\n%s", out)
-	}
-
-	// plaintext fallback names the file + nudges to encrypt
-	cfg.SecretsSource = "secrets"
-	if o := formatConfig(cfg); !strings.Contains(o, "/app/hh/secrets  (plaintext fallback") {
-		t.Errorf("plaintext secrets line wrong:\n%s", o)
-	}
-	// nothing on disk, key from env
-	cfg.SecretsSource = ""
-	if o := formatConfig(cfg); !strings.Contains(o, "no secrets file") {
-		t.Errorf("env-source secrets line wrong:\n%s", o)
-	}
-}
-
 func TestOfferGuidanceImport(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -305,7 +242,7 @@ func TestOfferGuidanceImport(t *testing.T) {
 	os.WriteFile(filepath.Join(home, ".codex", "AGENTS.md"), []byte("pin versions exactly\n"), 0o644)
 	os.WriteFile(filepath.Join(home, "AGENTS.md"), []byte("no ssh to the LAN"), 0o644) // same rules again
 	dir := filepath.Join(t.TempDir(), "hermes-hands")
-	dst := filepath.Join(dir, globalGuidanceFile)
+	dst := filepath.Join(dir, app.GlobalGuidanceFile)
 
 	offerGuidanceImport(bufio.NewReader(strings.NewReader("n\n")), dir)
 	if _, err := os.Stat(dst); err == nil {
@@ -362,82 +299,6 @@ func TestAskServerApproval(t *testing.T) {
 	}
 }
 
-func TestSandboxGuardModes(t *testing.T) {
-	repo := t.TempDir()
-	if v := sandboxGuard("steer", repo, "")("execute_code", "print(2)"); !v.Steer {
-		t.Error("steer steers every server exec call")
-	}
-	if v := sandboxGuard("show", repo, "")("terminal", "make test"); v.Steer {
-		t.Error("show never steers")
-	}
-	smart := sandboxGuard("smart", repo, "")
-	if v := smart("terminal", "make test"); !v.Steer {
-		t.Error("smart steers make")
-	}
-	if v := smart("execute_code", "print(2)"); v.Steer {
-		t.Error("smart leaves a scratch computation alone")
-	}
-	if v := smart("tool_call", "Local Shell"); !v.Steer || v.Kind != "hands-tool" {
-		t.Errorf("smart steers a hands tool called as Hermes' own: %+v", v)
-	}
-}
-
-func TestFormatSessionCompare(t *testing.T) {
-	recs := []session.Record{
-		{ID: "hh_a", HermesSessionID: "hh-1-a", Turns: 2, Title: "listed"},
-		{ID: "hh_b", HermesSessionID: "hh-1-b", Turns: 1, Title: "looked up"},
-		{ID: "hh_c", HermesSessionID: "hh-1-c", Turns: 3, Title: "gone"},
-		{ID: "hh_d", HermesSessionID: "hh-1-d", Turns: 0, Title: "never sent"},
-		{ID: "hh_e", HermesSessionID: "hh-1-e2", Turns: 5, Title: "split"},
-	}
-	ss := []api.SrvSession{
-		{ID: "hh-1-a", Messages: 6, Tokens: 57725, Title: "listed"},
-		{ID: "hh-1-e", Messages: 40, Title: "split (old half)"},
-		{ID: "hh-1-e2", Messages: 3, Parent: "hh-1-e"},
-		{ID: "hh-9-orphan", Messages: 4, Tokens: 29614, Title: "retention removed it"},
-		{ID: "cron_1", Messages: 10, Title: "TR Portfolio Update"},
-		{ID: "7b0c57de-6897", Messages: 2, Title: "Next steps"},
-	}
-	var looked []string
-	info := func(id string) (api.SrvSession, error) {
-		looked = append(looked, id)
-		if id == "hh-1-b" {
-			return api.SrvSession{ID: id, Messages: 2}, nil
-		}
-		return api.SrvSession{}, fmt.Errorf("GET /api/sessions/%s -> HTTP 404", id)
-	}
-	out := formatSessionCompare(recs, ss, info)
-	for _, want := range []string{
-		"   ↳ hermes-agent  hh-1-a · 6 msgs · 57725 tok\n",
-		"   ↳ hermes-agent  hh-1-b · 2 msgs\n",
-		"   ↳ hermes-agent  hh-1-c · not on the server",
-		"   ↳ hermes-agent  — no turn sent yet\n",
-		"   ↳ hermes-agent  hh-1-e2 · 3 msgs · continues hh-1-e\n",
-		"hermes-agent sessions of hermes-hands without a local session (2):",
-		"retention removed it",
-		"split (old half)  (continued as hh-1-e2)",
-		"+ 2 other hermes-agent session(s)",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q in:\n%s", want, out)
-		}
-	}
-	if strings.Contains(out, "TR Portfolio") || strings.Contains(out, "Next steps") {
-		t.Errorf("non-hermes-hands sessions must only be counted:\n%s", out)
-	}
-	if strings.Join(looked, ",") != "hh-1-b,hh-1-c" {
-		t.Errorf("lookups = %v, want only the two unlisted sessions that had turns", looked)
-	}
-	// the plain list never asks the server
-	store, err := session.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(sessionList(store, nil, false), "hermes-agent") {
-		t.Errorf("plain list mentions hermes-agent")
-	}
-}
-
 // A replayed approval prompt reads exactly as the live one did — the prompt
 // text plus the answer the operator typed (echoed by the line reader).
 func TestApprovalReplayMatchesLivePrompt(t *testing.T) {
@@ -473,24 +334,5 @@ func TestApprovalReplayMatchesLivePrompt(t *testing.T) {
 		if got := render(func(u *ui.UI) { u.Approval(ev.Text, ev.Detail, ev.Action) }); got != live.String() {
 			t.Errorf("%s: replay\n%q\nlive\n%q", tc.name, got, live.String())
 		}
-	}
-}
-
-func TestCheckLineCompat(t *testing.T) {
-	ok := api.CheckResult{Model: "hermes-agent", Base: "https://h"}
-	for v, want := range map[string]string{
-		"0.22.0": "API OK: hermes-agent @ https://h · hermes-agent 0.22.0",
-		"0.20.1": "API OK: hermes-agent @ https://h · hermes-agent 0.20.1\nWARNING: hermes-agent 0.20.1 is older than 0.21.0",
-		"0.23.0": "API OK: hermes-agent @ https://h · hermes-agent 0.23.0\nnote: hermes-agent 0.23.0 is newer",
-		"":       "API OK: hermes-agent @ https://h\nnote: hermes-agent did not report its version",
-	} {
-		ok.Version = v
-		if got := checkLine(ok); !strings.HasPrefix(got, want) {
-			t.Errorf("checkLine(%q) = %q, want prefix %q", v, got, want)
-		}
-	}
-	// a session start stays quiet for a supported or unreported version
-	if compatWarning("0.22.2") != "" || compatWarning("") != "" || compatWarning("0.20.0") == "" {
-		t.Errorf("compatWarning: supported/unknown must be quiet, too-old must warn")
 	}
 }
