@@ -7,12 +7,22 @@ name: test
 on:
   pull_request:
 
+# Read-only token: the gate reads the code and never writes — release.yml
+# carries its own contents: write.
+permissions:
+  contents: read
+
+# A newer push to the same PR replaces the run still in flight.
+concurrency:
+  group: test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      # actions/checkout v4.2.2, pinned by commit
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The Go toolchain is the pinned container from the Makefile (GO_IMAGE,
       # must equal go.mod) — the same one `make` uses locally, so CI and the
       # maintainer's box run the identical toolchain. Deps are vendored.
@@ -21,10 +31,49 @@ jobs:
       - name: gofmt + go vet (linux + darwin)
         run: make lint
       - name: go test
-        run: make test
+        run: make test 2>&1 | tee test.log
+      # A failure's test names and want/got lines as annotations: readable on
+      # the PR and through the API, without opening the log.
+      - name: Failed tests as annotations
+        if: failure()
+        run: grep -E -- '--- FAIL|^FAIL|_test\.go:[0-9]+:|^[[:space:]]+(want|got):' test.log | head -40 | sed -E 's/^[[:space:]]*/::error::/' || true
+      # The same tests under the race detector: the SSE stream, the silence
+      # watchdog and the turn share state across goroutines.
+      - name: go test -race
+        run: make race
+      # Known vulnerabilities on the code paths we call — stdlib and the
+      # vendored deps (govulncheck, pinned in the Makefile).
+      - name: govulncheck
+        run: make vuln
+      # Per package: the unit tests' coverage, then what the golden runs (the
+      # real REPL + --rpc) reach — shown on the run's summary page.
+      - name: Coverage (job summary)
+        run: |
+          { echo '### Coverage'; echo '```'; make cover; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       # The exact build release.yml runs after a merge (linux+darwin ×
       # amd64+arm64 + SHA256SUMS), minus the publish — so a green `test`
       # guarantees the release build will succeed and release.yml can skip
       # re-testing.
       - name: Build the release targets
         run: ./build.sh release
+
+  # The tests on macOS itself: there the hands run the system bash 3.2 and the
+  # BSD userland, which the linux job only cross-compiles and vets for. No
+  # Docker on the macOS runner, so the Makefile uses a host Go (GO_MODE=local)
+  # — exactly go.mod's version.
+  test-macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: go test (macOS)
+        run: make test GO_MODE=local 2>&1 | tee test.log
+      # A failure's test names and want/got lines as annotations: readable on
+      # the PR and through the API, without opening the log.
+      - name: Failed tests as annotations
+        if: failure()
+        run: grep -E -- '--- FAIL|^FAIL|_test\.go:[0-9]+:|^[[:space:]]+(want|got):' test.log | head -40 | sed -E 's/^[[:space:]]*/::error::/' || true

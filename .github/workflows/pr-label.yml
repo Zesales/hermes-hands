@@ -9,9 +9,13 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled]
 
+# It reads only the event's label list — no token rights needed.
+permissions: {}
+
 jobs:
   bump-label:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: exactly one bump label
         env:

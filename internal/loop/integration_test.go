@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/config"
-	"github.com/Zesales/hermes-hands/internal/dispatch"
-	"github.com/Zesales/hermes-hands/internal/hermesmock"
-	"github.com/Zesales/hermes-hands/internal/loop"
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/redact"
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/shell"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/config"
+	"hermes-hands/internal/dispatch"
+	"hermes-hands/internal/hermesmock"
+	"hermes-hands/internal/loop"
+	"hermes-hands/internal/prompt"
+	"hermes-hands/internal/redact"
+	"hermes-hands/internal/session"
+	"hermes-hands/internal/shell"
 )
 
 type harness struct {
@@ -67,7 +67,7 @@ func newHarness(t *testing.T, mode string) *harness {
 		MaxOutput:  20000,
 		RunTimeout: 10 * time.Second,
 	}
-	l := &loop.Loop{API: cl, Dispatch: d, MaxRounds: 8, Scrub: redact.Scrub}
+	l := &loop.Loop{API: cl.Runs(), Dispatch: d, MaxRounds: 8, Scrub: redact.Scrub}
 	return &harness{client: cl, store: store, disp: d, loop: l, shell: sh}
 }
 

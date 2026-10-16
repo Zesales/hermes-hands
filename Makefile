@@ -50,7 +50,7 @@ ARGS      ?=
 GO_MODE  ?= docker
 # GO_IMAGE version MUST equal go.mod's `go` line. Debian, not alpine: the
 # shell / dispatch / loop tests need bash and skip silently without it.
-GO_IMAGE ?= golang:1.26.7-bookworm
+GO_IMAGE ?= golang:1.26.9-bookworm
 # persistent build+module cache, host-owned, wiped by `make clean`
 GO_CACHE := $(CURDIR)/.dev/gocache
 
@@ -103,7 +103,7 @@ dev-install: build  ## build, then copy the binary onto your PATH  (PREFIX=/BIND
 	@mkdir -p $(BINDIR)
 	install -m 0755 dist/hermes-hands $(BINDIR)/hermes-hands
 	@echo "installed $(BINDIR)/hermes-hands"
-	@echo "next: hermes-hands setup"
+	@[ -e "$(REAL_HOME)/secrets.enc" ] || [ -e "$(REAL_HOME)/secrets" ] || echo "next: hermes-hands setup"
 
 uninstall:  ## remove the installed binary from your PATH
 	rm -f $(BINDIR)/hermes-hands
@@ -114,6 +114,29 @@ uninstall:  ## remove the installed binary from your PATH
 test: | $(GO_CACHE)  ## go test ./... — offline (vendored), no network, no model
 	$(call tc) go test ./...
 
+golden: | $(GO_CACHE)  ## rewrite testdata/golden/ (REPL + rpc transcripts) after an intended UI change
+	$(call tc) go test -run '^TestGolden' . -update
+
+cover: | $(GO_CACHE)  ## coverage per package: the unit tests, then what the golden runs reach (the real REPL + --rpc)
+	@echo "unit tests (each package's own):"
+	@$(call tc) go test -count=1 -cover ./... | awk '/%/ {p=$$2; sub("hermes-hands/?","",p); if (p=="") p="(main)"; for (i=1; i<=NF; i++) if ($$i ~ /%$$/) c=$$i; printf "  %-22s %7s\n", p, c}'
+	@echo "golden runs (the real REPL + --rpc, in a subprocess):"
+	@$(call tc) sh -c 'd=$$(mktemp -d) && trap "rm -rf $$d" EXIT && HH_GOLDEN_COVERDIR=$$d go test -count=1 -coverpkg=./... -run "^TestGolden" . >/dev/null && go tool covdata percent -i=$$d' | awk '{p=$$1; sub("hermes-hands/?","",p); if (p=="") p="(main)"; printf "  %-22s %7s\n", p, $$3}'
+
+# govulncheck, pinned: known vulnerabilities in the code paths hermes-hands
+# actually calls (stdlib + the vendored deps) — the one check that needs the
+# network (the Go module proxy and vuln.go.dev). x/vuln ships no patch
+# releases; this one is weeks old and has a successor. -modcacherw: the
+# downloaded modules stay deletable, so `make clean` can remove the cache
+# (the Go module cache is read-only by default).
+GOVULNCHECK ?= golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+vuln: | $(GO_CACHE)  ## govulncheck (pinned) — known vulnerabilities in the code paths we call; needs network
+	$(call tc,GOFLAGS=-modcacherw) go run $(GOVULNCHECK) ./...
+
+race: | $(GO_CACHE)  ## go test -race ./... — data races between the stream, the watchdog and the turn (CGO on, the image's gcc)
+	$(call tc,CGO_ENABLED=1) go test -race ./...
+
 lint: | $(GO_CACHE)  ## gofmt check + go vet for linux AND darwin   (STATICCHECK=1 also runs staticcheck — needs network)
 	@bad=$$($(call tc) sh -c 'find . -name "*.go" -not -path "./vendor/*" -not -path "./.dev/*" -exec gofmt -l {} +'); \
 	 test -z "$$bad" || { echo "gofmt needs a run on:"; echo "$$bad"; exit 1; }
@@ -123,7 +146,7 @@ ifdef STATICCHECK
 	$(call tc,GOFLAGS=-mod=mod) go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 ./...
 endif
 
-ci: lint test dist  ## the PR gate, locally: lint (linux + darwin) + test + release cross-build
+ci: lint test race dist  ## the PR gate, locally: lint (linux + darwin) + test + race + release cross-build
 
 ##@ Artifacts
 
@@ -143,4 +166,6 @@ $(GO_CACHE):
 	@mkdir -p $(GO_CACHE)
 
 clean:  ## remove dist/ and ./.dev/ (incl. the toolchain caches)
+	@# a module cache written without -modcacherw is read-only — make it deletable
+	@[ ! -d $(DEV_HOME) ] || chmod -R u+w $(DEV_HOME)
 	rm -rf dist $(DEV_HOME)

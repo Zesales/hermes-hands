@@ -20,11 +20,19 @@ The README's [Development](README.md#development) section has the details.
 ```sh
 make            # the targets, grouped
 make dev        # build, run an isolated instance out of ./.dev/
-make ci         # the whole PR gate: lint (linux + darwin) + test + cross-build
+make ci         # the whole PR gate: lint (linux + darwin) + test + race + cross-build
+make vuln       # govulncheck — the PR check runs it too (needs network)
 ```
 
+The PR check also runs the tests on macOS and a CodeQL scan.
+
 `make test` is offline — no network, no model (`internal/hermesmock` stands
-in for hermes-agent). If your change touches how hermes-hands talks to
+in for hermes-agent). It includes the **golden transcripts** in
+`testdata/golden/`: what the REPL and `--rpc` show for one full turn. A change
+that is meant to alter that output runs `make golden` and commits the
+rewritten files — the diff is part of the review. `make cover` shows the
+coverage per package, including what the golden runs reach (they drive the
+REPL and `--rpc` in a subprocess, which a plain `-cover` doesn't count). If your change touches how hermes-hands talks to
 hermes-agent, also try it against a real gateway and name its version in the
 PR.
 
@@ -36,7 +44,8 @@ PR.
   for the operator, and why.
 - **Tests** for behaviour changes; `make ci` green.
 - **Match the surrounding code**: names, comment density, idiom. One function,
-  one job; comments say why, not what.
+  one job; comments say why, not what. `budget_test.go` holds functions to
+  80 lines and files to 450 — split by job instead of raising it.
 - **Dependencies**: none new without an issue first. Versions are pinned
   exactly — Go modules, the Go image, GitHub Actions (by commit).
 
