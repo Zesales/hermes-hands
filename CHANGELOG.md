@@ -56,6 +56,16 @@ type does one job.
 - Both get what they need from outside as `Deps` (build the app, the setup
   wizard, the version).
 
+### main is main
+
+- **`internal/cli`**: `Main(args, Build)` — the arguments, `--help`,
+  `--version`, and the subcommands (`check`, `sessions`, `sessions new`,
+  `setup`, `guidance`, the hidden dev ones). **`internal/setup`**: the wizard,
+  the global-rules import, the `~/.bashrc` offer.
+- `main.go` is the build-time version and one call into `cli.Main` (1650
+  lines before this refactor); the package doc names the hands' tools
+  `local_*`.
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).
