@@ -44,6 +44,18 @@ type does one job.
 - `config.Describe` is the `/config` view, `Config.Configured` replaces
   `notConfigured`.
 
+### The front ends
+
+- **`internal/repl`**: `Run` is the read loop; a `repl` value holds what the
+  slash commands change (app, session, runner, debug, configured). Every
+  slash command is a small method in one table (`commands.go`, the session
+  ones in `cmd_session.go`) instead of a 14-case `switch` inside a 440-line
+  `runREPL`; `front.go` draws a turn and asks Hermes' server approvals.
+- **`internal/rpc`**: `Run` serves the JSON lines; its `front` writes a turn.
+  `rpc.go` / `frontends.go` left the root package.
+- Both get what they need from outside as `Deps` (build the app, the setup
+  wizard, the version).
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).

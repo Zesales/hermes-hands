@@ -1,23 +1,7 @@
-package main
-
-import (
-	"bufio"
-	"context"
-	"encoding/json"
-	"fmt"
-	"os"
-
-	"github.com/Zesales/hermes-hands/internal/app"
-	"github.com/Zesales/hermes-hands/internal/compat"
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/turn"
-)
-
-// --rpc: a persistent JSON-lines session server for an editor / plugin. The
-// caller holds one session for the process lifetime and only starts a new one
-// on demand, instead of spawning a fresh session per turn (which would
-// fragment the central Hermes). One request object per line on stdin; one
+// Package rpc is --rpc: a persistent JSON-lines session server for an editor
+// or plugin. The caller holds one session for the process lifetime and only
+// starts a new one on demand, instead of spawning a fresh session per turn
+// (which would fragment the central Hermes). One request object per line on stdin; one
 // response object per line on stdout; diagnostics go to stderr.
 //
 // Requests:
@@ -49,20 +33,44 @@ import (
 // Approvals cannot be prompted over the pipe, so --rpc requires
 // HERMES_HANDS_APPROVE=auto (i.e. --yolo) or =never; the editor is expected to
 // run its own approval UI before sending a turn.
+package rpc
 
-type rpcReq struct {
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/Zesales/hermes-hands/internal/app"
+	"github.com/Zesales/hermes-hands/internal/compat"
+	"github.com/Zesales/hermes-hands/internal/prompt"
+	"github.com/Zesales/hermes-hands/internal/session"
+	"github.com/Zesales/hermes-hands/internal/turn"
+)
+
+type request struct {
 	ID      json.RawMessage `json:"id"`
 	Type    string          `json:"type"`
 	Text    string          `json:"text"`
 	Session string          `json:"session"`
 }
 
-func runRPC(smode string) int {
+// Deps is what --rpc needs from outside: how to build the app, and the
+// version for the ready message.
+type Deps struct {
+	NewApp  func() (*app.App, error)
+	Version string
+}
+
+// Run serves --rpc in session smode ("" or "new" = a fresh one, else an id)
+// until stdin closes.
+func Run(smode string, d Deps) int {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
 	emit := func(v map[string]any) { _ = enc.Encode(v) }
 
-	a, err := newApp()
+	a, err := d.NewApp()
 	if err != nil {
 		emit(map[string]any{"type": "error", "message": err.Error()})
 		return 1
@@ -105,7 +113,7 @@ func runRPC(smode string) int {
 
 	ready := map[string]any{
 		"type": "ready", "session": rec.ID, "cwd": a.RepoRoot,
-		"version": bareVersion(), "approvals": approvals, "hermes_agent": srv.Version,
+		"version": d.Version, "approvals": approvals, "hermes_agent": srv.Version,
 	}
 	if w := app.CompatWarning(srv.Version); w != "" {
 		ready["compat"] = w
@@ -132,7 +140,7 @@ func runRPC(smode string) int {
 		if len(line) == 0 {
 			continue
 		}
-		var req rpcReq
+		var req request
 		if json.Unmarshal(line, &req) != nil {
 			emit(map[string]any{"type": "error", "message": "invalid JSON request"})
 			continue
@@ -148,7 +156,7 @@ func runRPC(smode string) int {
 				emit(map[string]any{"type": "error", "id": id, "message": "turn needs a non-empty text"})
 				continue
 			}
-			res := runner.Run(req.Text, &rpcFront{emit: emit, id: id, heads: map[int]string{}})
+			res := runner.Run(req.Text, &front{emit: emit, id: id, heads: map[int]string{}})
 			switch res.End.Outcome {
 			case "timeout":
 				emit(map[string]any{"type": "error", "id": id, "message": fmt.Sprintf(
