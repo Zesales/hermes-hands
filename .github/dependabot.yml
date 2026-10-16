@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # The GitHub Actions the workflows use, pinned by commit (`@<sha> # vX.Y.Z`):
+  # a PR when one has a newer release — never before that release is 14 days
+  # old. The PR only proposes; review it like any other (and hold back a new
+  # minor .0 until its first patch). Go modules are not watched: they are
+  # vendored and updated on purpose.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    labels:
+      - "bump:none" # a CI-only change ships no release
+    commit-message:
+      prefix: ci

@@ -1,0 +1,44 @@
+name: codeql
+
+# GitHub code scanning with CodeQL for the Go code: on every PR, on main after
+# a merge (the baseline the PR results are compared with), and weekly — new
+# queries find issues in old code too. Findings land in the repository's
+# Security tab. (If "Code scanning: default setup" is on in the settings, turn
+# it off — this workflow is the advanced setup and the two conflict.)
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1" # Mondays 04:17 UTC
+
+permissions:
+  contents: read
+  security-events: write # upload the results
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # CodeQL watches the build, so it needs a Go on the runner: go.mod's.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: go
+          build-mode: manual
+      - name: Build (vendored, offline)
+        env:
+          CGO_ENABLED: "0"
+          GOFLAGS: -mod=vendor
+        run: go build ./...
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2

@@ -22,8 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      # actions/checkout v4.2.2, pinned by commit
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       # The Go toolchain is the pinned container from the Makefile (GO_IMAGE,
       # must equal go.mod) — the same one `make` uses locally, so CI and the
       # maintainer's box run the identical toolchain. Deps are vendored.
@@ -37,6 +36,10 @@ jobs:
       # watchdog and the turn share state across goroutines.
       - name: go test -race
         run: make race
+      # Known vulnerabilities on the code paths we call — stdlib and the
+      # vendored deps (govulncheck, pinned in the Makefile).
+      - name: govulncheck
+        run: make vuln
       # Per package: the unit tests' coverage, then what the golden runs (the
       # real REPL + --rpc) reach — shown on the run's summary page.
       - name: Coverage (job summary)
@@ -48,3 +51,19 @@ jobs:
       # re-testing.
       - name: Build the release targets
         run: ./build.sh release
+
+  # The tests on macOS itself: there the hands run the system bash 3.2 and the
+  # BSD userland, which the linux job only cross-compiles and vets for. No
+  # Docker on the macOS runner, so the Makefile uses a host Go (GO_MODE=local)
+  # — exactly go.mod's version.
+  test-macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: go test (macOS)
+        run: make test GO_MODE=local

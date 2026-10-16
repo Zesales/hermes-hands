@@ -20,8 +20,11 @@ The README's [Development](README.md#development) section has the details.
 ```sh
 make            # the targets, grouped
 make dev        # build, run an isolated instance out of ./.dev/
-make ci         # the whole PR gate: lint (linux + darwin) + test + cross-build
+make ci         # the whole PR gate: lint (linux + darwin) + test + race + cross-build
+make vuln       # govulncheck — the PR check runs it too (needs network)
 ```
+
+The PR check also runs the tests on macOS and a CodeQL scan.
 
 `make test` is offline — no network, no model (`internal/hermesmock` stands
 in for hermes-agent). It includes the **golden transcripts** in

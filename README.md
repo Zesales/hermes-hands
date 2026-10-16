@@ -480,6 +480,7 @@ make test            # go test ./... — offline, no network, no model
 make golden          # rewrite testdata/golden/ after an intended UI change
 make race            # the tests under the race detector
 make cover           # coverage per package: unit tests, then what the golden runs reach
+make vuln            # govulncheck (pinned): known vulnerabilities on the code paths we call — needs network
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
 make ci              # the PR gate locally: lint + test + race + release cross-build
 make dev-install     # build + copy dist/hermes-hands onto your PATH
@@ -509,8 +510,12 @@ never fetch modules (the one download is the pinned Go image). Layout: `main.go`
 runs gofmt, `go vet` (for linux **and** darwin), `go test` and
 `./build.sh release` (the linux+darwin × amd64+arm64 cross-compile) on every
 PR, all in the pinned Go container (the `test`
-job is a required check for merging); `release.yml` tags + publishes on merge
-(see Releasing).
+job is a required check for merging), plus `make race`, `make vuln` and the
+coverage table; a second job runs the tests on macOS itself (bash 3.2, BSD
+userland). `codeql.yml` scans the code with CodeQL (PRs, main, weekly; results
+in the Security tab); Dependabot proposes updates of the pinned Actions, never
+before a release is 14 days old. `release.yml` tags + publishes on merge (see
+Releasing).
 
 **Golden transcripts** (`testdata/golden/`) pin what the operator sees: one
 full turn through the real `main()` — the REPL and `--rpc` — against the

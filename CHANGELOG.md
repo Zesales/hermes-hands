@@ -137,6 +137,16 @@ every package and type does one job.
   cancels the run in flight, and the coverage table lands on the run's
   summary page; `pr-label.yml` needs no token rights at all; every job has a
   timeout.
+- **More checks on every PR**: `make vuln` (govulncheck); a **macOS job**
+  runs the tests on macOS itself — the system bash 3.2 and the BSD userland,
+  which the linux job only cross-compiles and vets for (host Go via
+  `actions/setup-go`, exactly go.mod's version); **CodeQL** (`codeql.yml`)
+  scans the Go code on PRs, on main and weekly, results in the Security tab.
+- **Dependabot** watches the pinned GitHub Actions only, with a 14-day
+  cooldown and the `bump:none` label; Go modules stay vendored and updated
+  on purpose. Every action pin reads `@<sha> # vX.Y.Z`, the form Dependabot
+  keeps current. New pins: `actions/setup-go` v6.5.0, `github/codeql-action`
+  v4.38.2.
 
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
