@@ -6,5 +6,5 @@
 
 - [ ] `make ci` green (lint linux + darwin, tests, cross-build)
 - [ ] CHANGELOG entry under the unreleased heading
-- [ ] exactly one label: `bump:patch` | `bump:minor` | `bump:major` | `bump:none`
+- [ ] exactly one label: `bump:patch` | `bump:minor` | `bump:major`
 - [ ] talks to hermes-agent differently? tried against a real gateway: version `…`

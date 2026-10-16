@@ -38,8 +38,8 @@ PR.
 
 ## Pull requests
 
-- **Exactly one bump label**: `bump:patch` | `bump:minor` | `bump:major` |
-  `bump:none`. Merging cuts the release; see [Releasing](README.md#releasing).
+- **Exactly one bump label**: `bump:patch` | `bump:minor` | `bump:major`.
+  Every merge cuts a release; see [Releasing](README.md#releasing).
 - **CHANGELOG**: an entry under the top (unreleased) heading — what changed
   for the operator, and why.
 - **Tests** for behaviour changes; `make ci` green.
