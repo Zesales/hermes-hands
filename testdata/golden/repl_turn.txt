@@ -1,0 +1,62 @@
+hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
+hermes-hands 0.0.0-dev  ·  <TMP>
+hermes-agent · session (pending — confirmed on the first turn)
+/help  /new  /sessions  /check  /exit
+
+hermes-hands - session <SESSION> > 
+────────────────────────────────────────────────────────────────────────────────────────────────
+you
+   show me the readme
+   ⋯ working  ·  Ctrl+C to cancel
+hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
+ · hermes server-sandbox terminal  echo probe
+ ⚠ hermes-sandbox terminal  make test
+     ↳ not your machine — steered back to the hands
+
+  ⚠  hermes wants to run terminal on its SERVER sandbox (not your machine):
+      rm -rf /tmp/scratch
+  [o]nce  [s]ession  [n]o >  ✓ hermes-sandbox approval granted  rm -rf /tmp/scratch
+ #1 local_read  README.md
+ #1 ✓ exit 0 · 1 line
+ #2 local_shell  printf 'one\ntwo\n'
+
+  ⚠  local_shell: printf 'one\ntwo\n'
+  [y]es  [n]o  [a]ll  [q]uit turn >  #2 ✓ exit 0 · 2 lines
+     │ one
+     │ two
+hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
+
+hermes
+   Read the README ("demo readme") and ran the shell.
+   Two lines — ä ✓.
+— worked for <DUR> · hermes <DUR> · local <DUR> —
+
+hermes-hands - session <SESSION> > 
+────────────────────────────────────────────────────────────────────────────────────────────────
+you
+   show me the readme
+ · hermes server-sandbox terminal  echo probe
+ ⚠ hermes-sandbox terminal  make test
+     ↳ not your machine — steered back to the hands
+
+  ⚠  hermes wants to run terminal on its SERVER sandbox (not your machine):
+      rm -rf /tmp/scratch
+  [o]nce  [s]ession  [n]o > o
+ ✓ hermes-sandbox approval granted  rm -rf /tmp/scratch
+ #1 local_read  README.md
+ #1 ✓ exit 0 · 1 line
+ #2 local_shell  printf 'one\ntwo\n'
+
+  ⚠  local_shell: printf 'one\ntwo\n'
+  [y]es  [n]o  [a]ll  [q]uit turn > y
+ #2 ✓ exit 0 · 2 lines
+     │ one
+     │ two
+
+hermes
+   Read the README ("demo readme") and ran the shell.
+   Two lines — ä ✓.
+— worked for <DUR> · hermes <DUR> · local <DUR> —
+
+
+hermes-hands - session <SESSION> > 

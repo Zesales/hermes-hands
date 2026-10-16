@@ -2,12 +2,26 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// Runs is the Runs API of a Client (POST /v1/runs, its events or a poll of
+// GET /v1/runs/{id}, stop, state). The turn hooks on Client follow a run.
+type Runs struct{ c *Client }
+
+// AskResult is a completed turn.
+type AskResult struct {
+	State     string // "completed"
+	Text      string // the assistant's final output
+	RunID     string
+	SessionID string // .session_id from run status ("" if none)
+	Threaded  bool   // false after a session-id drop
+	Tokens    int    // best-effort token count from the run's .usage (0 if absent)
+}
 
 // runReq is the POST /v1/runs body, in the same key order jq builds it:
 // input, then instructions (only when non-empty), then session_id (only when
@@ -22,7 +36,8 @@ type runReq struct {
 // session-id-drop ladder, then poll to a terminal status. sess / skey are the
 // record's hermes_session_id / hermes_session_key ("" when none). On success
 // the caller adopts AskResult.SessionID + bumps the local index.
-func (c *Client) Ask(ctx context.Context, msg, sess, skey string) (AskResult, error) {
+func (r Runs) Ask(ctx context.Context, msg, sess, skey string) (AskResult, error) {
+	c := r.c
 	if err := c.preflight(); err != nil {
 		return AskResult{}, err
 	}
@@ -114,12 +129,6 @@ func (c *Client) awaitRun(ctx context.Context, base, runID string, threaded bool
 	return c.pollRun(ctx, base, runID, threaded)
 }
 
-func (c *Client) trace(kind string, fields map[string]any) {
-	if c.Trace != nil {
-		c.Trace(kind, fields)
-	}
-}
-
 // pollRun rides GET /v1/runs/{id} to a terminal status (the pre-SSE path, and
 // the fallback when the event stream is unavailable).
 func (c *Client) pollRun(ctx context.Context, base, runID string, threaded bool) (AskResult, error) {
@@ -169,34 +178,106 @@ func (c *Client) pollRun(ctx context.Context, base, runID string, threaded bool)
 	}
 }
 
-func (c *Client) pause() time.Duration {
-	if c.retryPause > 0 {
-		return c.retryPause
+// State returns a run's current status string from GET /v1/runs/{id} ("" if
+// the field is absent). The REPL's silence watchdog uses it as an out-of-band
+// "is hermes-agent still working?" probe between token deltas. A transport or
+// non-2xx error is returned as-is so the caller can treat "couldn't ask" as
+// "not confirmed alive" rather than assuming the run is fine.
+func (r Runs) State(ctx context.Context, runID string) (string, error) {
+	c := r.c
+	if runID == "" {
+		return "", fmt.Errorf("no run id")
 	}
-	return retrySleep
+	if c.BaseURL == "" || c.Key == "" {
+		return "", fmt.Errorf("client not configured")
+	}
+	tctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	code, body, err := c.do(tctx, http.MethodGet, c.base()+"/v1/runs/"+runID,
+		nil, map[string]string{"Accept": "application/json"})
+	if err != nil {
+		return "", err
+	}
+	if !is2xx(code) {
+		return "", fmt.Errorf("GET /v1/runs/%s -> HTTP %s", runID, httpCode(code))
+	}
+	return jsonStringOr(body, "status", ""), nil
 }
 
-// jsonStringOr ports `jq -r '.key // "def"'`: .key as a string unless it is
-// missing / null / false.
-func jsonStringOr(b []byte, key, def string) string {
-	var m map[string]json.RawMessage
-	if json.Unmarshal(b, &m) != nil {
-		return def
+// Stop asks Hermes to interrupt a running turn (POST /v1/runs/{id}/stop).
+// Best-effort: fire it on Ctrl-C so the server turn doesn't keep burning
+// tokens after the operator has moved on. Errors are swallowed.
+func (r Runs) Stop(ctx context.Context, runID string) {
+	c := r.c
+	if runID == "" || c.BaseURL == "" || c.Key == "" {
+		return
 	}
-	raw, ok := m[key]
-	if !ok || string(raw) == "null" || string(raw) == "false" {
-		return def
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	return def
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, _, _ = c.do(tctx, http.MethodPost, c.base()+"/v1/runs/"+runID+"/stop", nil, nil)
 }
 
-func emptyToQ(s string) string {
-	if s == "" {
-		return "?"
+// RawRun submits one run with no retry ladder and returns its ids — for the
+// hidden `_events` inspector only.
+func (r Runs) RawRun(ctx context.Context, input string) (runID, sessionID string, err error) {
+	c := r.c
+	if err := c.preflight(); err != nil {
+		return "", "", err
 	}
-	return s
+	body, _ := marshalJSON(map[string]string{"input": input})
+	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	code, resp, err := c.do(tctx, http.MethodPost, c.base()+"/v1/runs", body,
+		map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return "", "", err
+	}
+	if !is2xx(code) {
+		return "", "", fmt.Errorf("POST /v1/runs -> HTTP %s: %s", httpCode(code), trunc(stripNL(string(resp)), 300))
+	}
+	return jsonString(resp, "run_id"), jsonString(resp, "session_id"), nil
+}
+
+// RawRunBody POSTs a caller-supplied /v1/runs body verbatim — for probing run
+// parameters. Returns the run + session ids.
+func (r Runs) RawRunBody(ctx context.Context, body []byte) (runID, sessionID string, err error) {
+	c := r.c
+	if err := c.preflight(); err != nil {
+		return "", "", err
+	}
+	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	code, resp, err := c.do(tctx, http.MethodPost, c.base()+"/v1/runs", body,
+		map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return "", "", err
+	}
+	if !is2xx(code) {
+		return "", "", fmt.Errorf("POST /v1/runs -> HTTP %s: %s", httpCode(code), trunc(stripNL(string(resp)), 400))
+	}
+	return jsonString(resp, "run_id"), jsonString(resp, "session_id"), nil
+}
+
+// RawEvents copies the /v1/runs/{id}/events SSE stream to w verbatim, for
+// inspecting the wire shape. Stops on stream end, ctx, or ~256KB.
+func (r Runs) RawEvents(ctx context.Context, runID string, w io.Writer) error {
+	c := r.c
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+"/v1/runs/"+runID+"/events", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Key)
+	req.Header.Set("Accept", "text/event-stream")
+	hc := &http.Client{Transport: c.HTTP.Transport} // no overall Timeout for a stream
+	resp, err := hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if !is2xx(resp.StatusCode) {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2000))
+		return fmt.Errorf("events -> HTTP %d: %s", resp.StatusCode, stripNL(string(b)))
+	}
+	_, err = io.Copy(w, io.LimitReader(resp.Body, 256*1024))
+	return err
 }

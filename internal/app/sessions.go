@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -6,28 +6,28 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/session"
 )
 
 // maxSessionLookups bounds the per-session GETs of a verbose list: a local
 // session missing from the server's latest-100 listing is looked up by id.
 const maxSessionLookups = 20
 
-// sessionList renders `--session-list` / `/sessions`: this machine's sessions
+// SessionList renders `--session-list` / `/sessions`: this machine's sessions
 // only. verbose (`--session-list-verbose`, `/sessions -v`) adds, under each
 // one, its hermes-agent counterpart — a local-vs-remote view for debugging.
-func sessionList(store *session.Store, client *api.Client, verbose bool) string {
+func SessionList(store *session.Store, client *api.Client, verbose bool) string {
 	recs, _ := store.List()
 	if !verbose || client == nil {
 		return session.FormatList(recs)
 	}
 	ctx := context.Background()
-	ss, err := client.ListSessions(ctx)
+	ss, err := client.Sessions().List(ctx)
 	if err != nil {
 		return session.FormatList(recs) + "\nhermes-agent: " + err.Error() + "\n"
 	}
-	info := func(id string) (api.SrvSession, error) { return client.SessionInfo(ctx, id) }
+	info := func(id string) (api.SrvSession, error) { return client.Sessions().Info(ctx, id) }
 	return formatSessionCompare(recs, ss, info)
 }
 
@@ -125,4 +125,28 @@ func countIn(ss []api.SrvSession, set map[string]bool) int {
 		}
 	}
 	return n
+}
+
+// formatSrvList renders server-side sessions (from GET /api/sessions) under
+// a heading line.
+func formatSrvList(head string, ss []api.SrvSession) string {
+	var b strings.Builder
+	b.WriteString(head + "\n")
+	fmt.Fprintf(&b, "%-40s  %5s  %7s  %s\n", "SESSION", "MSGS", "TOKENS", "TITLE")
+	for _, s := range ss {
+		id := s.ID
+		if len(id) > 40 {
+			id = id[:39] + "…"
+		}
+		tok := "-"
+		if s.Tokens > 0 {
+			tok = strconv.Itoa(s.Tokens)
+		}
+		title := s.Title
+		if s.Parent != "" {
+			title += "  (from " + s.Parent + ")"
+		}
+		fmt.Fprintf(&b, "%-40s  %5d  %7s  %s\n", id, s.Messages, tok, title)
+	}
+	return b.String()
 }

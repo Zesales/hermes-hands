@@ -1,6 +1,6 @@
-module github.com/Zesales/hermes-hands
+module hermes-hands
 
-go 1.26.7
+go 1.26.9
 
 require github.com/peterh/liner v1.2.2
 

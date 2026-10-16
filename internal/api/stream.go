@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/guard"
+	"hermes-hands/internal/guard"
 )
 
 // wantStream decides whether Ask reads the answer from GET
@@ -204,23 +204,6 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 		return AskResult{}, fmt.Errorf("stream ended before run.completed")
 	}
 	return AskResult{}, fmt.Errorf("no usable stream events")
-}
-
-func firstNonEmptyStr(v ...string) string {
-	for _, s := range v {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-// usageTokensRaw is usageTokens for a bare `usage` object (from an SSE frame).
-func usageTokensRaw(usage json.RawMessage) int {
-	if len(usage) == 0 {
-		return 0
-	}
-	return usageTokens([]byte(`{"usage":` + string(usage) + `}`))
 }
 
 // steer redirects a running run (POST /v1/runs/{id}/steer). Best-effort: the

@@ -4,6 +4,167 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
+## 0.12.0 — (unreleased, `bump:minor`) Go 1.26.9 security fixes; refactor: one job per unit
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
+
+### Security
+
+- **Built with Go 1.26.9** (was 1.26.7): govulncheck found nine
+  vulnerabilities of the Go standard library on code paths hermes-hands
+  calls — `net/http` (among them HTTP/1 client connection desynchronization,
+  GO-2026-6605), `crypto/tls` (GO-2026-6607), `net/textproto` (GO-2026-6608)
+  — all fixed in 1.26.9. `GO_IMAGE` is `golang:1.26.9-bookworm`, go.mod
+  says `go 1.26.9`.
+- **`make vuln`**: govulncheck, pinned (v1.8.0) — known vulnerabilities in
+  the code paths actually called, stdlib and the vendored deps. The one
+  check that needs the network. Clean now. It downloads with
+  `-modcacherw`, and `make clean` makes an older read-only module cache
+  deletable first: the Go module cache is read-only by default, which broke
+  `make clean` — and with it `./build.sh release` — once something had been
+  downloaded into it.
+
+Apart from that, no change for the operator; the code is reorganised so that
+every package and type does one job.
+
+### The module is `hermes-hands`
+
+- `go.mod` says `module hermes-hands` (was `github.com/Zesales/hermes-hands`),
+  so the imports name the project, not where it is hosted:
+  `hermes-hands/internal/api`. Nothing was ever fetched through that path —
+  the packages are this repo's `internal/` and builds are vendored and
+  offline — but the import no longer reads like a dependency on GitHub.
+  `go install github.com/Zesales/hermes-hands@…` stops working with it;
+  installs go through `install.sh` (a release, or a clone built here).
+
+### Safety net
+
+- **Golden transcripts** (`testdata/golden/`, `golden_test.go`): one full turn
+  through the real `main()` — REPL and `--rpc` — against the streaming mock,
+  compared byte for byte after masking paths, ids and times. `make golden`
+  rewrites them after an intended change. Checked to fail on the old
+  stream-preview escape bug.
+- `internal/hermesmock`: `NewStream` serves the SSE run events like a live
+  gateway — `run_events_sse` advertised, the envelope in 5-byte deltas, and
+  in mode `golden` Hermes' own tool events (a server call, a steered call, a
+  server-tool approval request); `/steer` and `/approval` answer.
+
+### One turn, once
+
+- **`internal/turn`**: the `Runner` runs a turn for every front end — event
+  log, silence watchdog, the run id Ctrl-C stops, the answer preview and its
+  dedupe, local / wait timing, title, footer. A `Frontend` only shows it
+  (`Show` / `Preview` / `EndPreview` / `Quiet`): the REPL draws the terminal,
+  `--rpc` writes JSON lines. Before, `runREPL` and `runRPC` each carried that
+  whole turn — the copy is where the last fixes had to be made twice.
+- The stream-preview decoder and the watchdog moved into `internal/turn`;
+  `session.Log` records a session (`Store.OpenLog`, `BeginTurn`, `Add`),
+  `ui.Show` / `ui.Replay` draw its events. `sessionlog.go` is gone.
+
+### One place that builds the app
+
+- **`internal/app`**: `App` and `New(cfg, instructions)` — the composition
+  root (UI, API client, store, shell, dispatcher, loop; the known-system
+  probe and the retention window as their own steps); `Bind` points a turn runner at it, `SetDebug` switches
+  the wire trace (a copy each in the REPL and `--rpc` before), `OpenSession`
+  / resume, the instructions ladder, the sandbox guard, the `check` line and
+  compat warning, the session list. `sessionlist.go` moved in.
+- `config.Describe` is the `/config` view, `Config.Configured` replaces
+  `notConfigured`.
+
+### The front ends
+
+- **`internal/repl`**: `Run` is the read loop; a `repl` value holds what the
+  slash commands change (app, session, runner, debug, configured). Every
+  slash command is a small method in one table (`commands.go`, the session
+  ones in `cmd_session.go`) instead of a 14-case `switch` inside a 440-line
+  `runREPL`; `front.go` draws a turn and asks Hermes' server approvals.
+- **`internal/rpc`**: `Run` serves the JSON lines; its `front` writes a turn.
+  `rpc.go` / `frontends.go` left the root package. Like the REPL's slash
+  commands, each request type is a small handler in one table (`start`
+  preflights and says ready, `serve` reads the lines); the rpc golden
+  transcript now sends every request type once, mistakes included — written
+  with the old code, passed by the new.
+- Both get what they need from outside as `Deps` (build the app, the setup
+  wizard, the version).
+
+### main is main
+
+- **`internal/cli`**: `Main(args, Build)` — the arguments, `--help`,
+  `--version`, and the subcommands (`check`, `sessions`, `sessions new`,
+  `setup`, `guidance`, the hidden dev ones). **`internal/setup`**: the wizard,
+  the global-rules import, the `~/.bashrc` offer.
+- `main.go` is the build-time version and one call into `cli.Main` (1650
+  lines before this refactor); the package doc names the hands' tools
+  `local_*`.
+
+### The API by what it talks to
+
+- **`api.Client`** stays the one object everyone holds — the connection and
+  the running turn's hooks — and its views say which part of the Hermes API
+  a caller uses: `Runs()` (Ask, State, Stop), `Sessions()` (List, Info,
+  SetTitle, Fork), `Server()` (Check, the version, capabilities). The loop
+  asks through `client.Runs()`.
+- `api.go` (769 lines) and `ask.go` became `client.go`, `transport.go` (the
+  shared HTTP plumbing), `runs.go`, `sessions.go`, `server.go` and
+  `decode.go`; `stream.go` stays the SSE stream.
+
+### knowsystem by task
+
+- `knowsystem.go` (1012 lines) is split, unchanged line for line: the
+  types (`knowsystem.go`), the host and tool probe (`probe.go`), repo facts
+  — make targets, layout (`repo.go`), the rules files — guidance, `@path`
+  imports, nested rules, the budget, the global import (`rules.go`), the
+  rules of a subdirectory at the first call into it (`scoped.go`), learned
+  facts and the record on disk (`store.go`), what Hermes reads (`brief.go`).
+
+### Guard rails
+
+- **Size budget** (`budget_test.go`, part of `make test`): no function over
+  80 lines, no file over 450 (tests, `vendor/`, `testdata/` excepted). The
+  three functions and one file over it today — the delegation loop, the SSE
+  stream, the brief — are listed at their current size and may only shrink;
+  one that fits must leave the list.
+- **`make race`**: the tests under the race detector (the golden runs drive
+  the real REPL and `--rpc` through it); part of `make ci` and of the PR
+  check (`test.yml`).
+- **Every slash command in a golden transcript** (`repl_commands.txt`):
+  /help, /yolo twice, an unknown command, a turn, /out, /history, /sessions,
+  /session, /debug, /check, /config, /compact, /fork, /new. Written by the
+  code from before this refactor and passed by today's — and that old code
+  reproduces the two other transcripts byte for byte too.
+- **`make cover`**: coverage per package — the unit tests', then what the
+  golden runs reach in their subprocess (`go tool covdata`), where the REPL
+  and `--rpc` actually get exercised. The golden runs set `GOCOVERDIR`, so
+  `go test -cover` no longer breaks them with a warning in the transcript.
+- **GitHub checks**: `test.yml` runs on a read-only token, a newer push
+  cancels the run in flight, and the coverage table lands on the run's
+  summary page; `pr-label.yml` needs no token rights at all; every job has a
+  timeout.
+- **More checks on every PR**: `make vuln` (govulncheck); a **macOS job**
+  runs the tests on macOS itself — the system bash 3.2 and the BSD userland,
+  which the linux job only cross-compiles and vets for (host Go via
+  `actions/setup-go`, exactly go.mod's version); **CodeQL** (`codeql.yml`)
+  scans the Go code on PRs, on main and weekly, results in the Security tab.
+- **CodeQL's first findings fixed**: the stream preview parsed `\uXXXX`
+  with a 32-bit size and converted it to a rune — four hex digits can never
+  overflow it, but nothing said so; it parses 16 bits now (the size of a
+  UTF-16 code unit), so the bound is in the code (four alerts, one cause).
+- **`actions/checkout` v7.0.1** (was v4.2.2, which still ran on the
+  deprecated Node.js 20 — the runner warned on every job): a patch release
+  that carries the fixes GitHub released for all checkout lines on
+  2026-07-20. Its v6 change (credentials in a separate file) keeps the tag
+  push in `release.yml` working.
+- **A failed test is an annotation**: both test jobs keep the output and,
+  on a failure, put the failing tests with their `want` / `got` lines on the
+  run as annotations — readable on the PR and through the API without the
+  log.
+- **Dependabot** watches the pinned GitHub Actions only, with a 14-day
+  cooldown and the `bump:none` label; Go modules stay vendored and updated
+  on purpose. Every action pin reads `@<sha> # vX.Y.Z`, the form Dependabot
+  keeps current. New pins: `actions/setup-go` v6.5.0, `github/codeql-action`
+  v4.38.2.
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).

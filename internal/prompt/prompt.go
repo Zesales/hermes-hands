@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/ttyio"
+	"hermes-hands/internal/ttyio"
 )
 
 // Decision is the outcome of an approval request.

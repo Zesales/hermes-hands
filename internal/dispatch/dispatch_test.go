@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/knowsystem"
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/shell"
+	"hermes-hands/internal/knowsystem"
+	"hermes-hands/internal/prompt"
+	"hermes-hands/internal/shell"
 )
 
 func newShell(root string) *shell.Shell { return shell.New(root, 40000) }

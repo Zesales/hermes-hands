@@ -473,12 +473,16 @@ your phone and web UI never see it.
 ```sh
 git clone https://github.com/Zesales/hermes-hands && cd hermes-hands
 make                 # list targets, grouped (Develop / Verify / Artifacts)
-make toolchain       # once: docker pull the pinned Go image (golang:1.26.7-bookworm)
+make toolchain       # once: docker pull the pinned Go image (golang:1.26.9-bookworm)
 make dev             # build in the container, run it on this host out of ./.dev/
 make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
+make golden          # rewrite testdata/golden/ after an intended UI change
+make race            # the tests under the race detector
+make cover           # coverage per package: unit tests, then what the golden runs reach
+make vuln            # govulncheck (pinned): known vulnerabilities on the code paths we call — needs network
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
-make ci              # the PR gate locally: lint + test + release cross-build
+make ci              # the PR gate locally: lint + test + race + release cross-build
 make dev-install     # build + copy dist/hermes-hands onto your PATH
 ```
 
@@ -497,17 +501,32 @@ prompts for a separate one. The prompt is read straight from
 incrementally on every `make dev`). `make clean` wipes `./.dev/`, including the
 toolchain cache.
 
-Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
+Go 1.26.9, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
 never fetch modules (the one download is the pinned Go image). Layout: `main.go`
-(CLI + REPL + setup), `rpc.go`, `session{log,list}.go`, `watchdog.go` +
-`internal/{api,compat,config,debuglog,dispatch,guard,knowsystem,loop,prompt,redact,session,shell,ttyio,ui}` +
+(the build-time version, then `internal/cli`) +
+`internal/{api,app,cli,compat,config,debuglog,dispatch,guard,knowsystem,loop,prompt,redact,repl,rpc,session,setup,shell,ttyio,turn,ui}` +
 `share/instructions.md` (embedded via `//go:embed`). `.github/workflows/test.yml`
 runs gofmt, `go vet` (for linux **and** darwin), `go test` and
 `./build.sh release` (the linux+darwin × amd64+arm64 cross-compile) on every
 PR, all in the pinned Go container (the `test`
-job is a required check for merging); `release.yml` tags + publishes on merge
-(see Releasing).
+job is a required check for merging), plus `make race`, `make vuln` and the
+coverage table; a second job runs the tests on macOS itself (bash 3.2, BSD
+userland). `codeql.yml` scans the code with CodeQL (PRs, main, weekly; results
+in the Security tab); Dependabot proposes updates of the pinned Actions, never
+before a release is 14 days old. `release.yml` tags + publishes on merge (see
+Releasing).
+
+**Golden transcripts** (`testdata/golden/`) pin what the operator sees: one
+full turn through the real `main()` — the REPL and `--rpc` — against the
+streaming mock (Hermes' own tool events, a steered call, both kinds of
+approval prompt, a final whose escapes the 5-byte deltas cut), every slash
+command and every rpc request type once, masked for paths, ids and times. `make test` fails on any difference; an intended change
+is `make golden` plus a reviewed diff of those files.
+
+A **size budget** (`budget_test.go`) keeps one job per unit: no function over
+80 lines, no file over 450 (tests and `vendor/` excepted). What is over it
+today is listed at its current size and may only shrink.
 
 `test/mock_hermes.py` is a manual-only stand-in for the Runs API — the Go suite
 has its own in-process mock (`internal/hermesmock`) and needs no `python3`.
