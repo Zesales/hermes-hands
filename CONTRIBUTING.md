@@ -39,7 +39,8 @@ PR.
   for the operator, and why.
 - **Tests** for behaviour changes; `make ci` green.
 - **Match the surrounding code**: names, comment density, idiom. One function,
-  one job; comments say why, not what.
+  one job; comments say why, not what. `budget_test.go` holds functions to
+  80 lines and files to 450 — split by job instead of raising it.
 - **Dependencies**: none new without an issue first. Versions are pinned
   exactly — Go modules, the Go image, GitHub Actions (by commit).
 
