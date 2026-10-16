@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zesales/hermes-hands/internal/knowsystem"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/shell"
 )
@@ -139,8 +140,23 @@ func TestUnknownTool(t *testing.T) {
 	d, _ := newDisp(t, prompt.AutoApprover{})
 	res, err := d.Dispatch("frobnicate", raw(map[string]any{}))
 	if err != nil || res.Exit != 2 ||
-		res.Out != "unknown tool 'frobnicate' (have: shell, read_file, write_file, edit_file)" {
+		res.Out != "unknown tool 'frobnicate' (the hands have: local_shell, local_read, local_write, local_edit)" {
 		t.Errorf("unknown tool = %+v, %v", res, err)
+	}
+}
+
+func TestCanonicalToolNames(t *testing.T) {
+	// local_* are the names the brain is taught; every old name stays an alias
+	for in, want := range map[string]string{
+		"local_shell": Shell, "shell": Shell, "bash": Shell, "terminal": Shell,
+		"local_read": Read, "read_file": Read, "cat": Read,
+		"local_write": Write, "write_file": Write,
+		"local_edit": Edit, "edit_file": Edit,
+		"frobnicate": "",
+	} {
+		if got := Canonical(in); got != want {
+			t.Errorf("Canonical(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -284,5 +300,103 @@ func TestShellExecAndFailCtx(t *testing.T) {
 	res, _ = d.Dispatch("shell", raw(map[string]any{"cmd": "bash -c 'exit 3'"}))
 	if res.Exit != 3 || !strings.Contains(res.Ctx, "cwd:") {
 		t.Errorf("shell fail ctx = %+v", res)
+	}
+}
+
+// rulesRepo is a repo root with rules files in two subdirectories, the hand-out
+// wired as main does.
+func rulesRepo(t *testing.T, d *Dispatcher, root string) {
+	t.Helper()
+	for f, body := range map[string]string{
+		"services/api/AGENTS.md": "api rules",
+		"services/api/main.go":   "package main\n",
+		"web/AGENTS.md":          "web rules",
+		"web/index.html":         "<html>",
+		"db/AGENTS.md":           "db rules",
+	} {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(root, f), []byte(body), 0o644)
+	}
+	d.Rules = (&knowsystem.System{Cwd: root}).Scoped()
+	d.NextRound()
+}
+
+func TestWriteHeldBackUntilRulesSeen(t *testing.T) {
+	ap := &fakeApprover{d: prompt.Approve}
+	d, root := newDisp(t, ap)
+	rulesRepo(t, d, root)
+
+	// the first write into services/api/ was composed without its rules: held
+	// back before the operator is asked, the rules come along
+	res, _ := d.Dispatch("local_write", raw(map[string]any{"path": "services/api/ping.go", "content": "package main\n"}))
+	if res.Exit != 1 || !strings.Contains(res.Out, "held back, nothing changed") || !strings.Contains(res.Ctx, "api rules") || ap.last != "" {
+		t.Fatalf("first write = %+v (asked %q)", res, ap.last)
+	}
+	if _, err := os.Stat(filepath.Join(root, "services/api/ping.go")); err == nil {
+		t.Fatal("a held-back write must not create the file")
+	}
+	// another call of the same batch was written blind as well
+	res, _ = d.Dispatch("local_edit", raw(map[string]any{"path": "services/api/main.go", "old": "main", "new": "api"}))
+	if res.Exit != 1 || !strings.Contains(res.Out, "earlier result of this batch") || res.Ctx != "" {
+		t.Fatalf("same-batch edit = %+v", res)
+	}
+	// next batch: the brain has seen them
+	d.NextRound()
+	res, _ = d.Dispatch("local_write", raw(map[string]any{"path": "services/api/ping.go", "content": "package main\n"}))
+	if res.Exit != 0 || res.Ctx != "" || ap.last == "" {
+		t.Fatalf("write after the rules were seen = %+v", res)
+	}
+
+	// a read brings them along without holding anything back — but a write in
+	// the same batch was written before the read's result
+	res = d.doRead(map[string]json.RawMessage{"path": raw("web/index.html")})
+	if res.Exit != 0 || res.Out != "<html>" || !strings.Contains(res.Ctx, "web rules") {
+		t.Fatalf("read = %+v", res)
+	}
+	if res, _ = d.Dispatch("local_write", raw(map[string]any{"path": "web/index.html", "content": "x"})); res.Exit != 1 {
+		t.Errorf("same-batch write after a read = %+v", res)
+	}
+	// reading the rules file itself counts as seen, no copy in the context
+	if res = d.doRead(map[string]json.RawMessage{"path": raw("db/AGENTS.md")}); res.Out != "db rules" || res.Ctx != "" {
+		t.Errorf("read of the rules file = %+v", res)
+	}
+	d.NextRound()
+	if res, _ = d.Dispatch("local_write", raw(map[string]any{"path": "db/schema.sql", "content": "x"})); res.Exit != 0 {
+		t.Errorf("write after reading the rules file = %+v", res)
+	}
+}
+
+func TestShellBringsRulesAlong(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not on PATH")
+	}
+	d, root := newDisp(t, prompt.AutoApprover{})
+	d.Shell = newShell(root)
+	defer d.Shell.Stop()
+	d.RunTimeout = 10 * time.Second
+	rulesRepo(t, d, root)
+
+	res, _ := d.Dispatch("local_shell", raw(map[string]any{"cmd": "echo hi"}))
+	if res.Out != "hi" || res.Ctx != "" {
+		t.Errorf("no subdirectory touched = %+v", res)
+	}
+	// a cd persists in the shell: the directory it ends in counts
+	res, _ = d.Dispatch("local_shell", raw(map[string]any{"cmd": "cd services/api && echo in"}))
+	if res.Exit != 0 || !strings.Contains(res.Ctx, "api rules") {
+		t.Errorf("cd = %+v", res)
+	}
+	// a path word — relative to the shell's directory or the root; globs by prefix
+	res, _ = d.Dispatch("local_shell", raw(map[string]any{"cmd": "ls ../../web/*.html >/dev/null"}))
+	if !strings.Contains(res.Ctx, "web rules") {
+		t.Errorf("relative path word = %+v", res)
+	}
+	res, _ = d.Dispatch("local_shell", raw(map[string]any{"cmd": "cd / && grep -rl x --include=*.sql db; true"}))
+	if !strings.Contains(res.Ctx, "db rules") || strings.Contains(res.Ctx, "web rules") {
+		t.Errorf("root-relative path word = %+v", res)
+	}
+	// a failed command keeps its failure context in front
+	res, _ = d.Dispatch("local_shell", raw(map[string]any{"cmd": "cd " + root + " && bash -c 'exit 3'"}))
+	if res.Exit != 3 || !strings.HasPrefix(res.Ctx, "cwd:") {
+		t.Errorf("fail ctx = %+v", res)
 	}
 }

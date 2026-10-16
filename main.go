@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -29,7 +30,10 @@ import (
 
 	"github.com/Zesales/hermes-hands/internal/api"
 	"github.com/Zesales/hermes-hands/internal/config"
+	"github.com/Zesales/hermes-hands/internal/debuglog"
 	"github.com/Zesales/hermes-hands/internal/dispatch"
+	"github.com/Zesales/hermes-hands/internal/guard"
+	"github.com/Zesales/hermes-hands/internal/knowsystem"
 	"github.com/Zesales/hermes-hands/internal/loop"
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/redact"
@@ -52,17 +56,17 @@ Hermes holds the plan/memory; it drives a persistent local shell plus
 read_file / write_file / edit_file to see and act on the repo you're in.
 
 A session is one task. There is no one-shot, and no auto-resume: a bare run
-starts a fresh session — continue an old one only when you ask.
+starts a fresh session — resume an old one by its id only (plugins keep the id).
 
   hermes-hands                    start a fresh session here (main use)
-  hermes-hands --session          continue this repo's latest session
   hermes-hands --session <id>     open a specific session  (id from --session-list)
   hermes-hands --new              start a fresh session  (same as a bare run)
   hermes-hands --rpc              JSON-lines session server for an editor/plugin
 
-  hermes-hands --session-list     list sessions with id / turns / tokens
+  hermes-hands --session-list     list sessions with id / turns / tokens / idle
   hermes-hands sessions new       mint a session id (for --session / --rpc)
   hermes-hands setup              first-run config  (also: /setup in-session)
+  hermes-hands guidance           (re-)import your global agent rules (~/.claude/CLAUDE.md, …)
   hermes-hands check              preflight the API connection
   hermes-hands --version          print version
 
@@ -121,18 +125,21 @@ func parseArgs(args []string) parsed {
 		case "setup":
 			p.action = "setup"
 			return p
+		case "guidance":
+			p.action = "guidance"
+			return p
 		case "--rpc":
 			p.rpc = true
 		case "--new":
 			p.smode = "new"
 		case "--session":
-			// optional id: "--session" alone == continue the latest;
-			// "--session <id>" opens that one.
+			// resume is explicit by id: "--session <id>" opens that one; a bare
+			// "--session" has nothing to point at any more (no per-dir pointer).
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
 				p.smode = args[i]
 			} else {
-				p.smode = "continue"
+				p.errMsg = "--session needs a session id (ids from --session-list)"
 			}
 		case "--yolo":
 			p.yolo = true
@@ -170,6 +177,9 @@ func main() {
 		os.Exit(runSessionNew())
 	case "setup":
 		os.Exit(runSetup())
+	case "guidance":
+		offerGuidanceImport(bufio.NewReader(os.Stdin), hermesHome())
+		os.Exit(0)
 	case "events":
 		os.Exit(runEventsDump(p.smode))
 	case "raw":
@@ -183,12 +193,12 @@ func main() {
 	}
 
 	// Every mode works ON a session. A bare REPL run starts a fresh one (a
-	// session is one task — no implicit resume); `--session` with no id
-	// continues this repo's latest, `--session <id>` opens a specific one.
-	// `--rpc` still defaults to continue: an editor/plugin holding the process
-	// wants the same session across restarts, and drives new/use over the pipe.
+	// session is one task); resuming is always EXPLICIT by id (`--session <id>`,
+	// `/session <id>`, rpc `use`) — the way editor plugins work: they keep the
+	// id from the `ready` event. `--rpc` defaults to a fresh session and the
+	// plugin switches to its stored one with {"type":"use"}.
 	if p.rpc {
-		os.Exit(runRPC(orElse(p.smode, "continue")))
+		os.Exit(runRPC(orElse(p.smode, "new")))
 	}
 	os.Exit(runREPL(orElse(p.smode, "new")))
 }
@@ -225,9 +235,15 @@ func (f *finalStreamer) feed(chunk string) {
 		// a real tool-call round -> never a final to stream
 		if i := strings.Index(s, `"calls"`); i >= 0 {
 			after := strings.TrimLeft(s[i+7:], " :\t\r\n")
-			if strings.HasPrefix(after, "[") && !strings.HasPrefix(strings.TrimLeft(after[1:], " \t\r\n"), "]") {
-				f.done = true
-				return
+			if strings.HasPrefix(after, "[") {
+				rest := strings.TrimLeft(after[1:], " \t\r\n")
+				if rest == "" {
+					return // the chunk ended at "[" — can't tell an empty array yet
+				}
+				if !strings.HasPrefix(rest, "]") {
+					f.done = true
+					return
+				}
 			}
 		}
 		k := strings.Index(s, `"final"`)
@@ -290,6 +306,12 @@ func splitCmd(s string) (cmd, rest string) {
 	return s, ""
 }
 
+var slashCmdRe = regexp.MustCompile(`^/[A-Za-z?][A-Za-z0-9_-]*$`)
+
+// isSlashCmd reports whether the first word looks like a REPL command
+// ("/quit"), as opposed to a message that starts with a path ("/etc/hosts …").
+func isSlashCmd(cmd string) bool { return slashCmdRe.MatchString(cmd) }
+
 // --- version strings ---
 
 func bareVersion() string {
@@ -341,6 +363,41 @@ type app struct {
 	loop     *loop.Loop
 }
 
+// openSession makes rec the open session: loads its event log, continues the
+// call numbering, replays the last turns into the terminal when show is set,
+// and prepares the first turn when the server lost the conversation.
+func openSession(a *app, rec *session.Record, show bool) *sessionLog {
+	evlog, evs := openLog(a.store, a.ui, rec)
+	a.loop.Ref = session.LastRef(evs)
+	if show && len(evs) > 0 {
+		evlog.replay(evs, replayTurns)
+	}
+	prepareResume(a, rec, evs)
+	return evlog
+}
+
+// prepareResume: hermes-agent holds the conversation the model sees; when it
+// still has this session there is nothing to do. When it lost it (404 / empty
+// — a Hermes update, a retention purge), the first turn carries a recap of
+// the local event log, so the brain continues instead of starting blind.
+// Nothing is ever synced from the server into the local log.
+func prepareResume(a *app, rec *session.Record, evs []session.Event) {
+	a.loop.ResumeNote = ""
+	if rec.HermesSessionID == "" || rec.Turns == 0 {
+		return // nothing has been said in this session yet
+	}
+	if idle := session.IdleFor(rec, time.Now()); idle > session.StaleAfter {
+		logf("session %s: idle %s — model prompt caches (Bifrost/hermes-agent/Claude-style) likely expired; the first turn re-reads the full conversation (token cost)", rec.ID, idle.Round(time.Minute))
+	}
+	if si, err := a.client.SessionInfo(context.Background(), rec.HermesSessionID); err == nil && si.Messages > 0 {
+		return
+	}
+	if r := session.Recap(evs); r != "" {
+		a.loop.ResumeNote = r
+		logf("session %s: hermes-agent no longer has this conversation — the first turn carries a recap of the local history", rec.ID)
+	}
+}
+
 // loadCfgOrExit resolves configuration, or prints "hermes-hands: <err>" and
 // exits 1 (e.g. an undecryptable secrets.enc — never a panic).
 func loadCfgOrExit() *config.Config {
@@ -357,6 +414,25 @@ func newApp() (*app, error) {
 	repoRoot := physicalCwd()
 	u := ui.New(os.Stderr)
 
+	// known system: probe the machine once per session so the brain is told
+	// what exists instead of rediscovering it with tool rounds (internal/
+	// knowsystem). The previous session's learned-missing facts are merged in,
+	// stale ones dropped by the fresh probe; the record lives in the home dir.
+	knownPath := cfg.Home + "/known-system.json"
+	known := knowsystem.Probe(repoRoot, gitBranch(repoRoot))
+	known.UseGlobal(filepath.Join(cfg.Home, globalGuidanceFile)) // the rules imported at setup
+	if old, err := knowsystem.Load(knownPath); err == nil {
+		known.MergeLearned(old)
+	} else if !os.IsNotExist(err) {
+		warnf("known-system: %v", err)
+	}
+	if err := os.MkdirAll(cfg.Home, 0o700); err != nil {
+		warnf("known-system: home: %v", err)
+	}
+	if err := known.Save(knownPath); err != nil {
+		warnf("known-system: save: %v", err)
+	}
+
 	var vlogf func(string, ...any)
 	if cfg.Verbose {
 		vlogf = func(f string, a ...any) { u.DimLine("hermes-hands: " + fmt.Sprintf(f, a...)) }
@@ -372,18 +448,28 @@ func newApp() (*app, error) {
 		Retries:      cfg.APIRetries,
 		PollInterval: cfg.PollInterval,
 		RunTimeout:   cfg.APIRunTimeout,
-		Instructions: resolveInstructions(cfg.InstrPath),
+		Instructions: buildInstructions(resolveInstructions(cfg.InstrPath), known),
 		StreamMode:   cfg.Stream,
 		Warnf:        warnf,
 		Log:          logf,
 		Vlogf:        vlogf,
 	}
+	client.Guard = sandboxGuard(cfg.Sandbox, repoRoot, os.Getenv("HOME"))
 
 	store, err := session.Open(cfg.StateDir)
 	if err != nil {
 		return nil, err
 	}
 	store.Warnf = warnf
+	// Retention: sessions idle past the window go — events, tool output and
+	// debug trace with them — so nothing typed by mistake lingers forever.
+	if cfg.RetentionDays > 0 {
+		maxAge := time.Duration(cfg.RetentionDays) * 24 * time.Hour
+		if gone := store.Prune(maxAge); len(gone) > 0 {
+			logf("retention: removed %d local session(s) idle more than %d days", len(gone), cfg.RetentionDays)
+		}
+		pruneFiles(cfg.Home+"/verbose", maxAge) // the dropped /reasoning logs
+	}
 
 	sh := shell.New(repoRoot, 2*cfg.MaxOutput)
 	disp := &dispatch.Dispatcher{
@@ -393,14 +479,96 @@ func newApp() (*app, error) {
 		Deny:       cfg.Deny,
 		MaxOutput:  cfg.MaxOutput,
 		RunTimeout: time.Duration(cfg.RunTimeout) * time.Second,
+		Rules:      known.Scoped(), // a subdirectory's rules, at the first call into it
 	}
 	lp := &loop.Loop{
-		API: client, Dispatch: disp, UI: u,
+		API: client, Dispatch: disp,
 		MaxRounds: cfg.MaxRounds, Scrub: redact.Scrub,
 		RepoRoot: repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
 		Vlogf: vlogf, Warnf: warnf,
+		OnResult: func(tool, out string, exit int) {
+			if known.ObserveShell(out, exit) { // learned 127: persist immediately
+				if err := known.Save(knownPath); err != nil {
+					warnf("known-system: save: %v", err)
+				}
+			}
+		},
 	}
 	return &app{cfg, repoRoot, u, client, store, sh, disp, lp}, nil
+}
+
+// sandboxGuard is the policy for Hermes' own tool calls in a hands run
+// (HERMES_HANDS_SANDBOX): smart steers only what is aimed at the operator's
+// machine or calls a hands tool as Hermes' own (guard.Check), steer every
+// server-side exec / file call (guard.Strict), show never steers.
+func sandboxGuard(mode, workspace, home string) func(tool, preview string) guard.Verdict {
+	switch mode {
+	case guard.Steer:
+		return guard.Strict
+	case guard.Show:
+		return func(string, string) guard.Verdict { return guard.Verdict{} }
+	}
+	return func(tool, preview string) guard.Verdict { return guard.Check(tool, preview, workspace, home) }
+}
+
+// askServerApproval puts an approval request of Hermes' OWN server-side tool
+// to the operator. It is a separate trust domain from the hands' approvals,
+// so their [a]ll latch never answers it. o = once, s = for this Hermes
+// session, anything else = deny. Without an interactive prompt (approvals
+// auto / never) it is a deny — a server command nobody looked at never runs.
+func askServerApproval(ap prompt.Approver, tool, what string) string {
+	ta, ok := ap.(*prompt.TTYApprover)
+	if !ok || ta.Mode != "ask" || ta.AskLine == nil {
+		return "deny"
+	}
+	if ta.Pause != nil {
+		defer ta.Pause()()
+	}
+	out := ta.Out
+	if out == nil {
+		out = os.Stderr
+	}
+	if tool == "" {
+		tool = "a tool"
+	}
+	fmt.Fprintf(out, "\n  ⚠  hermes wants to run %s on its SERVER sandbox (not your machine):\n      %s\n", tool, what)
+	line, err := ta.AskLine("  [o]nce  [s]ession  [n]o > ")
+	if err != nil {
+		return "deny"
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "o", "y", "once":
+		return "once"
+	case "s", "session":
+		return "session"
+	}
+	return "deny"
+}
+
+// pruneFiles deletes the files in dir older than maxAge, then dir itself once
+// it is empty.
+func pruneFiles(dir string, maxAge time.Duration) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if fi, err := e.Info(); err == nil && e.Type().IsRegular() && time.Since(fi.ModTime()) > maxAge {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+	_ = os.Remove(dir) // fails (and is meant to) while anything is left
+}
+
+// buildInstructions is everything Hermes is told up front, in one stable
+// block (stable = cacheable): the protocol and behaviour (instructions.md),
+// the known-system brief, then the operator's AGENTS.md / CLAUDE.md rules.
+func buildInstructions(base string, known *knowsystem.System) string {
+	s := base + "\n\n" + known.Brief()
+	if g := known.GuidanceBlock(); g != "" {
+		s += "\n\n" + g
+	}
+	return s
 }
 
 // resolveInstructions is the instructions ladder:
@@ -480,6 +648,8 @@ func runREPL(smode string) int {
 	if !configured {
 		fmt.Fprintln(os.Stderr, "hermes-hands is not configured — type /setup")
 	}
+	// a reopened session shows its last turns exactly as they ran
+	evlog := openSession(a, rec, true)
 
 	ln := liner.NewLiner()
 	defer func() { ln.Close() }()
@@ -535,6 +705,18 @@ func runREPL(smode string) int {
 		}
 	}
 
+	// /debug: a redacted wire trace of the connection into the open session's
+	// debug.jsonl (HERMES_HANDS_DEBUG=1 starts with it on). Re-pointed on every
+	// session switch; deleted with its session by the retention window.
+	debugOn := a.cfg.Debug
+	applyDebug := func() {
+		if debugOn {
+			a.client.Trace = debuglog.New(a.store.DebugPath(rec), a.cfg.APIKey).Write
+		} else {
+			a.client.Trace = nil
+		}
+	}
+
 	// Per-app wiring that must be redone when /setup swaps `a`:
 	//  - the approval gate reads its answer through liner (one terminal owner;
 	//    a separate /dev/tty reader deadlocks against liner's input goroutine),
@@ -550,10 +732,30 @@ func runREPL(smode string) int {
 			turnMu.Lock()
 			runID = id
 			turnMu.Unlock()
+			// each round is a fresh envelope: a calls-round must not keep the
+			// preview muted for the final round that follows it
+			fs.reset()
 			wd.bump()
 		}
 		a.client.OnDelta = func(s string) { wd.bump(); fs.feed(s) } // previews the `final` text; any token = progress
-		a.loop.OnTool = func(string, string, int) { wd.bump() }     // a completed tool round = progress
+		a.client.OnEvent = func(string) { wd.bump() }               // any SSE frame is a sign of life
+		a.client.OnApproval = func(tool, what string) string { return askServerApproval(a.disp.Approver, tool, what) }
+		a.client.OnHermesTool = func(tool, preview, action string) {
+			ev := evlog.add(session.Event{Kind: session.KindHermesTool, Tool: tool, Text: preview, Action: action})
+			evlog.show(ev, "")
+		}
+		// every hands call: shown (and stored) BEFORE it runs, then its result
+		a.loop.Emit = func(ev session.Event) {
+			wd.bump() // a call starting or finishing = progress
+			ev = evlog.add(ev)
+			evlog.show(ev, ev.Out)
+			if ev.Kind == session.KindCall {
+				a.ui.SetActivity(fmt.Sprintf("#%d %s", ev.Ref, ev.Tool))
+			} else {
+				a.ui.SetActivity("")
+			}
+		}
+		applyDebug()
 	}
 	wireApp()
 
@@ -587,7 +789,7 @@ func runREPL(smode string) int {
 		switch cmd {
 		case "":
 			continue
-		case "/exit", "/quit", "/q":
+		case "/exit":
 			return 0
 		case "/help", "/h", "/?":
 			a.ui.Help(a.repoRoot)
@@ -608,6 +810,8 @@ func runREPL(smode string) int {
 					if nr, e3 := a.store.Resolve(smode, a.repoRoot); e3 == nil {
 						rec = nr
 					}
+					evlog = openSession(a, rec, true)
+					applyDebug()
 				}
 			}
 			fmt.Fprintln(os.Stderr)
@@ -647,6 +851,34 @@ func runREPL(smode string) int {
 			}
 			rec = nr
 			a.ui.NewSessionNote(rec.ID)
+			evlog = openSession(a, rec, true)
+			applyDebug()
+			continue
+		case "/history", "/chat-history":
+			// /history = this session, every turn; /history <n> = its last n
+			// turns; /history <id> = another session's (read-only — it never
+			// switches the REPL to it)
+			target, n := evlog, 0
+			if rest != "" {
+				if k, e := strconv.Atoi(rest); e == nil && k > 0 {
+					n = k
+				} else if other, e := a.store.Load(rest); e == nil {
+					target = &sessionLog{store: a.store, ui: a.ui, rec: other}
+				} else {
+					fmt.Fprintf(os.Stderr, "  no such session: %s\n\n", rest)
+					continue
+				}
+			}
+			evs, e := a.store.LoadEvents(target.rec)
+			if e != nil {
+				warnf("history: %v", e)
+				continue
+			}
+			target.replay(evs, n)
+			fmt.Fprintln(os.Stderr)
+			continue
+		case "/out":
+			evlog.showOutput(rest)
 			continue
 		case "/yolo":
 			if ta, ok := a.disp.Approver.(*prompt.TTYApprover); ok {
@@ -657,6 +889,24 @@ func runREPL(smode string) int {
 					ta.Mode = "auto"
 					fmt.Fprintln(os.Stderr, "  approvals: OFF (yolo) — shell / write run unattended")
 				}
+			}
+			fmt.Fprintln(os.Stderr)
+			continue
+		case "/debug":
+			switch strings.ToLower(rest) {
+			case "on", "true", "yes":
+				debugOn = true
+			case "off", "false", "no":
+				debugOn = false
+			default:
+				debugOn = !debugOn
+			}
+			applyDebug()
+			if debugOn {
+				fmt.Fprintf(os.Stderr, "  debug: ON — redacted connection trace → %s\n", a.store.DebugPath(rec))
+				fmt.Fprintf(os.Stderr, "  (local only, 0600, deleted with the session after %d idle days)\n", a.cfg.RetentionDays)
+			} else {
+				fmt.Fprintln(os.Stderr, "  debug: OFF")
 			}
 			fmt.Fprintln(os.Stderr)
 			continue
@@ -692,6 +942,8 @@ func runREPL(smode string) int {
 			nr.HermesSessionID = newID
 			_, _ = a.store.SetTitleLocal(nr, "fork of "+rec.ID)
 			rec = nr
+			evlog = openSession(a, rec, false)
+			applyDebug()
 			fmt.Fprintf(os.Stderr, "  forked → hermes-agent session %s (local %s)\n\n", newID, rec.ID)
 			continue
 		case "/new":
@@ -702,6 +954,8 @@ func runREPL(smode string) int {
 			}
 			rec = nr
 			a.ui.NewSessionNote(rec.ID)
+			evlog = openSession(a, rec, false)
+			applyDebug()
 			continue
 		case "/sessions":
 			recs, _ := a.store.List()
@@ -718,6 +972,12 @@ func runREPL(smode string) int {
 			fmt.Fprintln(os.Stderr)
 			continue
 		}
+		// An unknown /command never goes to Hermes as a task: a typo or a
+		// dropped alias (/quit) would otherwise cost a whole run.
+		if isSlashCmd(cmd) {
+			fmt.Fprintf(os.Stderr, "  unknown command %s — /help lists the commands, /exit leaves\n\n", cmd)
+			continue
+		}
 
 		if !configured {
 			fmt.Fprintln(os.Stderr, "  not configured — type /setup first")
@@ -726,9 +986,10 @@ func runREPL(smode string) int {
 		}
 
 		ln.AppendHistory(input)
-		fmt.Fprintln(os.Stderr)
-		a.ui.Rule()
-		a.ui.You(input)
+		// Everything a turn prints goes through the session's event log
+		// (stored, scrubbed) — so reopening the session replays it 1:1.
+		evlog.beginTurn()
+		evlog.show(evlog.add(session.Event{Kind: session.KindUser, Text: redact.Scrub(input)}), "")
 		turnStart := time.Now()
 		stopWork = a.ui.StartWorking()
 
@@ -748,35 +1009,38 @@ func runREPL(smode string) int {
 		close(wdStop)
 		timedOut := wd.disarm() // barrier: authoritative "did the watchdog fire?"
 		stopWork()
+		a.ui.SetActivity("")
+		streamed := a.ui.StreamDone()
 		turnMu.Lock()
 		cancelTurn = nil
 		turnMu.Unlock()
 		interrupted := ctx.Err() != nil
 		cancel()
-		turnDur := time.Since(turnStart)
+		// Exclude time spent waiting on the operator's y/n/a/q answer at an
+		// approval prompt — that is the operator deciding, not hermes-agent
+		// working, and shouldn't inflate "worked for Xs".
+		turnDur := time.Since(turnStart) - a.ui.Paused()
 
-		if timedOut {
-			a.ui.TurnDone(turnDur, "timeout", int(a.cfg.ResponseTimeout/time.Second))
-			continue
-		}
-		if interrupted {
-			a.ui.TurnDone(turnDur, "interrupted", 0)
-			continue
-		}
-		if out.OK {
-			if changed, _ := a.store.SetTitleLocal(rec, input); changed && rec.HermesSessionID != "" {
-				a.client.SetTitle(context.Background(), rec.HermesSessionID, rec.Title)
+		end := session.Event{Kind: session.KindTurnEnd, Ms: turnDur.Milliseconds()}
+		switch {
+		case timedOut:
+			end.Outcome, end.Limit = "timeout", int(a.cfg.ResponseTimeout/time.Second)
+		case interrupted:
+			end.Outcome = "interrupted"
+		default:
+			if out.OK {
+				if changed, _ := a.store.SetTitleLocal(rec, input); changed && rec.HermesSessionID != "" {
+					a.client.SetTitle(context.Background(), rec.HermesSessionID, rec.Title)
+				}
+			}
+			ans := evlog.add(session.Event{Kind: session.KindAnswer, Text: redact.Scrub(out.Answer), OK: session.Bool(out.OK)})
+			// The streamed preview already showed exactly this answer, in
+			// the same shape — don't print it twice.
+			if !streamed || strings.TrimSpace(streamBuf.String()) != strings.TrimSpace(out.Answer) {
+				evlog.show(ans, "")
 			}
 		}
-		fmt.Fprintln(os.Stderr)
-		// If the streamed preview already showed exactly the final answer,
-		// don't print it a second time.
-		if s := strings.TrimSpace(streamBuf.String()); s != "" && s == strings.TrimSpace(out.Answer) {
-			fmt.Fprintln(os.Stderr)
-		} else {
-			a.ui.Answer(out.Answer)
-		}
-		a.ui.TurnDone(turnDur, "", 0)
+		evlog.show(evlog.add(end), "")
 	}
 	return 0
 }
@@ -899,6 +1163,9 @@ func formatConfig(cfg *config.Config) string {
 		{"HERMES_HANDS_STREAM", none(cfg.Stream)},
 		{"HERMES_HANDS_RESPONSE_TIMEOUT", secs(cfg.ResponseTimeout)},
 		{"HERMES_HANDS_WATCHDOG_INTERVAL", secs(cfg.WatchdogInterval)},
+		{"HERMES_HANDS_RETENTION_DAYS", retention(cfg.RetentionDays)},
+		{"HERMES_HANDS_DEBUG", onOff(cfg.Debug)},
+		{"HERMES_HANDS_SANDBOX", cfg.Sandbox},
 		{"HERMES_HANDS_MAX_ROUNDS", strconv.Itoa(cfg.MaxRounds)},
 		{"HERMES_HANDS_RUN_TIMEOUT", strconv.Itoa(cfg.RunTimeout) + "s"},
 		{"HERMES_API_RUN_TIMEOUT", secs(cfg.APIRunTimeout)},
@@ -995,6 +1262,20 @@ func runSessionNew() int {
 	return 0
 }
 
+func retention(days int) string {
+	if days <= 0 {
+		return "off (keep every session)"
+	}
+	return strconv.Itoa(days) + " days"
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
 // --- setup ---
 
 const setupConfigBody = "# hermes-hands config  —  edit by hand; `/config` shows what is in effect\n" +
@@ -1002,7 +1283,10 @@ const setupConfigBody = "# hermes-hands config  —  edit by hand; `/config` sho
 	"# HERMES_HANDS_APPROVE=ask              # ask | auto | never\n" +
 	"# HERMES_HANDS_STREAM=auto              # auto | on | off\n" +
 	"# HERMES_HANDS_RESPONSE_TIMEOUT=600     # seconds hermes-agent may go silent in a turn before it is cancelled (0 = no limit)\n" +
-	"# HERMES_HANDS_WATCHDOG_INTERVAL=200    # seconds between server-side 'still working?' checks that push that limit back\n"
+	"# HERMES_HANDS_WATCHDOG_INTERVAL=200    # seconds between server-side 'still working?' checks that push that limit back\n" +
+	"# HERMES_HANDS_RETENTION_DAYS=14        # local sessions idle longer are deleted on start, debug trace included (0 = keep)\n" +
+	"# HERMES_HANDS_DEBUG=1                  # start with /debug on: redacted connection trace per session\n" +
+	"# HERMES_HANDS_SANDBOX=smart            # Hermes' own server terminal/file tools: smart | steer | show\n"
 
 func runSetup() int {
 	plaintext := false
@@ -1052,6 +1336,7 @@ func doSetup(in *bufio.Reader, dir string, plaintext bool) int {
 		}
 		fmt.Printf("wrote %s/config and %s/secrets\n", dir, dir)
 		offerBashrc(in)
+		offerGuidanceImport(in, dir)
 		return 0
 	}
 
@@ -1060,7 +1345,78 @@ func doSetup(in *bufio.Reader, dir string, plaintext bool) int {
 		return 1
 	}
 	fmt.Printf("wrote %s/config, %s/secrets.enc and %s/keyseed (machine-bound; nothing to add to your shell)\n", dir, dir, dir)
+	offerGuidanceImport(in, dir)
 	return 0
+}
+
+// globalGuidanceFile (in the hermes-hands home) holds the operator's global
+// agent rules, imported once at setup — stored knowledge every session puts in
+// front of the repo's own AGENTS.md / CLAUDE.md, which are read fresh at each
+// session start.
+const globalGuidanceFile = "guidance.md"
+
+// globalGuidanceSources are the home-directory rules files other agents read:
+// the import candidates, in this order.
+var globalGuidanceSources = []string{".claude/CLAUDE.md", ".codex/AGENTS.md", "AGENTS.md", "CLAUDE.md", ".config/AGENTS.md"}
+
+// offerGuidanceImport offers to snapshot the global agent rules found in the
+// home directory into <dir>/guidance.md (0600). A snapshot, not a link: edit
+// it freely; `hermes-hands guidance` re-imports. Asks before replacing an
+// existing import; identical sources are imported once.
+func offerGuidanceImport(in *bufio.Reader, dir string) {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return
+	}
+	type src struct {
+		path string
+		body string
+	}
+	var found []src
+	seen := map[string]bool{}
+	for _, rel := range globalGuidanceSources {
+		p := filepath.Join(home, rel)
+		b, err := os.ReadFile(p)
+		body := strings.TrimSpace(string(b))
+		if err != nil || body == "" || seen[body] {
+			continue
+		}
+		seen[body] = true
+		found = append(found, src{p, body})
+	}
+	if len(found) == 0 {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "\nGlobal agent rules in your home directory:")
+	for _, f := range found {
+		fmt.Fprintf(os.Stderr, "  %s  (%d bytes)\n", f.path, len(f.body))
+	}
+	dst := filepath.Join(dir, globalGuidanceFile)
+	q := "Import them as your global rules for Hermes (→ " + dst + ")? [y/N] "
+	if _, err := os.Stat(dst); err == nil {
+		q = "Replace " + dst + " with a fresh import of them? [y/N] "
+	}
+	if !strings.EqualFold(promptLine(in, q), "y") {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "<!-- hermes-hands global rules, imported %s from:\n", time.Now().Format("2006-01-02"))
+	for _, f := range found {
+		fmt.Fprintf(&b, "     %s\n", f.path)
+	}
+	b.WriteString("     A snapshot — edit freely; `hermes-hands guidance` re-imports. -->\n")
+	for _, f := range found {
+		fmt.Fprintf(&b, "\n## from %s\n\n%s\n", f.path, f.body)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(dst, []byte(b.String()), 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+		return
+	}
+	fmt.Printf("wrote %s — every session now starts with these rules\n", dst)
 }
 
 func offerBashrc(in *bufio.Reader) {

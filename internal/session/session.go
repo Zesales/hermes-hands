@@ -1,6 +1,21 @@
-// Package session is the local session INDEX. The conversation itself is
-// server-side; this is a thin JSON record per session so `--session <id>` and
-// `sessions` work offline. State lives under <state>/sessions/.
+// Package session is the local session store. One directory per session,
+// under <state>/sessions/<id>/ (0700, every file 0600):
+//
+//	<id>/session.json  — the thin index record (`--session <id>` and
+//	                     `sessions` work offline from these)
+//	<id>/events.jsonl  — everything the terminal showed, as an append-only
+//	                     event log (see Event): the operator's messages, every
+//	                     hands call and result, Hermes' own tool attempts, the
+//	                     answers, the turn footers. The REPL renders a live turn
+//	                     and a reopened session from the same events, so a
+//	                     resume shows the session exactly as it ran.
+//	<id>/out/<ref>.txt — the full (scrubbed) output of call #ref; events only
+//	                     carry its size, the excerpt is rendered from this
+//	<id>/debug.jsonl   — the /debug wire trace, redacted (only while /debug is on)
+//
+// The conversation the model sees lives on the Hermes server; this store is
+// the operator's local record of it and never syncs anywhere. Sessions idle
+// longer than the retention window are deleted on start (Prune).
 package session
 
 import (
@@ -34,7 +49,9 @@ type Record struct {
 	LastTokens       int    `json:"last_tokens,omitempty"` // best-effort tokens from the last run's usage
 	Splits           int    `json:"splits,omitempty"`      // times Hermes handed back a different session id (~ compactions)
 
-	path string // on-disk path; not serialised
+	path      string // on-disk path; not serialised
+	seq       int    // last event Seq written (see AppendEvent)
+	seqLoaded bool
 }
 
 // Store is the <state>/sessions directory.
@@ -45,22 +62,61 @@ type Store struct {
 	rnd   func() int
 }
 
-// Open ensures <stateDir>/sessions/by-cwd exists and returns the store.
-// stateDir is config.Config.StateDir (already resolved from the process env).
+// Open ensures <stateDir>/sessions exists, tightens permissions left by older
+// versions, and returns the store. stateDir is config.Config.StateDir (already
+// resolved from the process env). Sessions are addressed by id only (an
+// editor/plugin keeps the id from the ready event; see Resolve).
 func Open(stateDir string) (*Store, error) {
-	dir := stateDir + "/sessions"
-	if err := os.MkdirAll(dir+"/by-cwd", 0o755); err != nil {
+	s := &Store{dir: stateDir + "/sessions"}
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Store{dir: dir}, nil
+	s.tidy()
+	return s, nil
 }
 
-func (s *Store) path(id string) string    { return s.dir + "/" + id + ".json" }
-func (s *Store) cwdPtr(cwd string) string { return s.dir + "/by-cwd/" + sha1hex(cwd) + ".id" }
+func (s *Store) sessionDir(id string) string { return s.dir + "/" + id }
+func (s *Store) path(id string) string       { return s.dir + "/" + id + "/session.json" }
 
-// New mints a session rooted at cwd (hh_session_new): a local index id, the
-// stable per-repo hermes_session_id / hermes_session_key, and the by-cwd
-// pointer. ts is shared between the local id and the hermes id.
+// tidy runs on every Open: it drops the obsolete by-cwd pointer directory and
+// tightens what older versions left world-readable.
+func (s *Store) tidy() {
+	// the legacy by-cwd "last session" pointer is obsolete — sessions are
+	// addressed by id, so the pointer dir is dropped on Open
+	_ = os.RemoveAll(s.dir + "/by-cwd")
+
+	// The store holds chat history and command output: 0700 dirs, 0600 files.
+	// Older versions wrote 0755 / 0644, and os.WriteFile keeps an existing
+	// file's mode — so tighten what is already on disk.
+	tighten(s.dir, 0o700)
+	entries, _ := os.ReadDir(s.dir)
+	for _, e := range entries {
+		p := s.dir + "/" + e.Name()
+		switch {
+		case e.IsDir():
+			tighten(p, 0o700)
+			files, _ := os.ReadDir(p)
+			for _, f := range files {
+				if f.Type().IsRegular() {
+					tighten(p+"/"+f.Name(), 0o600)
+				}
+			}
+		case e.Type().IsRegular():
+			tighten(p, 0o600)
+		}
+	}
+}
+
+// tighten chmods p to want when it carries any permission bit beyond want.
+func tighten(p string, want os.FileMode) {
+	if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&^want != 0 {
+		_ = os.Chmod(p, want)
+	}
+}
+
+// New mints a session rooted at cwd (hh_session_new): a local index id and the
+// stable per-repo hermes_session_id / hermes_session_key. ts is shared between
+// the local id and the hermes id.
 func (s *Store) New(cwd string) (*Record, error) {
 	now := s.nowFn().UTC()
 	ts := now.Format("20060102T150405")
@@ -78,56 +134,28 @@ func (s *Store) New(cwd string) (*Record, error) {
 	if err := s.write(rec); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(s.cwdPtr(cwd), []byte(rec.ID), 0o644); err != nil {
-		return nil, err
-	}
 	return rec, nil
 }
 
-// LatestForCwd ports hh_session_latest_for: the id in the by-cwd pointer, but
-// only if its session file still exists.
-func (s *Store) LatestForCwd(cwd string) (string, bool) {
-	b, err := os.ReadFile(s.cwdPtr(cwd))
-	if err != nil {
-		return "", false
-	}
-	id := strings.TrimRight(string(b), "\n")
-	if _, err := os.Stat(s.path(id)); err != nil {
-		return "", false
-	}
-	return id, true
-}
-
-// Resolve ports hh_session_resolve. mode is "new" | "" | "continue" | <id>.
-// It always refreshes the by-cwd pointer to the resolved session.
+// Resolve picks the session a run works on. mode is "new" | "" | <id>: either
+// a fresh session or the EXACTLY requested one. There is no implicit "latest
+// in this directory" any more — resume is always explicit by id (CLI
+// `--session <id>`, REPL `/session <id>`, rpc {"type":"use"}), which is also
+// how editor plugins work: they keep the id from the ready event.
 func (s *Store) Resolve(mode, cwd string) (*Record, error) {
-	var rec *Record
-	var err error
-	switch mode {
-	case "continue":
-		if id, ok := s.LatestForCwd(cwd); ok {
-			rec, err = s.load(id)
-		} else {
-			// first time in this directory: just start one, quietly - the
-			// REPL banner already shows the new session id.
-			rec, err = s.New(cwd)
-		}
-	case "new", "":
-		rec, err = s.New(cwd)
-	default:
-		rec, err = s.load(mode)
-		if err != nil {
-			return nil, fmt.Errorf("no such session: %s", mode)
-		}
+	if mode == "new" || mode == "" {
+		return s.New(cwd)
 	}
+	rec, err := s.load(mode)
 	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(s.cwdPtr(cwd), []byte(rec.ID), 0o644); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("no such session: %s", mode)
 	}
 	return rec, nil
 }
+
+// Load reads one session record (reading a session's history must not switch
+// the REPL to it).
+func (s *Store) Load(id string) (*Record, error) { return s.load(id) }
 
 // BumpTurn ports _hh_session_write: after a completed run, bump turns, record
 // the run id / time / token count, and adopt the server's session_id if it
@@ -164,12 +192,12 @@ func (s *Store) SetTitleLocal(rec *Record, msg string) (bool, error) {
 
 // List ports hh_session_list's data half: every valid record, newest first.
 func (s *Store) List() ([]Record, error) {
-	matches, err := filepath.Glob(s.dir + "/*.json")
+	dirs, err := filepath.Glob(s.dir + "/*/session.json")
 	if err != nil {
 		return nil, err
 	}
 	var recs []Record
-	for _, p := range matches {
+	for _, p := range dirs {
 		b, err := os.ReadFile(p)
 		if err != nil || !json.Valid(b) {
 			continue
@@ -178,6 +206,7 @@ func (s *Store) List() ([]Record, error) {
 		if json.Unmarshal(b, &r) != nil {
 			continue
 		}
+		r.ID = filepath.Base(filepath.Dir(p))
 		r.path = p
 		recs = append(recs, r)
 	}
@@ -186,12 +215,14 @@ func (s *Store) List() ([]Record, error) {
 }
 
 // FormatList renders the session index newest-first: one row per record with
-// the local id, turn count, last-updated (clipped to the date+time), the repo
-// directory name, and the title. An untitled session shows a blank title (not
-// its cwd) — the DIR column carries the location instead.
+// the local id, turn count, last-updated (clipped to the date+time), idle time
+// (informational cache hint, * past StaleAfter), the repo directory name, and
+// the title. An untitled session shows a blank title (not its cwd) — the DIR
+// column carries the location instead.
 func FormatList(recs []Record) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%-24s  %5s  %8s  %-19s  %-14s  %s\n", "ID", "TURNS", "TOKENS", "UPDATED", "DIR", "TITLE")
+	fmt.Fprintf(&b, "%-24s  %5s  %8s  %-19s  %-7s  %-14s  %s\n", "ID", "TURNS", "TOKENS", "UPDATED", "IDLE", "DIR", "TITLE")
+	anyStale := false
 	for _, r := range recs {
 		upd := r.Updated
 		if len(upd) > 19 {
@@ -208,9 +239,48 @@ func FormatList(recs []Record) string {
 		if r.LastTokens > 0 {
 			tok = "~" + strconv.Itoa(r.LastTokens)
 		}
-		fmt.Fprintf(&b, "%-24s  %5d  %8s  %-19s  %-14s  %s\n", r.ID, r.Turns, tok, upd, dir, r.Title)
+		idle := IdleFor(&r, time.Now())
+		idleCol := idle.Round(time.Minute).String()
+		if idle >= 24*time.Hour {
+			idleCol = strconv.Itoa(int(idle.Hours()/24)) + "d"
+		}
+		if idle > StaleAfter {
+			idleCol += "*"
+			anyStale = true
+		}
+		fmt.Fprintf(&b, "%-24s  %5d  %8s  %-19s  %-7s  %-14s  %s\n", r.ID, r.Turns, tok, upd, idleCol, dir, r.Title)
+	}
+	if anyStale {
+		fmt.Fprintf(&b, "\n* idle >1h: the gateway/model prompt cache has likely expired — the first resumed turn re-reads the full transcript and can cost full-price tokens. Informational only.\n")
 	}
 	return b.String()
+}
+
+// StaleAfter is an informational idle threshold, not a hard expiry: gateway
+// and model layers (Bifrost, hermes-agent, Claude-style provider prompt caches
+// with a ~1h TTL) cache the running conversation. After 1h idle that cache has
+// very likely expired, so resuming re-reads the whole transcript — the first
+// turn then pays full input tokens instead of cached ones. The flag reminds
+// the operator of that cost (matters when Hermes runs on a billed model like
+// Claude); the history re-sync itself always happens regardless.
+//
+// The 1h is a plain informational threshold shown in `sessions` (IDLE column)
+// and `/session`. Future: ask hermes-agent which model + provider a session
+// actually runs on and use that provider's official prompt-cache TTL instead
+// of this fixed hour.
+const StaleAfter = time.Hour
+
+// IdleFor reports how long the session has been idle, measured from its last
+// update. An unparseable timestamp reports zero idle time.
+func IdleFor(rec *Record, now time.Time) time.Duration {
+	t, err := time.Parse(time.RFC3339, rec.Updated)
+	if err != nil {
+		return 0
+	}
+	if d := now.UTC().Sub(t); d > 0 {
+		return d
+	}
+	return 0
 }
 
 // FormatDetail renders one session for the in-REPL `/session` view: local id,
@@ -238,6 +308,12 @@ func FormatDetail(r *Record) string {
 	fmt.Fprintf(&b, "  splits (~compactions): %d\n", r.Splits)
 	fmt.Fprintf(&b, "  tokens               : %s\n", tok)
 	fmt.Fprintf(&b, "  created / updated    : %s  /  %s\n", r.Created, r.Updated)
+	idle := IdleFor(r, time.Now())
+	note := ""
+	if idle > StaleAfter {
+		note = "  (>1h idle: model prompt-cache likely expired — resume re-reads the full transcript, may cost full-price tokens)"
+	}
+	fmt.Fprintf(&b, "  idle                 : %s%s\n", idle.Round(time.Minute), note)
 	fmt.Fprintf(&b, "  dir                  : %s\n", r.Cwd)
 	return b.String()
 }
@@ -253,6 +329,9 @@ func orDash(s string) string {
 // `basename`), authoritative over any .id inside. A readable-but-corrupt file
 // yields a bare record, matching bash's jq-fails-to-empty behaviour.
 func (s *Store) load(id string) (*Record, error) {
+	if err := validID(id); err != nil {
+		return nil, err
+	}
 	p := s.path(id)
 	b, err := os.ReadFile(p)
 	if err != nil {
@@ -272,8 +351,11 @@ func (s *Store) write(rec *Record) error {
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(rec.path), 0o700); err != nil {
+		return err
+	}
 	tmp := rec.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, rec.path)

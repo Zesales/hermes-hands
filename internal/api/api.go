@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Zesales/hermes-hands/internal/config"
+	"github.com/Zesales/hermes-hands/internal/guard"
 )
 
 // retrySleep is bash's fixed `sleep 2` between failed POST / capability
@@ -52,6 +53,34 @@ type Client struct {
 	// they arrive over the SSE stream.
 	StreamMode string
 	OnDelta    func(text string)
+
+	// OnEvent, when set, sees the type of every SSE frame of a run. Any frame
+	// is a sign of life — the REPL's silence watchdog bumps on it.
+	OnEvent func(event string)
+
+	// OnHermesTool, when set, is told about Hermes' OWN server-side tool calls
+	// (SSE tool.started / approval.request) and what became of them: action
+	// "" = a thinking-side tool (web_search, memory, cron, …), "server" = an
+	// exec / file tool doing server-side work, "steered" = one aimed at the
+	// operator's machine the run was redirected away from, "approved" /
+	// "denied" = an approval request and the answer it got. Stream transport
+	// only — poll mode carries no events.
+	OnHermesTool func(tool, preview, action string)
+
+	// Guard judges each of Hermes' own tool calls (tool.started): steer the run
+	// back to the hands or not, and with which message (internal/guard). nil
+	// is guard.Strict — every server-side exec / file call is steered.
+	Guard func(tool, preview string) guard.Verdict
+
+	// OnApproval answers an approval request of Hermes' own server-side tool:
+	// "once" | "session" | "deny". nil denies.
+	OnApproval func(tool, what string) string
+
+	// Trace, when set, receives the /debug wire trace: every HTTP request
+	// (method, path, status, duration), every run input and outcome, every
+	// raw SSE frame, every guard action. Fields carry message text verbatim —
+	// the sink must redact before it writes anything.
+	Trace func(kind string, fields map[string]any)
 
 	Warnf func(string, ...any)
 	Vlogf func(string, ...any)
@@ -177,6 +206,20 @@ func (c *Client) preflight() error {
 // any extra headers. code is the HTTP status (0 when the request never
 // completed, matching curl's "000").
 func (c *Client) do(ctx context.Context, method, url string, body []byte, hdr map[string]string) (code int, respBody []byte, err error) {
+	if c.Trace != nil {
+		start := time.Now()
+		defer func() {
+			f := map[string]any{"method": method, "path": strings.TrimPrefix(url, c.titleBase()),
+				"status": code, "ms": time.Since(start).Milliseconds(), "bytes": len(respBody)}
+			if err != nil {
+				f["err"] = err.Error()
+			}
+			if code != 0 && !is2xx(code) {
+				f["body"] = trunc(string(respBody), 2000)
+			}
+			c.Trace("http", f)
+		}()
+	}
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -238,8 +281,20 @@ func (c *Client) SetTitle(ctx context.Context, hermesSessionID, title string) {
 	}
 	tctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	_, _, _ = c.do(tctx, http.MethodPatch, c.titleBase()+"/api/sessions/"+hermesSessionID,
-		body, map[string]string{"Content-Type": "application/json"})
+	// hermes-agent wants titles unique: two sessions opened with the same
+	// first message would leave the second untitled — retry with "(2)", "(3)".
+	for n := 1; n <= 3; n++ {
+		t := title
+		if n > 1 {
+			t = fmt.Sprintf("%s (%d)", title, n)
+		}
+		body, _ = marshalJSON(map[string]string{"title": t})
+		code, resp, err := c.do(tctx, http.MethodPatch, c.titleBase()+"/api/sessions/"+hermesSessionID,
+			body, map[string]string{"Content-Type": "application/json"})
+		if err != nil || code != 400 || !strings.Contains(string(resp), "already in use") {
+			return
+		}
+	}
 }
 
 // RawRun submits one run with no retry ladder and returns its ids — for the

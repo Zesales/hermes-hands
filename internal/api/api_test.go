@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/Zesales/hermes-hands/internal/hermesmock"
+
+	"github.com/Zesales/hermes-hands/internal/guard"
 )
 
 func testClient(baseURL string) *Client {
@@ -385,6 +387,8 @@ func TestStreamRun_RealShape(t *testing.T) {
 	c := testClient(srv.URL)
 	var deltas []string
 	c.OnDelta = func(s string) { deltas = append(deltas, s) }
+	var events []string
+	c.OnEvent = func(e string) { events = append(events, e) }
 	res, err := c.streamRun(context.Background(), srv.URL, "run_x", true)
 	if err != nil {
 		t.Fatal(err)
@@ -394,6 +398,72 @@ func TestStreamRun_RealShape(t *testing.T) {
 	}
 	if strings.Join(deltas, "") != "Hi there" {
 		t.Errorf("deltas = %q", deltas)
+	}
+	// every frame is a sign of life — including ones without a case
+	if strings.Join(events, ",") != "message.delta,message.delta,reasoning.available,run.completed" {
+		t.Errorf("events = %q", events)
+	}
+}
+
+func TestStreamRun_SandboxGuard(t *testing.T) {
+	// Hermes reaching for its own sandbox tools is steered back to the hands
+	// (once per run), its approval requests are denied, and thinking-side
+	// tools pass untouched.
+	body := "" +
+		`data: {"event": "tool.started", "tool": "web_search", "preview": "go 1.26 release"}` + "\n\n" +
+		`data: {"event": "tool.started", "tool": "terminal", "preview": "make test"}` + "\n\n" +
+		`data: {"event": "tool.started", "tool": "read_file", "preview": "Makefile"}` + "\n\n" +
+		`data: {"event": "approval.request", "request_id": "ap-1", "command": "rm -rf /tmp/x"}` + "\n\n" +
+		`data: {"event": "run.completed", "output": "{\"calls\":[],\"final\":\"ok\"}"}` + "\n\n"
+	var steers, approvals []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		switch r.URL.Path {
+		case "/v1/runs/run_g/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, body)
+		case "/v1/runs/run_g/steer":
+			steers = append(steers, string(b))
+			io.WriteString(w, `{"accepted":true}`)
+		case "/v1/runs/run_g/approval":
+			approvals = append(approvals, string(b))
+			io.WriteString(w, `{"resolved":1}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+	var seen []string
+	c.OnHermesTool = func(tool, preview, action string) { seen = append(seen, tool+"/"+action) }
+	if _, err := c.streamRun(context.Background(), srv.URL, "run_g", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, " ") != "web_search/ terminal/steered read_file/steered approval/denied" {
+		t.Errorf("hermes tools = %q", seen)
+	}
+	if len(steers) != 1 || !strings.Contains(steers[0], "terminal") || !strings.Contains(steers[0], `"input"`) {
+		t.Errorf("steers = %q, want exactly one, naming the first sandbox tool", steers)
+	}
+	if len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"deny"`) || !strings.Contains(approvals[0], `"request_id":"ap-1"`) {
+		t.Errorf("approvals = %q", approvals)
+	}
+}
+
+func TestTraceSeesRunAndFrames(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `data: {"event": "run.completed", "output": "done"}`+"\n\n")
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+	var kinds []string
+	c.Trace = func(kind string, f map[string]any) { kinds = append(kinds, kind) }
+	if _, err := c.streamRun(context.Background(), srv.URL, "r", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(kinds, ",") != "http,sse" {
+		t.Errorf("trace kinds = %q", kinds)
 	}
 }
 
@@ -423,5 +493,73 @@ func TestWantStream(t *testing.T) {
 	c.StreamMode, c.Caps = "on", Caps{}
 	if !c.wantStream() {
 		t.Error("on -> stream even without caps")
+	}
+}
+
+func TestSetTitle_RetriesTakenTitle(t *testing.T) {
+	// hermes-agent rejects a title another session already has: the second
+	// session must still get one ("… (2)")
+	var titles []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ Title string }
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		titles = append(titles, b.Title)
+		if b.Title == "fix CI" {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"error":{"message":"Title 'fix CI' is already in use by session hh-x","code":"invalid_title"}}`)
+			return
+		}
+		io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+	testClient(srv.URL).SetTitle(context.Background(), "hh-2", "fix CI")
+	if strings.Join(titles, " | ") != "fix CI | fix CI (2)" {
+		t.Errorf("titles tried = %q", titles)
+	}
+}
+
+func TestStreamRun_GuardPolicyAndOperatorApproval(t *testing.T) {
+	// with a policy: server-side work passes (shown as "server"), a call aimed
+	// at the operator's machine is steered; an approval goes to the operator
+	body := "" +
+		`data: {"event": "tool.started", "tool": "execute_code", "preview": "print(1+1)"}` + "\n\n" +
+		`data: {"event": "tool.started", "tool": "terminal", "preview": "make test"}` + "\n\n" +
+		`data: {"event": "approval.request", "request_id": "ap-7", "command": "rm -rf /tmp/build"}` + "\n\n" +
+		`data: {"event": "run.completed", "output": "{\"calls\":[],\"final\":\"ok\"}"}` + "\n\n"
+	var steers, approvals []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		switch r.URL.Path {
+		case "/v1/runs/run_p/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, body)
+		case "/v1/runs/run_p/steer":
+			steers = append(steers, string(b))
+			io.WriteString(w, `{"accepted":true}`)
+		case "/v1/runs/run_p/approval":
+			approvals = append(approvals, string(b))
+			io.WriteString(w, `{"resolved":1}`)
+		}
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+	c.Guard = func(tool, preview string) guard.Verdict {
+		return guard.Check(tool, preview, t.TempDir(), "")
+	}
+	var asked string
+	c.OnApproval = func(tool, what string) string { asked = what; return "once" }
+	var seen []string
+	c.OnHermesTool = func(tool, preview, action string) { seen = append(seen, tool+"/"+action) }
+	if _, err := c.streamRun(context.Background(), srv.URL, "run_p", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, " ") != "execute_code/server terminal/steered approval/approved" {
+		t.Errorf("hermes tools = %q", seen)
+	}
+	if len(steers) != 1 || !strings.Contains(steers[0], "`make`") || !strings.Contains(steers[0], "server-side work") {
+		t.Errorf("steer = %q, want the policy's reason and the server-side allowance", steers)
+	}
+	if asked != "rm -rf /tmp/build" || len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"once"`) {
+		t.Errorf("approval: asked %q, sent %q", asked, approvals)
 	}
 }
