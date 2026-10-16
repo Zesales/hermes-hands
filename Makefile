@@ -103,7 +103,7 @@ dev-install: build  ## build, then copy the binary onto your PATH  (PREFIX=/BIND
 	@mkdir -p $(BINDIR)
 	install -m 0755 dist/hermes-hands $(BINDIR)/hermes-hands
 	@echo "installed $(BINDIR)/hermes-hands"
-	@echo "next: hermes-hands setup"
+	@[ -e "$(REAL_HOME)/secrets.enc" ] || [ -e "$(REAL_HOME)/secrets" ] || echo "next: hermes-hands setup"
 
 uninstall:  ## remove the installed binary from your PATH
 	rm -f $(BINDIR)/hermes-hands
