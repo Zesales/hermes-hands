@@ -479,6 +479,7 @@ make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
 make golden          # rewrite testdata/golden/ after an intended UI change
 make race            # the tests under the race detector
+make cover           # coverage per package: unit tests, then what the golden runs reach
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
 make ci              # the PR gate locally: lint + test + race + release cross-build
 make dev-install     # build + copy dist/hermes-hands onto your PATH
@@ -514,8 +515,8 @@ job is a required check for merging); `release.yml` tags + publishes on merge
 **Golden transcripts** (`testdata/golden/`) pin what the operator sees: one
 full turn through the real `main()` — the REPL and `--rpc` — against the
 streaming mock (Hermes' own tool events, a steered call, both kinds of
-approval prompt, a final whose escapes the 5-byte deltas cut), masked for
-paths, ids and times. `make test` fails on any difference; an intended change
+approval prompt, a final whose escapes the 5-byte deltas cut), every slash
+command and every rpc request type once, masked for paths, ids and times. `make test` fails on any difference; an intended change
 is `make golden` plus a reviewed diff of those files.
 
 A **size budget** (`budget_test.go`) keeps one job per unit: no function over

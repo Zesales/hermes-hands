@@ -100,6 +100,19 @@ type does one job.
 - **`make race`**: the tests under the race detector (the golden runs drive
   the real REPL and `--rpc` through it); part of `make ci` and of the PR
   check (`test.yml`).
+- **Every slash command in a golden transcript** (`repl_commands.txt`):
+  /help, /yolo twice, an unknown command, a turn, /out, /history, /sessions,
+  /session, /debug, /check, /config, /compact, /fork, /new. Written by the
+  code from before this refactor and passed by today's — and that old code
+  reproduces the two other transcripts byte for byte too.
+- **`make cover`**: coverage per package — the unit tests', then what the
+  golden runs reach in their subprocess (`go tool covdata`), where the REPL
+  and `--rpc` actually get exercised. The golden runs set `GOCOVERDIR`, so
+  `go test -cover` no longer breaks them with a warning in the transcript.
+- **GitHub checks**: `test.yml` runs on a read-only token, a newer push
+  cancels the run in flight, and the coverage table lands on the run's
+  summary page; `pr-label.yml` needs no token rights at all; every job has a
+  timeout.
 
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 

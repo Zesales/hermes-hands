@@ -27,7 +27,9 @@ make ci         # the whole PR gate: lint (linux + darwin) + test + cross-build
 in for hermes-agent). It includes the **golden transcripts** in
 `testdata/golden/`: what the REPL and `--rpc` show for one full turn. A change
 that is meant to alter that output runs `make golden` and commits the
-rewritten files — the diff is part of the review. If your change touches how hermes-hands talks to
+rewritten files — the diff is part of the review. `make cover` shows the
+coverage per package, including what the golden runs reach (they drive the
+REPL and `--rpc` in a subprocess, which a plain `-cover` doesn't count). If your change touches how hermes-hands talks to
 hermes-agent, also try it against a real gateway and name its version in the
 PR.
 
