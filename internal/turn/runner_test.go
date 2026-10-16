@@ -38,7 +38,7 @@ func newTestRunner(t *testing.T, srv *httptest.Server) (*Runner, *session.Store)
 		AllowHTTP: true, Retries: 1, PollInterval: time.Millisecond, RunTimeout: 5 * time.Second,
 		Warnf: func(string, ...any) {},
 	}
-	if _, err := client.Check(context.Background()); err != nil { // reads the caps: stream or poll
+	if _, err := client.Server().Check(context.Background()); err != nil { // reads the caps: stream or poll
 		t.Fatal(err)
 	}
 	store, err := session.Open(t.TempDir())
@@ -50,7 +50,7 @@ func newTestRunner(t *testing.T, srv *httptest.Server) (*Runner, *session.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lp := &loop.Loop{API: client, MaxRounds: 5,
+	lp := &loop.Loop{API: client.Runs(), MaxRounds: 5,
 		Dispatch: &dispatch.Dispatcher{RepoRoot: dir, Approver: prompt.AutoApprover{}, MaxOutput: 20000, RunTimeout: 5 * time.Second}}
 	r := &Runner{Client: client, Loop: lp, Store: store, Shell: nopShell{}, Timeout: 30 * time.Second, Interval: time.Minute}
 	log, _ := store.OpenLog(rec)

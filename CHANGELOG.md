@@ -66,6 +66,17 @@ type does one job.
   lines before this refactor); the package doc names the hands' tools
   `local_*`.
 
+### The API by what it talks to
+
+- **`api.Client`** stays the one object everyone holds — the connection and
+  the running turn's hooks — and its views say which part of the Hermes API
+  a caller uses: `Runs()` (Ask, State, Stop), `Sessions()` (List, Info,
+  SetTitle, Fork), `Server()` (Check, the version, capabilities). The loop
+  asks through `client.Runs()`.
+- `api.go` (769 lines) and `ask.go` became `client.go`, `transport.go` (the
+  shared HTTP plumbing), `runs.go`, `sessions.go`, `server.go` and
+  `decode.go`; `stream.go` stays the SSE stream.
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).

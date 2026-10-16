@@ -36,7 +36,7 @@ func TestAsk_PlainCompleted(t *testing.T) {
 	defer srv.Close()
 	c := testClient(srv.URL)
 
-	res, err := c.Ask(context.Background(), "hi", "hh-abc-ts", "hermes-hands:key")
+	res, err := c.Runs().Ask(context.Background(), "hi", "hh-abc-ts", "hermes-hands:key")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestCheck_OK(t *testing.T) {
 	defer srv.Close()
 	c := testClient(srv.URL)
 
-	cr, err := c.Check(context.Background())
+	cr, err := c.Server().Check(context.Background())
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestAsk_401Fatal(t *testing.T) {
 	defer srv.Close()
 
 	c := testClient(srv.URL)
-	_, err := c.Ask(context.Background(), "hi", "hh-x", "k")
+	_, err := c.Runs().Ask(context.Background(), "hi", "hh-x", "k")
 	if err == nil || !strings.Contains(err.Error(), "HTTP 401 at /v1/runs - HERMES_API_KEY rejected.") {
 		t.Fatalf("err = %v, want the 401 message", err)
 	}
@@ -142,7 +142,7 @@ func TestAsk_SessionDropRetry(t *testing.T) {
 	c := testClient(srv.URL)
 	c.Warnf = func(string, ...any) {} // silence the expected warning
 
-	res, err := c.Ask(context.Background(), "hi", "hh-sess-id", "hermes-hands:sesskey")
+	res, err := c.Runs().Ask(context.Background(), "hi", "hh-sess-id", "hermes-hands:sesskey")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestAsk_RetryThenUnreachable(t *testing.T) {
 	defer srv.Close()
 
 	c := testClient(srv.URL) // Retries: 1 -> 2 attempts
-	_, err := c.Ask(context.Background(), "hi", "", "")
+	_, err := c.Runs().Ask(context.Background(), "hi", "", "")
 	if err == nil || !strings.Contains(err.Error(), "POST /v1/runs unreachable") {
 		t.Fatalf("err = %v, want unreachable", err)
 	}
@@ -201,7 +201,7 @@ func TestAsk_PollFailed(t *testing.T) {
 	defer srv.Close()
 
 	c := testClient(srv.URL)
-	_, err := c.Ask(context.Background(), "hi", "", "")
+	_, err := c.Runs().Ask(context.Background(), "hi", "", "")
 	if err == nil || err.Error() != "run run_1 failed: boom" {
 		t.Fatalf("err = %v, want 'run run_1 failed: boom'", err)
 	}
@@ -228,7 +228,7 @@ func TestSetTitle_SwallowsError(t *testing.T) {
 	defer srv.Close()
 
 	c := testClient(srv.URL)
-	c.SetTitle(context.Background(), "hh-abc", "my <title> & more") // must not panic
+	c.Sessions().SetTitle(context.Background(), "hh-abc", "my <title> & more") // must not panic
 
 	got.mu.Lock()
 	defer got.mu.Unlock()
@@ -275,13 +275,13 @@ func TestStopRun_FiresPOST(t *testing.T) {
 		w.WriteHeader(202)
 	}))
 	defer srv.Close()
-	testClient(srv.URL).StopRun(context.Background(), "run_9")
+	testClient(srv.URL).Runs().Stop(context.Background(), "run_9")
 	if got != "POST /v1/runs/run_9/stop" {
 		t.Errorf("StopRun hit %q", got)
 	}
 	// empty run id is a no-op
 	got = ""
-	testClient(srv.URL).StopRun(context.Background(), "")
+	testClient(srv.URL).Runs().Stop(context.Background(), "")
 	if got != "" {
 		t.Errorf("StopRun('') should not call, hit %q", got)
 	}
@@ -304,23 +304,23 @@ func TestRunState(t *testing.T) {
 	c := testClient(srv.URL)
 
 	status = `{"status":"running"}`
-	if st, err := c.RunState(context.Background(), "run_7"); err != nil || st != "running" {
+	if st, err := c.Runs().State(context.Background(), "run_7"); err != nil || st != "running" {
 		t.Errorf("RunState running = %q, %v", st, err)
 	}
 	status = `{"status":"completed","output":"hi"}`
-	if st, err := c.RunState(context.Background(), "run_7"); err != nil || st != "completed" {
+	if st, err := c.Runs().State(context.Background(), "run_7"); err != nil || st != "completed" {
 		t.Errorf("RunState completed = %q, %v", st, err)
 	}
 	status = `{"output":"hi"}` // no status field
-	if st, err := c.RunState(context.Background(), "run_7"); err != nil || st != "" {
+	if st, err := c.Runs().State(context.Background(), "run_7"); err != nil || st != "" {
 		t.Errorf("RunState missing = %q, %v (want empty, nil)", st, err)
 	}
 	code = 404
-	if st, err := c.RunState(context.Background(), "run_7"); err == nil || st != "" {
+	if st, err := c.Runs().State(context.Background(), "run_7"); err == nil || st != "" {
 		t.Errorf("RunState 404 = %q, %v (want error)", st, err)
 	}
 	// empty run id -> error, no request
-	if _, err := c.RunState(context.Background(), ""); err == nil {
+	if _, err := c.Runs().State(context.Background(), ""); err == nil {
 		t.Error("RunState('') should error")
 	}
 }
@@ -335,7 +335,7 @@ func TestSessionInfo_LenientParse(t *testing.T) {
 		  "input_tokens":600,"cache_read_tokens":7500,"started_at":1788400000,"ended_at":"2026-09-03"}}`)
 	}))
 	defer srv.Close()
-	si, err := testClient(srv.URL).SessionInfo(context.Background(), "hh-x")
+	si, err := testClient(srv.URL).Sessions().Info(context.Background(), "hh-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestListSessions_ArrayAndWrapped(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, body)
 		}))
-		ss, err := testClient(srv.URL).ListSessions(context.Background())
+		ss, err := testClient(srv.URL).Sessions().List(context.Background())
 		srv.Close()
 		if err != nil {
 			t.Fatalf("body %s: %v", body, err)
@@ -515,7 +515,7 @@ func TestSetTitle_RetriesTakenTitle(t *testing.T) {
 		io.WriteString(w, `{}`)
 	}))
 	defer srv.Close()
-	testClient(srv.URL).SetTitle(context.Background(), "hh-2", "fix CI")
+	testClient(srv.URL).Sessions().SetTitle(context.Background(), "hh-2", "fix CI")
 	if strings.Join(titles, " | ") != "fix CI | fix CI (2)" {
 		t.Errorf("titles tried = %q", titles)
 	}

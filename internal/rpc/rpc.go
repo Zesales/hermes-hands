@@ -84,7 +84,7 @@ func Run(smode string, d Deps) int {
 	// Preflight like the REPL: it also reads /v1/capabilities, without which
 	// the client never streams — and only the SSE stream carries Hermes' tool
 	// events (the sandbox guard) and live deltas.
-	srv, err := a.Client.Check(context.Background())
+	srv, err := a.Client.Server().Check(context.Background())
 	if err != nil {
 		emit(map[string]any{"type": "error", "message": err.Error()})
 		return 1
@@ -223,7 +223,7 @@ func Run(smode string, d Deps) int {
 			emit(map[string]any{"type": "debug", "id": id, "on": debugOn, "path": a.Store.DebugPath(rec)})
 
 		case "check":
-			res, e := a.Client.Check(context.Background())
+			res, e := a.Client.Server().Check(context.Background())
 			if e != nil {
 				emit(map[string]any{"type": "check", "id": id, "ok": false, "message": e.Error()})
 				continue

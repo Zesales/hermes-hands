@@ -62,7 +62,7 @@ func (r *repl) setup(string) {
 			r.a.Bind(r.runner)
 			r.wireApp()
 			r.configured = r.a.Cfg.Configured()
-			if _, err := r.a.Client.Check(context.Background()); err != nil {
+			if _, err := r.a.Client.Server().Check(context.Background()); err != nil {
 				fmt.Fprintf(os.Stderr, "BLOCKED: %v\n", err)
 			}
 			rec := r.rec
@@ -110,7 +110,7 @@ func (r *repl) debug(arg string) {
 }
 
 func (r *repl) check(string) {
-	if res, err := r.a.Client.Check(context.Background()); err != nil {
+	if res, err := r.a.Client.Server().Check(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "BLOCKED: %s\n", err)
 	} else {
 		r.configured = true

@@ -44,7 +44,7 @@ func (a *App) prepareResume(rec *session.Record, evs []session.Event) {
 	if idle := session.IdleFor(rec, time.Now()); idle > session.StaleAfter {
 		Logf("session %s: idle %s — model prompt caches (gateway/hermes-agent/Claude-style) likely expired; the first turn re-reads the full conversation (token cost)", rec.ID, idle.Round(time.Minute))
 	}
-	if si, err := a.Client.SessionInfo(context.Background(), rec.HermesSessionID); err == nil && si.Messages > 0 {
+	if si, err := a.Client.Sessions().Info(context.Background(), rec.HermesSessionID); err == nil && si.Messages > 0 {
 		return
 	}
 	if r := session.Recap(evs); r != "" {
