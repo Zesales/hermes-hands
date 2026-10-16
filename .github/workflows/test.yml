@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The Go toolchain is the pinned container from the Makefile (GO_IMAGE,
       # must equal go.mod) — the same one `make` uses locally, so CI and the
       # maintainer's box run the identical toolchain. Deps are vendored.
@@ -31,7 +31,12 @@ jobs:
       - name: gofmt + go vet (linux + darwin)
         run: make lint
       - name: go test
-        run: make test
+        run: make test 2>&1 | tee test.log
+      # A failure's test names and want/got lines as annotations: readable on
+      # the PR and through the API, without opening the log.
+      - name: Failed tests as annotations
+        if: failure()
+        run: grep -E -- '--- FAIL|^FAIL|_test\.go:[0-9]+:|^[[:space:]]+(want|got):' test.log | head -40 | sed -E 's/^[[:space:]]*/::error::/' || true
       # The same tests under the race detector: the SSE stream, the silence
       # watchdog and the turn share state across goroutines.
       - name: go test -race
@@ -60,10 +65,15 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: false
       - name: go test (macOS)
-        run: make test GO_MODE=local
+        run: make test GO_MODE=local 2>&1 | tee test.log
+      # A failure's test names and want/got lines as annotations: readable on
+      # the PR and through the API, without opening the log.
+      - name: Failed tests as annotations
+        if: failure()
+        run: grep -E -- '--- FAIL|^FAIL|_test\.go:[0-9]+:|^[[:space:]]+(want|got):' test.log | head -40 | sed -E 's/^[[:space:]]*/::error::/' || true

@@ -120,7 +120,9 @@ func jsonEscape(s string) (string, int) {
 		if len(s) < 6 {
 			return "", 0
 		}
-		r1, err := strconv.ParseUint(s[2:6], 16, 32)
+		// 16 bits: \uXXXX is one UTF-16 code unit, so the rune conversions
+		// below cannot overflow (CodeQL: incorrect integer conversion)
+		r1, err := strconv.ParseUint(s[2:6], 16, 16)
 		if err != nil {
 			return "u", 2
 		}
@@ -129,7 +131,7 @@ func jsonEscape(s string) (string, int) {
 				return "", 0
 			}
 			if s[6] == '\\' && s[7] == 'u' {
-				if r2, err := strconv.ParseUint(s[8:12], 16, 32); err == nil {
+				if r2, err := strconv.ParseUint(s[8:12], 16, 16); err == nil {
 					if r := utf16.DecodeRune(rune(r1), rune(r2)); r != utf8.RuneError {
 						return string(r), 12
 					}

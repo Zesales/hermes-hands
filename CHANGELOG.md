@@ -4,7 +4,7 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## Unreleased (`bump:patch`) — Go 1.26.9 security fixes; refactor: one job per unit
+## 0.12.0 — (unreleased, `bump:minor`) Go 1.26.9 security fixes; refactor: one job per unit
 
 hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
@@ -142,6 +142,19 @@ every package and type does one job.
   which the linux job only cross-compiles and vets for (host Go via
   `actions/setup-go`, exactly go.mod's version); **CodeQL** (`codeql.yml`)
   scans the Go code on PRs, on main and weekly, results in the Security tab.
+- **CodeQL's first findings fixed**: the stream preview parsed `\uXXXX`
+  with a 32-bit size and converted it to a rune — four hex digits can never
+  overflow it, but nothing said so; it parses 16 bits now (the size of a
+  UTF-16 code unit), so the bound is in the code (four alerts, one cause).
+- **`actions/checkout` v7.0.1** (was v4.2.2, which still ran on the
+  deprecated Node.js 20 — the runner warned on every job): a patch release
+  that carries the fixes GitHub released for all checkout lines on
+  2026-07-20. Its v6 change (credentials in a separate file) keeps the tag
+  push in `release.yml` working.
+- **A failed test is an annotation**: both test jobs keep the output and,
+  on a failure, put the failing tests with their `want` / `got` lines on the
+  run as annotations — readable on the PR and through the API without the
+  log.
 - **Dependabot** watches the pinned GitHub Actions only, with a 14-day
   cooldown and the `bump:none` label; Go modules stay vendored and updated
   on purpose. Every action pin reads `@<sha> # vX.Y.Z`, the form Dependabot
