@@ -52,7 +52,7 @@ func Run(smode string, d Deps) int {
 	defer func() { r.a.Shell.Stop() }()
 
 	if r.configured {
-		res, err := a.Client.Check(context.Background())
+		res, err := a.Client.Server().Check(context.Background())
 		if err != nil {
 			fmt.Printf("BLOCKED: %v\n", err)
 			fmt.Fprintln(os.Stderr, "(fix the URL/key: `hermes-hands setup`, or /setup in-session)")

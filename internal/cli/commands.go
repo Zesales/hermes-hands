@@ -30,7 +30,7 @@ func (b Build) newApp() (*app.App, error) { return app.New(loadCfgOrExit(), b.In
 
 func (b Build) runCheck() int {
 	cfg := loadCfgOrExit()
-	res, err := app.CheckClient(cfg).Check(context.Background())
+	res, err := app.CheckClient(cfg).Server().Check(context.Background())
 	if err != nil {
 		fmt.Printf("BLOCKED: %s\n", err)
 		return 1
@@ -66,7 +66,7 @@ func runEventsDump(input string) int {
 		return 1
 	}
 	cl := app.CheckClient(cfg)
-	rid, sid, err := cl.RawRun(context.Background(), input)
+	rid, sid, err := cl.Runs().RawRun(context.Background(), input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return 1
@@ -74,7 +74,7 @@ func runEventsDump(input string) int {
 	fmt.Fprintf(os.Stderr, "run_id=%s session_id=%s\n--- /v1/runs/%s/events ---\n", rid, sid, rid)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err := cl.RawEvents(ctx, rid, os.Stdout); err != nil {
+	if err := cl.Runs().RawEvents(ctx, rid, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "\n[events: %v]\n", err)
 	}
 	return 0
@@ -88,7 +88,7 @@ func runRawGet(path string) int {
 		fmt.Fprintln(os.Stderr, "not configured")
 		return 1
 	}
-	body, err := app.CheckClient(cfg).RawGet(context.Background(), path)
+	body, err := app.CheckClient(cfg).Server().RawGet(context.Background(), path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
@@ -106,7 +106,7 @@ func runRawRun(body string) int {
 		return 1
 	}
 	cl := app.CheckClient(cfg)
-	rid, sid, err := cl.RawRunBody(context.Background(), []byte(body))
+	rid, sid, err := cl.Runs().RawRunBody(context.Background(), []byte(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		return 1
@@ -114,7 +114,7 @@ func runRawRun(body string) int {
 	fmt.Fprintf(os.Stderr, "run_id=%s session_id=%s\n--- events ---\n", rid, sid)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	if err := cl.RawEvents(ctx, rid, os.Stdout); err != nil {
+	if err := cl.Runs().RawEvents(ctx, rid, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "\n[events: %v]\n", err)
 	}
 	return 0

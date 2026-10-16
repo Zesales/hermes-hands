@@ -101,7 +101,7 @@ func (r *Runner) Run(input string, fe Frontend) Result {
 	default:
 		if out.OK {
 			if changed, _ := r.Store.SetTitleLocal(rec, input); changed && rec.HermesSessionID != "" {
-				r.Client.SetTitle(context.Background(), rec.HermesSessionID, rec.Title)
+				r.Client.Sessions().SetTitle(context.Background(), rec.HermesSessionID, rec.Title)
 			}
 		}
 		ans := log.Add(session.Event{Kind: session.KindAnswer, Text: redact.Scrub(out.Answer), OK: session.Bool(out.OK)})
@@ -169,7 +169,7 @@ func (r *Runner) watchdog() *watchdog {
 			if rid == "" {
 				return true // between rounds: local dispatch is the holdup, not the brain
 			}
-			st, err := r.Client.RunState(ctx, rid)
+			st, err := r.Client.Runs().State(ctx, rid)
 			if err != nil {
 				return false // can't confirm it's alive — let the deadline run down
 			}
@@ -194,7 +194,7 @@ func (r *Runner) Cancel() {
 	}
 	r.mu.Unlock()
 	if rid != "" {
-		go r.Client.StopRun(context.Background(), rid)
+		go r.Client.Runs().Stop(context.Background(), rid)
 	}
 }
 

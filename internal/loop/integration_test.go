@@ -67,7 +67,7 @@ func newHarness(t *testing.T, mode string) *harness {
 		MaxOutput:  20000,
 		RunTimeout: 10 * time.Second,
 	}
-	l := &loop.Loop{API: cl, Dispatch: d, MaxRounds: 8, Scrub: redact.Scrub}
+	l := &loop.Loop{API: cl.Runs(), Dispatch: d, MaxRounds: 8, Scrub: redact.Scrub}
 	return &harness{client: cl, store: store, disp: d, loop: l, shell: sh}
 }
 

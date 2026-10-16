@@ -23,11 +23,11 @@ func SessionList(store *session.Store, client *api.Client, verbose bool) string 
 		return session.FormatList(recs)
 	}
 	ctx := context.Background()
-	ss, err := client.ListSessions(ctx)
+	ss, err := client.Sessions().List(ctx)
 	if err != nil {
 		return session.FormatList(recs) + "\nhermes-agent: " + err.Error() + "\n"
 	}
-	info := func(id string) (api.SrvSession, error) { return client.SessionInfo(ctx, id) }
+	info := func(id string) (api.SrvSession, error) { return client.Sessions().Info(ctx, id) }
 	return formatSessionCompare(recs, ss, info)
 }
 

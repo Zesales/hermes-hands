@@ -19,7 +19,7 @@ func (r *repl) session(arg string) {
 			fresh = r.rec
 		}
 		fmt.Fprint(os.Stderr, session.FormatDetail(fresh))
-		if si, err := r.a.Client.SessionInfo(context.Background(), fresh.HermesSessionID); err == nil {
+		if si, err := r.a.Client.Sessions().Info(context.Background(), fresh.HermesSessionID); err == nil {
 			fmt.Fprintln(os.Stderr, "  — from hermes-agent —")
 			if si.Messages > 0 {
 				fmt.Fprintf(os.Stderr, "  messages             : %d\n", si.Messages)
@@ -73,7 +73,7 @@ func (r *repl) fork(string) {
 		fmt.Fprintln(os.Stderr)
 		return
 	}
-	newID, err := r.a.Client.Fork(context.Background(), r.rec.HermesSessionID)
+	newID, err := r.a.Client.Sessions().Fork(context.Background(), r.rec.HermesSessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  BLOCKED: %v\n\n", err)
 		return

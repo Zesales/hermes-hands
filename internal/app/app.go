@@ -109,7 +109,7 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 		Rules:      known.Scoped(), // a subdirectory's rules, at the first call into it
 	}
 	lp := &loop.Loop{
-		API: client, Dispatch: disp,
+		API: client.Runs(), Dispatch: disp,
 		MaxRounds: cfg.MaxRounds, Scrub: redact.Scrub,
 		RepoRoot: repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
 		Vlogf: vlogf, Warnf: Warnf,
