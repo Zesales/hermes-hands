@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Zesales/hermes-hands/internal/ttyio"
 )
@@ -56,6 +57,13 @@ type TTYApprover struct {
 	// animated "working" spinner so it doesn't overwrite the prompt line.
 	Pause func() (resume func())
 
+	// OnAnswer, when set, hears every approval the operator actually answered
+	// at the prompt — not auto / never / the [a]ll latch: what the prompt
+	// showed (summary, detail), the answer (yes | no | all | quit) and how
+	// long it waited. The REPL records it, so a replayed session shows the
+	// prompt where it stood.
+	OnAnswer func(summary, detail, answer string, waited time.Duration)
+
 	// openTTY is indirected for tests; nil means the real /dev/tty.
 	openTTY func() (io.ReadWriteCloser, error)
 }
@@ -92,6 +100,7 @@ func (a *TTYApprover) Confirm(summary, detail string) Decision {
 
 	// Preferred path: the REPL's liner reads the answer, so there is exactly
 	// one owner of the terminal.
+	asked := time.Now()
 	if a.AskLine != nil {
 		fmt.Fprintf(out, "\n  ⚠  %s\n", summary)
 		if detail != "" {
@@ -99,9 +108,12 @@ func (a *TTYApprover) Confirm(summary, detail string) Decision {
 		}
 		line, err := a.AskLine(q)
 		if err != nil { // Ctrl-C / EOF at the prompt
+			a.answered(summary, detail, "quit", asked)
 			return AbortTurn
 		}
-		return decide(line, a)
+		d := decide(line, a)
+		a.answered(summary, detail, AnswerWord(line), asked)
+		return d
 	}
 
 	// Fallback: raw /dev/tty (used only when there is no line reader, e.g. a
@@ -123,9 +135,32 @@ func (a *TTYApprover) Confirm(summary, detail string) Decision {
 
 	line, err := bufio.NewReader(tty).ReadString('\n')
 	if err != nil {
+		a.answered(summary, detail, "quit", asked)
 		return AbortTurn
 	}
-	return decide(line, a)
+	d := decide(line, a)
+	a.answered(summary, detail, AnswerWord(line), asked)
+	return d
+}
+
+func (a *TTYApprover) answered(summary, detail, answer string, asked time.Time) {
+	if a.OnAnswer != nil {
+		a.OnAnswer(summary, detail, answer, time.Since(asked))
+	}
+}
+
+// AnswerWord names what a typed y/n/a/q answer did, the way decide reads it.
+func AnswerWord(line string) string {
+	switch strings.Trim(line, " \t\r\n") {
+	case "y", "Y":
+		return "yes"
+	case "a", "A":
+		return "all"
+	case "q", "Q":
+		return "quit"
+	default:
+		return "no"
+	}
 }
 
 func decide(line string, a *TTYApprover) Decision {

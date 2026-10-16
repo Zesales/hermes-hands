@@ -72,6 +72,9 @@ func TestCheck_OK(t *testing.T) {
 	if cr.Base != srv.URL {
 		t.Errorf("Base = %q, want %q", cr.Base, srv.URL)
 	}
+	if cr.Version != "0.22.2" {
+		t.Errorf("Version = %q, want the /health version", cr.Version)
+	}
 }
 
 func TestAsk_401Fatal(t *testing.T) {

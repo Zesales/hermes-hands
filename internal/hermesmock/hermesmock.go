@@ -45,6 +45,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"model":   "hermes-agent",
 			"runtime": map[string]any{"mode": "server_agent"},
 		})
+	case r.Method == http.MethodGet && r.URL.Path == "/health": // unauthenticated, at the root like the gateway's
+		writeJSON(w, 200, map[string]any{"status": "ok", "platform": "hermes-agent", "version": "0.22.2"})
 	case r.Method == http.MethodGet && reRun.MatchString(r.URL.Path):
 		id := reRun.FindStringSubmatch(r.URL.Path)[1]
 		s.mu.Lock()

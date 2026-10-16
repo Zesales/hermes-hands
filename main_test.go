@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zesales/hermes-hands/internal/api"
 	"github.com/Zesales/hermes-hands/internal/config"
 	"github.com/Zesales/hermes-hands/internal/prompt"
+	"github.com/Zesales/hermes-hands/internal/session"
+	"github.com/Zesales/hermes-hands/internal/ui"
 )
 
 func TestParseArgsTable(t *testing.T) {
@@ -41,6 +45,9 @@ func TestParseArgsTable(t *testing.T) {
 		{"session then flag needs an id", []string{"--session", "--yolo"}, parsed{errMsg: "--session needs a session id (ids from --session-list)", yolo: true}},
 		{"sessions new", []string{"sessions", "new"}, parsed{action: "sessionnew"}},
 		{"sessions list", []string{"sessions"}, parsed{action: "sessions"}},
+		{"session-list verbose", []string{"--session-list-verbose"}, parsed{action: "sessions", verbose: true}},
+		{"sessions -v", []string{"sessions", "-v"}, parsed{action: "sessions", verbose: true}},
+		{"session-list --verbose", []string{"--session-list", "--verbose"}, parsed{action: "sessions", verbose: true}},
 		{"yolo", []string{"--yolo"}, parsed{yolo: true}},
 		{"unknown option", []string{"--bogus"}, parsed{errMsg: "unknown option: --bogus"}},
 		{"stray argument", []string{"why is ci red"}, parsed{errMsg: "unexpected argument: why is ci red (there is no one-shot; start a session)"}},
@@ -330,6 +337,39 @@ func TestFinalStreamer(t *testing.T) {
 		t.Errorf("split calls-round streamed %q", got.String())
 	}
 
+	// an escape split by the chunk boundary waits for its second half. The
+	// live case (2026-10-16): `\n` cut after the `\` printed a literal `\n`,
+	// and a `\\\"` cut after its first `\` ended the preview at the `\"` —
+	// the answer was then printed a second time.
+	for _, tc := range []struct {
+		chunks []string
+		want   string
+	}{
+		{[]string{`{"calls":[],"final":"a\`, `nb\`, `"c\`, `\\"d"}`}, "a\nb\"c\\\"d"},
+		{[]string{`{"calls":[],"final":"\u00`, `e4 \ud83d`, `\ude00 x\`, `u0041"}`}, "ä 😀 xA"},
+		{[]string{`{"calls":[],"final":"tab\`, `t cr\`, `r"}`}, "tab\t cr\r"},
+	} {
+		got.Reset()
+		f := &finalStreamer{emit: func(s string) { got.WriteString(s) }}
+		for _, ch := range tc.chunks {
+			f.feed(ch)
+		}
+		if got.String() != tc.want {
+			t.Errorf("chunks %q streamed %q, want %q", tc.chunks, got.String(), tc.want)
+		}
+	}
+
+	// "final": null ahead of the calls streams nothing (it used to preview
+	// the next key's name)
+	got.Reset()
+	fs5 := &finalStreamer{emit: func(s string) { got.WriteString(s) }}
+	for _, ch := range []string{`{"final": `, `null, "calls": [{"tool":"local_shell"}]}`} {
+		fs5.feed(ch)
+	}
+	if got.Len() != 0 {
+		t.Errorf("final-first calls-round streamed %q", got.String())
+	}
+
 	// reset keeps the emit fn, drops state
 	fs.reset()
 	if fs.started || fs.done || fs.pos != 0 || fs.emit == nil {
@@ -420,5 +460,118 @@ func TestSandboxGuardModes(t *testing.T) {
 	}
 	if v := smart("tool_call", "Local Shell"); !v.Steer || v.Kind != "hands-tool" {
 		t.Errorf("smart steers a hands tool called as Hermes' own: %+v", v)
+	}
+}
+
+func TestFormatSessionCompare(t *testing.T) {
+	recs := []session.Record{
+		{ID: "hh_a", HermesSessionID: "hh-1-a", Turns: 2, Title: "listed"},
+		{ID: "hh_b", HermesSessionID: "hh-1-b", Turns: 1, Title: "looked up"},
+		{ID: "hh_c", HermesSessionID: "hh-1-c", Turns: 3, Title: "gone"},
+		{ID: "hh_d", HermesSessionID: "hh-1-d", Turns: 0, Title: "never sent"},
+		{ID: "hh_e", HermesSessionID: "hh-1-e2", Turns: 5, Title: "split"},
+	}
+	ss := []api.SrvSession{
+		{ID: "hh-1-a", Messages: 6, Tokens: 57725, Title: "listed"},
+		{ID: "hh-1-e", Messages: 40, Title: "split (old half)"},
+		{ID: "hh-1-e2", Messages: 3, Parent: "hh-1-e"},
+		{ID: "hh-9-orphan", Messages: 4, Tokens: 29614, Title: "retention removed it"},
+		{ID: "cron_1", Messages: 10, Title: "TR Portfolio Update"},
+		{ID: "7b0c57de-6897", Messages: 2, Title: "Next steps"},
+	}
+	var looked []string
+	info := func(id string) (api.SrvSession, error) {
+		looked = append(looked, id)
+		if id == "hh-1-b" {
+			return api.SrvSession{ID: id, Messages: 2}, nil
+		}
+		return api.SrvSession{}, fmt.Errorf("GET /api/sessions/%s -> HTTP 404", id)
+	}
+	out := formatSessionCompare(recs, ss, info)
+	for _, want := range []string{
+		"   ↳ hermes-agent  hh-1-a · 6 msgs · 57725 tok\n",
+		"   ↳ hermes-agent  hh-1-b · 2 msgs\n",
+		"   ↳ hermes-agent  hh-1-c · not on the server",
+		"   ↳ hermes-agent  — no turn sent yet\n",
+		"   ↳ hermes-agent  hh-1-e2 · 3 msgs · continues hh-1-e\n",
+		"hermes-agent sessions of hermes-hands without a local session (2):",
+		"retention removed it",
+		"split (old half)  (continued as hh-1-e2)",
+		"+ 2 other hermes-agent session(s)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "TR Portfolio") || strings.Contains(out, "Next steps") {
+		t.Errorf("non-hermes-hands sessions must only be counted:\n%s", out)
+	}
+	if strings.Join(looked, ",") != "hh-1-b,hh-1-c" {
+		t.Errorf("lookups = %v, want only the two unlisted sessions that had turns", looked)
+	}
+	// the plain list never asks the server
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(sessionList(store, nil, false), "hermes-agent") {
+		t.Errorf("plain list mentions hermes-agent")
+	}
+}
+
+// A replayed approval prompt reads exactly as the live one did — the prompt
+// text plus the answer the operator typed (echoed by the line reader).
+func TestApprovalReplayMatchesLivePrompt(t *testing.T) {
+	render := func(f func(u *ui.UI)) string {
+		tmp, err := os.CreateTemp(t.TempDir(), "ui")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f(ui.New(tmp))
+		b, _ := os.ReadFile(tmp.Name())
+		tmp.Close()
+		return string(b)
+	}
+	for _, tc := range []struct {
+		name, typed, answer string
+		ask                 func(ta *prompt.TTYApprover)
+	}{
+		{"hands", "a", "all", func(ta *prompt.TTYApprover) { ta.Confirm("local_shell: git log", "") }},
+		{"hands diff", "n", "no", func(ta *prompt.TTYApprover) { ta.Confirm("local_write: x.go", "+line 1\n+line 2") }},
+		{"server", "s", "session", func(ta *prompt.TTYApprover) { askServerApproval(ta, "terminal", "rm -rf /tmp/x") }},
+	} {
+		var live strings.Builder
+		var ev session.Event
+		ta := &prompt.TTYApprover{Mode: "ask", Out: &live}
+		ta.AskLine = func(q string) (string, error) { live.WriteString(q + tc.typed + "\n"); return tc.typed, nil }
+		ta.OnAnswer = func(summary, detail, answer string, _ time.Duration) {
+			ev = session.Event{Kind: session.KindApproval, Text: summary, Detail: detail, Action: answer}
+		}
+		tc.ask(ta)
+		if ev.Action != tc.answer {
+			t.Errorf("%s: recorded answer %q, want %q", tc.name, ev.Action, tc.answer)
+		}
+		if got := render(func(u *ui.UI) { u.Approval(ev.Text, ev.Detail, ev.Action) }); got != live.String() {
+			t.Errorf("%s: replay\n%q\nlive\n%q", tc.name, got, live.String())
+		}
+	}
+}
+
+func TestCheckLineCompat(t *testing.T) {
+	ok := api.CheckResult{Model: "hermes-agent", Base: "https://h"}
+	for v, want := range map[string]string{
+		"0.22.0": "API OK: hermes-agent @ https://h · hermes-agent 0.22.0",
+		"0.20.1": "API OK: hermes-agent @ https://h · hermes-agent 0.20.1\nWARNING: hermes-agent 0.20.1 is older than 0.21.0",
+		"0.23.0": "API OK: hermes-agent @ https://h · hermes-agent 0.23.0\nnote: hermes-agent 0.23.0 is newer",
+		"":       "API OK: hermes-agent @ https://h\nnote: hermes-agent did not report its version",
+	} {
+		ok.Version = v
+		if got := checkLine(ok); !strings.HasPrefix(got, want) {
+			t.Errorf("checkLine(%q) = %q, want prefix %q", v, got, want)
+		}
+	}
+	// a session start stays quiet for a supported or unreported version
+	if compatWarning("0.22.2") != "" || compatWarning("") != "" || compatWarning("0.20.0") == "" {
+		t.Errorf("compatWarning: supported/unknown must be quiet, too-old must warn")
 	}
 }

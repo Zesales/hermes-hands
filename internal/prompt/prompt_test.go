@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeTTY struct {
@@ -133,5 +134,34 @@ func TestConfirmCallsPauseAndResume(t *testing.T) {
 	_ = a.Confirm("x", "")
 	if paused != 0 {
 		t.Errorf("auto mode must not pause, got %d", paused)
+	}
+}
+
+func TestConfirmOnAnswerOnlyForAnsweredPrompts(t *testing.T) {
+	var heard []string
+	rec := func(summary, _, answer string, _ time.Duration) { heard = append(heard, summary+"="+answer) }
+
+	for _, tc := range []struct{ in, want string }{
+		{"y\n", "yes"}, {"a\n", "all"}, {"n\n", "no"}, {"x\n", "no"}, {"q\n", "quit"}, {"", "quit"},
+	} {
+		heard = nil
+		a, _ := withInput(tc.in)
+		a.OnAnswer = rec
+		a.Confirm("local_shell: ls", "")
+		if len(heard) != 1 || heard[0] != "local_shell: ls="+tc.want {
+			t.Errorf("input %q: heard %v, want [local_shell: ls=%s]", tc.in, heard, tc.want)
+		}
+	}
+
+	// no prompt shown -> nothing to record: auto, never, the [a]ll latch
+	heard = nil
+	(&TTYApprover{Mode: "auto", OnAnswer: rec}).Confirm("x", "")
+	(&TTYApprover{Mode: "never", OnAnswer: rec, Warnf: func(string, ...any) {}}).Confirm("x", "")
+	a, _ := withInput("a\n")
+	a.Confirm("first", "") // latches, OnAnswer not set yet
+	a.OnAnswer = rec
+	a.Confirm("second", "")
+	if len(heard) != 0 {
+		t.Errorf("unprompted decisions recorded: %v", heard)
 	}
 }
