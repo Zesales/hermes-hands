@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Zesales/hermes-hands/internal/repl"
-	"github.com/Zesales/hermes-hands/internal/rpc"
-	"github.com/Zesales/hermes-hands/internal/setup"
+	"hermes-hands/internal/repl"
+	"hermes-hands/internal/rpc"
+	"hermes-hands/internal/setup"
 )
 
 // Build is what main knows at build time: the version and commit (set via

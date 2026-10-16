@@ -7,11 +7,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/app"
-	"github.com/Zesales/hermes-hands/internal/config"
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/setup"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/app"
+	"hermes-hands/internal/config"
+	"hermes-hands/internal/session"
+	"hermes-hands/internal/setup"
 )
 
 // loadCfgOrExit resolves configuration, or prints "hermes-hands: <err>" and

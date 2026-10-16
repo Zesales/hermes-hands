@@ -1,8 +1,8 @@
 package rpc
 
 import (
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/ui"
+	"hermes-hands/internal/session"
+	"hermes-hands/internal/ui"
 )
 
 // front shows a turn as --rpc JSON lines: a hands call before it runs

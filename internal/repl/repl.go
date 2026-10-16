@@ -12,11 +12,11 @@ import (
 
 	"github.com/peterh/liner"
 
-	"github.com/Zesales/hermes-hands/internal/app"
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/redact"
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/turn"
+	"hermes-hands/internal/app"
+	"hermes-hands/internal/prompt"
+	"hermes-hands/internal/redact"
+	"hermes-hands/internal/session"
+	"hermes-hands/internal/turn"
 )
 
 // Deps is what the REPL needs from outside: how to build the app (again,

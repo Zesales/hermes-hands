@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/ui"
+	"hermes-hands/internal/prompt"
+	"hermes-hands/internal/session"
+	"hermes-hands/internal/ui"
 )
 
 func TestAskServerApproval(t *testing.T) {

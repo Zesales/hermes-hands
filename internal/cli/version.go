@@ -6,14 +6,14 @@ import (
 	"strings"
 )
 
-// bareVersion is the version alone: the build-time one, else a module
-// version `go install` stamped.
+// bareVersion is the version alone: the build-time one (-ldflags), else the
+// module version the go command stamped from the VCS.
 func (b Build) bareVersion() string {
 	if b.Version != "0.0.0-dev" {
 		return b.Version
 	}
-	// go install <module>@vX.Y.Z sets a real tag here; a plain local `go build`
-	// sets a "v0.0.0-<pseudo>" string we would rather not show.
+	// The go command stamps the module version from the checkout's VCS tag;
+	// a "v0.0.0-<pseudo>" one (no tag reachable) we would rather not show.
 	if info, ok := debug.ReadBuildInfo(); ok {
 		if v := info.Main.Version; v != "" && v != "(devel)" && !strings.HasPrefix(v, "v0.0.0-") {
 			return v

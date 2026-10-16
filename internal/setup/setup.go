@@ -11,8 +11,8 @@ import (
 
 	"github.com/peterh/liner"
 
-	"github.com/Zesales/hermes-hands/internal/config"
-	"github.com/Zesales/hermes-hands/internal/ttyio"
+	"hermes-hands/internal/config"
+	"hermes-hands/internal/ttyio"
 )
 
 const setupConfigBody = "# hermes-hands config  —  edit by hand; `/config` shows what is in effect\n" +

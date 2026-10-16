@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/dispatch"
-	"github.com/Zesales/hermes-hands/internal/knowsystem"
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/redact"
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/shell"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/dispatch"
+	"hermes-hands/internal/knowsystem"
+	"hermes-hands/internal/prompt"
+	"hermes-hands/internal/redact"
+	"hermes-hands/internal/session"
+	"hermes-hands/internal/shell"
 )
 
 // --- scripted Asker ---

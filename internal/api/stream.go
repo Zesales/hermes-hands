@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/guard"
+	"hermes-hands/internal/guard"
 )
 
 // wantStream decides whether Ask reads the answer from GET

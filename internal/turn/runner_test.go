@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/dispatch"
-	"github.com/Zesales/hermes-hands/internal/hermesmock"
-	"github.com/Zesales/hermes-hands/internal/loop"
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/dispatch"
+	"hermes-hands/internal/hermesmock"
+	"hermes-hands/internal/loop"
+	"hermes-hands/internal/prompt"
+	"hermes-hands/internal/session"
 )
 
 // fakeFront records what a turn showed.

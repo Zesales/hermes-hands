@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Zesales/hermes-hands/internal/app"
+	"hermes-hands/internal/app"
 )
 
 func TestDoSetupPlaintext(t *testing.T) {

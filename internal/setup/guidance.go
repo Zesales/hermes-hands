@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/app"
+	"hermes-hands/internal/app"
 )
 
 // globalGuidanceSources are the home-directory rules files other agents read:

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/prompt"
-	"github.com/Zesales/hermes-hands/internal/session"
-	"github.com/Zesales/hermes-hands/internal/ui"
+	"hermes-hands/internal/prompt"
+	"hermes-hands/internal/session"
+	"hermes-hands/internal/ui"
 )
 
 // front shows a turn in the terminal: every event through ui.Show (the

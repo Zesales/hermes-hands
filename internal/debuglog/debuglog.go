@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/redact"
+	"hermes-hands/internal/redact"
 )
 
 // maxField caps one traced string; a debug trace needs the shape of a frame,

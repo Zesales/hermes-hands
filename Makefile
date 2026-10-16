@@ -119,9 +119,9 @@ golden: | $(GO_CACHE)  ## rewrite testdata/golden/ (REPL + rpc transcripts) afte
 
 cover: | $(GO_CACHE)  ## coverage per package: the unit tests, then what the golden runs reach (the real REPL + --rpc)
 	@echo "unit tests (each package's own):"
-	@$(call tc) go test -count=1 -cover ./... | awk '/%/ {p=$$2; sub("github.com/Zesales/hermes-hands/?","",p); if (p=="") p="(main)"; for (i=1; i<=NF; i++) if ($$i ~ /%$$/) c=$$i; printf "  %-22s %7s\n", p, c}'
+	@$(call tc) go test -count=1 -cover ./... | awk '/%/ {p=$$2; sub("hermes-hands/?","",p); if (p=="") p="(main)"; for (i=1; i<=NF; i++) if ($$i ~ /%$$/) c=$$i; printf "  %-22s %7s\n", p, c}'
 	@echo "golden runs (the real REPL + --rpc, in a subprocess):"
-	@$(call tc) sh -c 'd=$$(mktemp -d) && trap "rm -rf $$d" EXIT && HH_GOLDEN_COVERDIR=$$d go test -count=1 -coverpkg=./... -run "^TestGolden" . >/dev/null && go tool covdata percent -i=$$d' | awk '{p=$$1; sub("github.com/Zesales/hermes-hands/?","",p); if (p=="") p="(main)"; printf "  %-22s %7s\n", p, $$3}'
+	@$(call tc) sh -c 'd=$$(mktemp -d) && trap "rm -rf $$d" EXIT && HH_GOLDEN_COVERDIR=$$d go test -count=1 -coverpkg=./... -run "^TestGolden" . >/dev/null && go tool covdata percent -i=$$d' | awk '{p=$$1; sub("hermes-hands/?","",p); if (p=="") p="(main)"; printf "  %-22s %7s\n", p, $$3}'
 
 race: | $(GO_CACHE)  ## go test -race ./... — data races between the stream, the watchdog and the turn (CGO on, the image's gcc)
 	$(call tc,CGO_ENABLED=1) go test -race ./...

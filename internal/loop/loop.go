@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/api"
-	"github.com/Zesales/hermes-hands/internal/dispatch"
-	"github.com/Zesales/hermes-hands/internal/session"
+	"hermes-hands/internal/api"
+	"hermes-hands/internal/dispatch"
+	"hermes-hands/internal/session"
 )
 
 // Asker is the slice of the Hermes client the loop needs; *api.Client

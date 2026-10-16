@@ -14,7 +14,7 @@ package main
 import (
 	"os"
 
-	"github.com/Zesales/hermes-hands/internal/cli"
+	"hermes-hands/internal/cli"
 )
 
 // Injected at build time via -ldflags "-X main.version=... -X main.commit=...".

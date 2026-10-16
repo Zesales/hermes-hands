@@ -1,4 +1,4 @@
-module github.com/Zesales/hermes-hands
+module hermes-hands
 
 go 1.26.7
 

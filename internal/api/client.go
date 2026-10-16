@@ -18,7 +18,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Zesales/hermes-hands/internal/guard"
+	"hermes-hands/internal/guard"
 )
 
 // retrySleep is bash's fixed `sleep 2` between failed POST / capability
