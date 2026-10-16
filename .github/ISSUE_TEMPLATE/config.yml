@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A problem in hermes-agent itself (the server, its tools, its models)
+    url: https://github.com/NousResearch/hermes-agent/issues
+    about: hermes-hands only drives hermes-agent's API — server-side bugs belong upstream.
+  - name: A security vulnerability
+    url: https://github.com/Zesales/hermes-hands/security/advisories/new
+    about: Please report it privately, not as an issue.
