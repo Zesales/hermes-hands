@@ -4,10 +4,24 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## Unreleased (`bump:none`) — refactor: one job per unit
+## Unreleased (`bump:patch`) — Go 1.26.9 security fixes; refactor: one job per unit
 
-No change for the operator; the code is reorganised so that every package and
-type does one job.
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
+
+### Security
+
+- **Built with Go 1.26.9** (was 1.26.7): govulncheck found nine
+  vulnerabilities of the Go standard library on code paths hermes-hands
+  calls — `net/http` (among them HTTP/1 client connection desynchronization,
+  GO-2026-6605), `crypto/tls` (GO-2026-6607), `net/textproto` (GO-2026-6608)
+  — all fixed in 1.26.9. `GO_IMAGE` is `golang:1.26.9-bookworm`, go.mod
+  says `go 1.26.9`.
+- **`make vuln`**: govulncheck, pinned (v1.8.0) — known vulnerabilities in
+  the code paths actually called, stdlib and the vendored deps. The one
+  check that needs the network. Clean now.
+
+Apart from that, no change for the operator; the code is reorganised so that
+every package and type does one job.
 
 ### The module is `hermes-hands`
 
