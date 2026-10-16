@@ -16,6 +16,7 @@ import (
 	"github.com/Zesales/hermes-hands/internal/prompt"
 	"github.com/Zesales/hermes-hands/internal/redact"
 	"github.com/Zesales/hermes-hands/internal/session"
+	"github.com/Zesales/hermes-hands/internal/shell"
 )
 
 // --- scripted Asker ---
@@ -587,5 +588,46 @@ func TestRunWriteHeldUntilRulesSeen(t *testing.T) {
 	}
 	if !strings.Contains(s.msgs[2], "wrote api/ping.go") {
 		t.Errorf("round 3 msg: the repeated write did not go through: %q", s.msgs[2])
+	}
+}
+
+// waitApprover approves after "waiting on the operator" for d, reporting the
+// wait the way the REPL's spinner hold does.
+type waitApprover struct {
+	d      time.Duration
+	paused *time.Duration
+}
+
+func (w waitApprover) Confirm(string, string) prompt.Decision {
+	time.Sleep(w.d)
+	*w.paused += w.d
+	return prompt.Approve
+}
+
+func TestRunCallMsLeavesOutApprovalWait(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(`{"calls":[{"id":"c1","tool":"local_shell","args":{"cmd":"true"}}],"final":null}`, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	var paused time.Duration
+	d := realDisp(t, waitApprover{d: 300 * time.Millisecond, paused: &paused})
+	d.Shell = shell.New(d.RepoRoot, 20000)
+	t.Cleanup(d.Shell.Stop)
+	var res session.Event
+	l := &Loop{API: sa, Dispatch: d, MaxRounds: 5,
+		Paused: func() time.Duration { return paused },
+		Emit: func(ev session.Event) {
+			if ev.Kind == session.KindResult {
+				res = ev
+			}
+		}}
+	if out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {}); !out.OK {
+		t.Fatalf("out = %+v", out)
+	}
+	if res.Exit == nil || *res.Exit != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	if res.Ms >= 250 {
+		t.Errorf("call Ms = %d — the 300ms approval wait must not count as run time", res.Ms)
 	}
 }

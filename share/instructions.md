@@ -19,6 +19,9 @@ before or after it, no code fences —
 
 Exactly one of the two, every turn — never both.
 
+`final` is a plain JSON string, shown to the operator decoded: a quote is
+`\"`, a newline `\n` — escape once. `\\\"` reaches them as a stray backslash.
+
 The envelope is your **reply text itself**. Do not run a tool of your own
 (`terminal`, `echo`, `execute_code`) to "send" or print it — that runs in your
 server sandbox, reaches nobody, and only delays the hands.

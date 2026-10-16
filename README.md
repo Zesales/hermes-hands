@@ -1,18 +1,33 @@
 # hermes-hands
 
-**Terminal coding with a remote [Hermes](https://github.com/NousResearch/hermes-agent)
-brain.** Your Hermes gateway holds the plan, the memory and the persona; a small
-CLI on your machine lets it read files and run commands in the repo you're
-standing in — over Hermes' own HTTP API, outbound only, nothing listening on your
-box.
+[![release](https://img.shields.io/github/v/release/Zesales/hermes-hands)](https://github.com/Zesales/hermes-hands/releases/latest)
+[![tests](https://github.com/Zesales/hermes-hands/actions/workflows/test.yml/badge.svg?event=pull_request)](https://github.com/Zesales/hermes-hands/actions/workflows/test.yml)
+[![hermes-agent](https://img.shields.io/badge/hermes--agent-0.21%2B%20%C2%B7%20tested%200.22-blue)](#works-with)
+[![go](https://img.shields.io/github/go-mod/go-version/Zesales/hermes-hands)](go.mod)
+[![license](https://img.shields.io/github/license/Zesales/hermes-hands)](LICENSE)
+
+**Terminal coding with a remote [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+brain.** Your Hermes gateway (NousResearch's hermes-agent) holds the plan, the
+memory and the persona; a small Go CLI on your machine gives it hands — a
+persistent shell plus file read / write / edit in the repo you're standing in —
+over Hermes' own HTTP API, outbound only, nothing listening on your box.
 
 ```
 you type ──▶ POST /v1/runs ──────────────▶ Hermes  (plans, decides, remembers)
-             GET  /v1/runs/{id} ◀── {"calls":[{"tool":"read_file",…}]} ── Hermes
+             GET  /v1/runs/{id} ◀── {"calls":[{"tool":"local_read",…}]} ── Hermes
              │
              └─ runs the calls in your repo (with your approval for run/write),
                 feeds {"results":[…]} back, loops, until Hermes answers.
 ```
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Zesales/hermes-hands/main/install.sh | sh
+hermes-hands setup            # your gateway URL + API key, stored machine-bound
+cd ~/projects/myrepo && hermes-hands
+```
+
+The design behind it — one brain on a server, hands on your machine that carry
+no model: [Remote Brain, Local Hands](docs/remote-brain-local-hands.md).
 
 > **Status.** A native "remote brain, local hands" path for Hermes is still
 > being decided upstream —
@@ -22,6 +37,17 @@ you type ──▶ POST /v1/runs ──────────────▶ H
 > a mechanism (and here's hoping it's a clean one), hermes-hands moves to it for
 > a tighter local↔remote loop and this bridge becomes the fallback — the local
 > dispatcher doesn't change either way.
+
+<a id="works-with"></a>
+> **Works with hermes-agent 0.21.0 and newer** — tested through **0.22.x**.
+> Releases before 0.21.0 are not supported and not recommended: hermes-hands
+> was never tested against their Runs API and session handling. Newer releases
+> should work until hermes-agent changes that API — its session rework, due
+> with 0.23, touches `/v1/runs`; the release that adapts to it will name its
+> range. hermes-hands keeps its own version line; every
+> [CHANGELOG](CHANGELOG.md) release names the hermes-agent range it was tested
+> for, and `hermes-hands check` prints the version your gateway runs (with a
+> warning outside the range; a session start warns too).
 
 ## Why
 
@@ -49,8 +75,8 @@ not change.**
   the better place to develop anyway. On macOS the hands run whatever `bash`
   is first on `PATH` (the system's 3.2, or Homebrew's 5.x) and Hermes is told
   about the BSD userland (see below).
-- **`bash`** on `PATH` — the `shell` tool drives a persistent `bash --login`.
-  Without it only `read_file` / `write_file` / `edit_file` work.
+- **`bash`** on `PATH` — `local_shell` drives a persistent `bash --login`.
+  Without it only `local_read` / `local_write` / `local_edit` work.
 - Nothing else to *run* the binary: one static executable, no `curl` / `jq`, no
   language runtime, no package manager. (`git` is used only for `git status`
   context on a failed command; `glow` / `bat` / `diff` prettify output when
@@ -73,7 +99,7 @@ Other modes (same script):
 | command | does |
 |---|---|
 | `… \| sh` | latest release, SHA-256 verified *(the default)* |
-| `… \| sh -s -- --version 0.9.3` | pin to release `v0.9.3` |
+| `… \| sh -s -- --version 0.11.0` | pin to release `v0.11.0` |
 | `… \| sh -s -- --source` | git-clone + build from source (needs Go + git) |
 | run in a checkout: `sh install.sh --local` | build the current checkout, install that |
 
@@ -103,9 +129,10 @@ hermes-hands --session <id>        # open a specific session  (id from --session
 hermes-hands --new                 # start a fresh session  (same as a bare run)
 hermes-hands --rpc                 # JSON-lines session server for an editor/plugin
 
-hermes-hands --session-list        # list sessions: id / turns / tokens / idle / dir / title
+hermes-hands --session-list        # list this machine's sessions: id / turns / tokens / idle / dir / title
+hermes-hands --session-list-verbose  # … each with its hermes-agent session under it (local vs. server)
 hermes-hands sessions new          # mint a session id (prints it; for --session / --rpc)
-hermes-hands check                 # preflight the connection
+hermes-hands check                 # preflight the connection (names hermes-agent's version)
 ```
 
 Scripts drive `--rpc` (send one `turn`, read the `answer`, close stdin) rather
@@ -134,6 +161,7 @@ replays it). Without the `use` line every run starts a fresh session.
 
 REPL commands: `/help` `/new` `/session` (this session's detail — local + server
 numbers) `/session <id>` (switch; replays its last turns) `/sessions`
+(`/sessions -v`: with their hermes-agent sessions)
 `/history` (replay every turn of this session; `/history <n>` the last n,
 `/history <id>` another session's — read-only) `/out <n>` (the full output of
 call `#n`) `/fork` (branch on the server) `/debug` (toggle the redacted
@@ -148,7 +176,7 @@ answer text previews live as it generates (`HERMES_HANDS_STREAM` =
 Every hands call is shown **before it runs** — its session-wide number, the
 tool and what it runs — and again when it finishes, with a short excerpt of
 its output (the first and last lines on success; the last lines plus earlier
-error-looking lines on failure; `read_file` shows only the size). The full
+error-looking lines on failure; `local_read` shows only the size). The full
 output stays available as `/out <n>`, and Hermes sees the same `#n` (as `ref`)
 in its results, so both of you can point at a call:
 
@@ -213,7 +241,7 @@ them.
   associative arrays, …); on macOS the **BSD userland** traps (`sed -i ''`, no
   `grep -P`, `date -v`, `stat -f`) and which GNU variants (`gsed`, `ggrep`, …)
   are installed; the package manager (`brew`, `apt-get`, `dnf`, …); and which
-  tools resolve — probed in the same `bash --login` the `shell` tool runs, so a
+  tools resolve — probed in the same `bash --login` `local_shell` runs, so a
   PATH entry your login profile adds counts. With docker present, Hermes is
   told a throwaway `docker run --rm` container is the isolated way to a tool
   the host lacks.
@@ -242,7 +270,7 @@ them.
 
 All rules are inlined as binding guidance (identical copies once, capped). The
 record (without the rules' text) is `~/hermes-hands/known-system.json` (0600,
-written by hermes-hands only). A `shell` result with exit 127 records the tool
+written by hermes-hands only). A `local_shell` result with exit 127 records the tool
 as missing for the next session's brief; a stale "missing" is dropped the
 moment the tool resolves.
 
@@ -263,7 +291,7 @@ The local session store lives in `~/hermes-hands/sessions/`
 | file | what |
 |---|---|
 | `<id>/session.json` | the index record — `--session <id>` and `sessions` work offline |
-| `<id>/events.jsonl` | everything the terminal showed, as an append-only, versioned event log: your messages, every hands call (before it runs) and result, Hermes' own tool attempts, answers, turn footers |
+| `<id>/events.jsonl` | everything the terminal showed, as an append-only, versioned event log: your messages, every hands call (before it runs) and result, the approval prompts you answered, Hermes' own tool attempts, answers, turn footers |
 | `<id>/out/<n>.txt` | the full (scrubbed) output of call `#n` |
 | `<id>/debug.jsonl` | the `/debug` trace, only while it is on |
 
@@ -286,14 +314,25 @@ traced. A bare password typed into a message matches no pattern: that is what
 the retention window bounds. The trace never leaves the machine.
 
 `/session` (in-REPL) and `--session-list` show per-session **turns**, the last
-run's **tokens** (cumulative billing `usage`), and **splits** — the number of
-times Hermes handed back a *different* `session_id`, which a server-side
-compaction / session-split causes, so it's a rough compaction counter. When the
-gateway answers `GET /api/sessions[/{id}]` they also show server-side numbers:
-message count, context tokens, model, and the `parent_session_id` of a
-compaction continuation. Real context-window usage and a true compaction count
-are not exposed by the Hermes API yet
+run's **tokens** (cumulative billing `usage`), and — `/session` — **splits**:
+the number of times Hermes handed back a *different* `session_id`, which a
+server-side compaction / session-split causes, so it's a rough compaction
+counter. `--session-list` lists this machine's sessions only and works
+offline. **`--session-list-verbose`** (`/sessions -v`) is the local-vs-server
+view for debugging: under every local session its hermes-agent session —
+message count, context tokens, model, last activity, the `parent_session_id`
+of a compaction continuation — or that the server doesn't have it (the next
+turn sends the local history along); then the hermes-hands sessions the server
+still holds without a local one (retention removed them, another machine ran
+them). The server's other sessions — cron jobs, other clients — are only
+counted. Real context-window usage and a true compaction count are not exposed
+by the Hermes API yet
 ([hermes-agent#15618](https://github.com/NousResearch/hermes-agent/issues/15618)).
+
+The turn footer splits the turn's time: `— worked for 1m06s · hermes 58s ·
+local 8s · waited on you 1m48s —` — Hermes' share (model, server tools,
+network), the hands' calls, and the approval prompts (left out of the worked
+time and of each call's own duration).
 
 Ctrl-C during a turn cancels it locally **and** `POST /v1/runs/{id}/stop`s the
 run on Hermes.
@@ -320,11 +359,12 @@ One request object per line on **stdin**; one response object per line on
 {"id":5,"type":"compact","text":"auth flow"}              // no-op on this gateway (no REST compaction endpoint)
 
 // responses
-{"type":"ready","session":"hh_…","cwd":"/repo","version":"X.Y.Z","approvals":"off"}
-{"type":"tool","id":1,"tool":"shell","preview":"npm test","exit":0}
+{"type":"ready","session":"hh_…","cwd":"/repo","version":"X.Y.Z","approvals":"off","hermes_agent":"0.22.2"}
+{"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}
+{"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 {"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…"}
 {"type":"session","id":2,"session":"hh_…","hermes_session":"…"}
-{"type":"check","id":4,"ok":true,"model":"…","base":"…"}
+{"type":"check","id":4,"ok":true,"model":"…","base":"…","version":"0.22.2"}
 {"type":"compact","id":5,"ok":true,"session":"hh_…"}
 {"type":"error","id":1,"message":"…"}
 ```
@@ -356,7 +396,7 @@ unset, the secrets store. `setup` (default) writes a machine-bound
 `secrets.enc` alone is useless. It needs nothing in your shell env. If it can't
 be decrypted here (wrong machine, tampered, missing `keyseed`) the CLI says so
 and exits — re-run `hermes-hands setup`. This is **at-rest protection only**: it
-does not stop a program running as you (or an approved `shell`) from reading the
+does not stop a program running as you (or an approved `local_shell`) from reading the
 key — the approval gate + denylist are the real boundary. `setup --plaintext`
 keeps a 0600 `~/hermes-hands/secrets` file (`export HERMES_API_URL=…` /
 `…KEY=…`) plus the `~/.bashrc` offer, for people who inject via env or a secrets
@@ -374,10 +414,10 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_HANDS_DEBUG` | — | set in the config file: start with `/debug` on (redacted connection trace) |
 | `HERMES_HANDS_RETENTION_DAYS` | `14` | delete local sessions idle longer than this on start (`0` keeps all) |
 | `HERMES_HANDS_SANDBOX` | `smart` | Hermes' own server-side terminal / file tools in a hands run: `smart` (steer only calls aimed at your machine) \| `steer` (all) \| `show` (never) |
-| `HERMES_HANDS_DENY` | — | extra denied `shell` commands, `\|`-separated shell globs |
+| `HERMES_HANDS_DENY` | — | extra denied `local_shell` commands, `\|`-separated shell globs |
 | `HERMES_HANDS_MAX_ROUNDS` | `25` | delegation rounds per turn |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
-| `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`shell` keeps 2×) |
+| `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`local_shell` keeps 2×) |
 | `HERMES_HANDS_RESPONSE_TIMEOUT` | `600` | seconds hermes-agent may go silent in a turn before it is cancelled; pushed back by any token / tool round / a live server-run probe (`0` = no limit) |
 | `HERMES_HANDS_WATCHDOG_INTERVAL` | `200` | seconds between those out-of-band "still working?" probes (floored at 15) |
 | `HERMES_API_*` | — | `CONNECT_TIMEOUT` 5, `MAX_TIME` 30, `POLL_INTERVAL` 2, `RETRIES` 3, `RUN_TIMEOUT` 600 |
@@ -393,15 +433,17 @@ your phone and web UI never see it.
 ## Security model
 
 - **Outbound only.** The CLI dials your gateway. Nothing listens on your machine.
-- **Approval by default** for `shell`, `write_file`, `edit_file` — you see the
-  command or diff and confirm (`y`/`n`/`a`ll/`q`uit). `--yolo` or
-  `HERMES_HANDS_APPROVE=auto` turns it off.
-- **Denylist** for `shell`: ssh/scp/sftp/rsync, sudo/doas, `rm -rf /…`, fork
-  bombs, `curl|wget … | sh` — plus your `HERMES_HANDS_DENY` globs.
-- **Repo jail** for the structured file tools: `read_file`/`write_file`/`edit_file`
-  refuse paths that resolve (symlinks included) outside the directory you
-  launched from. `shell` is a real shell (it can `cd` anywhere) — it relies on
-  the denylist + per-command approval, not a path jail.
+- **Approval by default** for `local_shell`, `local_write`, `local_edit` — you
+  see the command or diff and confirm (`y`/`n`/`a`ll/`q`uit); every answer is
+  kept in the session's event log. `--yolo` or `HERMES_HANDS_APPROVE=auto`
+  turns it off.
+- **Denylist** for `local_shell`: ssh/scp/sftp/rsync, sudo/doas, `rm -rf /…`,
+  fork bombs, `curl|wget … | sh` — plus your `HERMES_HANDS_DENY` globs.
+- **Repo jail** for the structured file tools: `local_read` / `local_write` /
+  `local_edit` refuse paths that resolve (symlinks included) outside the
+  directory you launched from. `local_shell` is a real shell (it can `cd`
+  anywhere) — it relies on the denylist + per-command approval, not a path
+  jail.
 - **Secret scrubbing.** Tool output is passed through a redactor (bearer tokens,
   `api_key=`/`password=`, AWS keys, `sk-…`, `ghp_…`, PEM headers) before it goes
   back to the gateway.
@@ -458,8 +500,8 @@ toolchain cache.
 Go 1.26.7, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
 `github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
 never fetch modules (the one download is the pinned Go image). Layout: `main.go`
-(CLI + REPL + setup) +
-`internal/{config,redact,ttyio,prompt,ui,api,session,knowsystem,debuglog,shell,dispatch,loop}` +
+(CLI + REPL + setup), `rpc.go`, `session{log,list}.go`, `watchdog.go` +
+`internal/{api,compat,config,debuglog,dispatch,guard,knowsystem,loop,prompt,redact,session,shell,ttyio,ui}` +
 `share/instructions.md` (embedded via `//go:embed`). `.github/workflows/test.yml`
 runs gofmt, `go vet` (for linux **and** darwin), `go test` and
 `./build.sh release` (the linux+darwin × amd64+arm64 cross-compile) on every
@@ -473,8 +515,8 @@ has its own in-process mock (`internal/hermesmock`) and needs no `python3`.
 ## Releasing
 
 **No `VERSION` file — git tags are the source of truth.** `git describe` bakes
-the version into every build (`0.10.0` on a release, `0.10.0-3-gabc123` in
-between; `install.sh --version 0.10.0` pins one).
+the version into every build (`0.11.0` on a release, `0.11.0-3-gabc123` in
+between; `install.sh --version 0.11.0` pins one).
 
 **Every merged PR ships a release.** `.github/workflows/release.yml` (on
 `pull_request` → closed & merged):
@@ -508,6 +550,11 @@ produces the exact artifact set the workflow publishes. `install.sh`:
 - `--version X.Y.Z` — pin to release `vX.Y.Z`;
 - `--local` — build from the current checkout;
 - `--source` — git-clone + build.
+
+## Contributing
+
+Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) (one
+`make ci` is the whole PR gate). Security issues: [SECURITY.md](SECURITY.md).
 
 ## License
 

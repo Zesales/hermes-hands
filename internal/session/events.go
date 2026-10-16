@@ -23,9 +23,10 @@ const (
 	KindCall       = "call"        // a hands call, written BEFORE it runs (Ref, ID, Tool, Args)
 	KindResult     = "result"      // its outcome (Ref, Tool, Exit, Ms, Lines, Bytes; output in out/<Ref>.txt)
 	KindHermesTool = "hermes_tool" // Hermes used one of its OWN server tools (Tool, Text = preview, Action)
+	KindApproval   = "approval"    // an approval prompt the operator answered (Text = summary, Detail, Action = answer, Ms = wait)
 	KindAnswer     = "answer"      // the turn's answer (Text, OK, Tokens)
 	KindNote       = "note"        // anything else the terminal said in a turn (Text)
-	KindTurnEnd    = "turn_end"    // the turn footer (Ms, Outcome: "" | interrupted | timeout, Limit)
+	KindTurnEnd    = "turn_end"    // the turn footer (Ms, Outcome: "" | interrupted | timeout, Limit, LocalMs, WaitMs)
 )
 
 // Event is one line of <id>/events.jsonl: one thing the terminal showed. The
@@ -46,6 +47,7 @@ type Event struct {
 	Kind string `json:"kind"`
 
 	Text    string          `json:"text,omitempty"`
+	Detail  string          `json:"detail,omitempty"` // approval: the diff / command detail the prompt showed
 	Ref     int             `json:"ref,omitempty"`
 	ID      string          `json:"id,omitempty"` // Hermes' own call id (c1, c2, …)
 	Tool    string          `json:"tool,omitempty"`
@@ -56,9 +58,11 @@ type Event struct {
 	Bytes   int             `json:"bytes,omitempty"`
 	OK      *bool           `json:"ok,omitempty"`
 	Tokens  int             `json:"tokens,omitempty"`
-	Action  string          `json:"action,omitempty"`  // hermes_tool: "" | server | steered | approved | denied
-	Outcome string          `json:"outcome,omitempty"` // turn_end: "" | interrupted | timeout
-	Limit   int             `json:"limit,omitempty"`   // turn_end timeout: the response timeout in seconds
+	Action  string          `json:"action,omitempty"`   // hermes_tool: "" | server | steered | approved | denied; approval: yes | no | all | quit | once | session | deny
+	Outcome string          `json:"outcome,omitempty"`  // turn_end: "" | interrupted | timeout
+	Limit   int             `json:"limit,omitempty"`    // turn_end timeout: the response timeout in seconds
+	LocalMs int64           `json:"local_ms,omitempty"` // turn_end: time the hands' calls ran
+	WaitMs  int64           `json:"wait_ms,omitempty"`  // turn_end: time spent waiting on the operator's approvals
 
 	// Out is a result's output in flight, never serialised: the recorder
 	// stores it in out/<Ref>.txt and keeps only Lines / Bytes in the event.

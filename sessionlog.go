@@ -75,13 +75,16 @@ func (l *sessionLog) show(ev session.Event, out string) {
 		u.CallDone(ev.Ref, ev.Tool, exit, time.Duration(ev.Ms)*time.Millisecond, out)
 	case session.KindHermesTool:
 		u.HermesTool(ev.Tool, ev.Text, ev.Action)
+	case session.KindApproval:
+		u.Approval(ev.Text, ev.Detail, ev.Action)
 	case session.KindNote:
 		u.Note(ev.Text)
 	case session.KindAnswer:
 		u.Line("")
 		u.Answer(ev.Text)
 	case session.KindTurnEnd:
-		u.TurnDone(time.Duration(ev.Ms)*time.Millisecond, ev.Outcome, ev.Limit)
+		ms := func(n int64) time.Duration { return time.Duration(n) * time.Millisecond }
+		u.TurnDone(ms(ev.Ms), ev.Outcome, ev.Limit, ms(ev.LocalMs), ms(ev.WaitMs))
 	}
 }
 

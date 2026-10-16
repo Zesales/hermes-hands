@@ -110,7 +110,7 @@ func (d *Dispatcher) doShell(args map[string]json.RawMessage) (Result, error) {
 		return Result{Exit: 126, Out: "(blocked by worker policy: " + reason + ")"}, nil
 	}
 
-	switch d.Approver.Confirm("shell: "+cmd, "") {
+	switch d.Approver.Confirm("local_shell: "+cmd, "") {
 	case prompt.AbortTurn:
 		return Result{}, ErrAbortTurn
 	case prompt.Deny:
@@ -263,7 +263,7 @@ func (d *Dispatcher) doWrite(args map[string]json.RawMessage) (Result, error) {
 		diff = fmt.Sprintf("(new file, %d lines)", strings.Count(content, "\n"))
 	}
 
-	switch d.Approver.Confirm("write_file: "+p, diff) {
+	switch d.Approver.Confirm("local_write: "+p, diff) {
 	case prompt.AbortTurn:
 		return Result{}, ErrAbortTurn
 	case prompt.Deny:
@@ -315,7 +315,7 @@ func (d *Dispatcher) doEdit(args map[string]json.RawMessage) (Result, error) {
 	updated := strings.Replace(content, old, newS, 1)
 	diff := unifiedDiff(p, abs, updated)
 
-	switch d.Approver.Confirm("edit_file: "+p, diff) {
+	switch d.Approver.Confirm("local_edit: "+p, diff) {
 	case prompt.AbortTurn:
 		return Result{}, ErrAbortTurn
 	case prompt.Deny:
