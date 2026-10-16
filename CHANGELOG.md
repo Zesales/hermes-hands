@@ -77,6 +77,15 @@ type does one job.
   shared HTTP plumbing), `runs.go`, `sessions.go`, `server.go` and
   `decode.go`; `stream.go` stays the SSE stream.
 
+### knowsystem by task
+
+- `knowsystem.go` (1012 lines) is split, unchanged line for line: the
+  types (`knowsystem.go`), the host and tool probe (`probe.go`), repo facts
+  — make targets, layout (`repo.go`), the rules files — guidance, `@path`
+  imports, nested rules, the budget, the global import (`rules.go`), the
+  rules of a subdirectory at the first call into it (`scoped.go`), learned
+  facts and the record on disk (`store.go`), what Hermes reads (`brief.go`).
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).
