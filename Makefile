@@ -117,6 +117,9 @@ test: | $(GO_CACHE)  ## go test ./... — offline (vendored), no network, no mod
 golden: | $(GO_CACHE)  ## rewrite testdata/golden/ (REPL + rpc transcripts) after an intended UI change
 	$(call tc) go test -run '^TestGolden' . -update
 
+race: | $(GO_CACHE)  ## go test -race ./... — data races between the stream, the watchdog and the turn (CGO on, the image's gcc)
+	$(call tc,CGO_ENABLED=1) go test -race ./...
+
 lint: | $(GO_CACHE)  ## gofmt check + go vet for linux AND darwin   (STATICCHECK=1 also runs staticcheck — needs network)
 	@bad=$$($(call tc) sh -c 'find . -name "*.go" -not -path "./vendor/*" -not -path "./.dev/*" -exec gofmt -l {} +'); \
 	 test -z "$$bad" || { echo "gofmt needs a run on:"; echo "$$bad"; exit 1; }
@@ -126,7 +129,7 @@ ifdef STATICCHECK
 	$(call tc,GOFLAGS=-mod=mod) go run honnef.co/go/tools/cmd/staticcheck@v0.5.1 ./...
 endif
 
-ci: lint test dist  ## the PR gate, locally: lint (linux + darwin) + test + release cross-build
+ci: lint test race dist  ## the PR gate, locally: lint (linux + darwin) + test + race + release cross-build
 
 ##@ Artifacts
 

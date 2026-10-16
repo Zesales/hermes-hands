@@ -90,6 +90,17 @@ type does one job.
   rules of a subdirectory at the first call into it (`scoped.go`), learned
   facts and the record on disk (`store.go`), what Hermes reads (`brief.go`).
 
+### Guard rails
+
+- **Size budget** (`budget_test.go`, part of `make test`): no function over
+  80 lines, no file over 450 (tests, `vendor/`, `testdata/` excepted). The
+  three functions and one file over it today — the delegation loop, the SSE
+  stream, the brief — are listed at their current size and may only shrink;
+  one that fits must leave the list.
+- **`make race`**: the tests under the race detector (the golden runs drive
+  the real REPL and `--rpc` through it); part of `make ci` and of the PR
+  check (`test.yml`).
+
 ## 0.11.1 — 2026-10-16 — the answer once; approvals in the replay; local vs. server sessions
 
 hermes-agent: **0.21.0 and newer**, tested through 0.22.x (live: 0.22.0).

@@ -478,8 +478,9 @@ make dev             # build in the container, run it on this host out of ./.dev
 make dev ARGS=--new  # pass CLI args through ARGS=
 make test            # go test ./... — offline, no network, no model
 make golden          # rewrite testdata/golden/ after an intended UI change
+make race            # the tests under the race detector
 make lint            # gofmt check + go vet   (STATICCHECK=1 also runs staticcheck)
-make ci              # the PR gate locally: lint + test + release cross-build
+make ci              # the PR gate locally: lint + test + race + release cross-build
 make dev-install     # build + copy dist/hermes-hands onto your PATH
 ```
 
@@ -516,6 +517,10 @@ streaming mock (Hermes' own tool events, a steered call, both kinds of
 approval prompt, a final whose escapes the 5-byte deltas cut), masked for
 paths, ids and times. `make test` fails on any difference; an intended change
 is `make golden` plus a reviewed diff of those files.
+
+A **size budget** (`budget_test.go`) keeps one job per unit: no function over
+80 lines, no file over 450 (tests and `vendor/` excepted). What is over it
+today is listed at its current size and may only shrink.
 
 `test/mock_hermes.py` is a manual-only stand-in for the Runs API — the Go suite
 has its own in-process mock (`internal/hermesmock`) and needs no `python3`.
