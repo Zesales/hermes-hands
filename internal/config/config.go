@@ -25,8 +25,8 @@ var Warnf = func(format string, a ...any) {
 // _SECRETS / _STATE / _INSTRUCTIONS) which wins over the Home-derived default.
 //
 // The API tuning knobs come from the process environment only; URL / key /
-// profile / approve / stream / deny / allow-http / verbose / the watchdog
-// knobs are read after the config file so the file (and, conditionally, the
+// profile / approve / stream / deny / allow-http / verbose / debug / retention /
+// sandbox / the watchdog knobs are read after the config file so the file (and, conditionally, the
 // secrets store) wins over the environment for those.
 type Config struct {
 	APIURL, APIKey, APIProfile            string
@@ -44,9 +44,21 @@ type Config struct {
 	// watchdog probes the server run out-of-band so a legitimately long
 	// "thinking" phase keeps pushing that deadline back
 	// (HERMES_HANDS_WATCHDOG_INTERVAL). Both hand-tunable in the config file.
-	ResponseTimeout                    time.Duration
-	WatchdogInterval                   time.Duration
-	AllowHTTP, Verbose                 bool
+	ResponseTimeout    time.Duration
+	WatchdogInterval   time.Duration
+	AllowHTTP, Verbose bool
+	Debug              bool // HERMES_HANDS_DEBUG / /debug: redacted wire trace into the session's debug.jsonl
+
+	// Sandbox is how Hermes' own server-side exec / file tools are treated in a
+	// hands run (HERMES_HANDS_SANDBOX): smart (default — steer only calls aimed
+	// at the operator's machine) | steer (every one) | show (never steer).
+	Sandbox string
+
+	// RetentionDays: local sessions idle longer than this are deleted on start
+	// — events, tool output and debug trace with them (HERMES_HANDS_RETENTION_DAYS,
+	// default 14; 0 keeps everything). Bounds how long anything typed by
+	// mistake (a password) can linger on disk.
+	RetentionDays                      int
 	StateDir                           string
 	Home                               string // HERMES_HANDS_HOME (else $HOME/hermes-hands)
 	ConfigPath, SecretsPath, InstrPath string
@@ -105,6 +117,9 @@ func Load() (*Config, error) {
 		WatchdogInterval: secondsOr(merged["HERMES_HANDS_WATCHDOG_INTERVAL"], 200*time.Second),
 		AllowHTTP:        merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
 		Verbose:          merged["HERMES_HANDS_VERBOSE"] != "",
+		Debug:            merged["HERMES_HANDS_DEBUG"] != "",
+		Sandbox:          sandboxMode(merged["HERMES_HANDS_SANDBOX"]),
+		RetentionDays:    intOr(merged["HERMES_HANDS_RETENTION_DAYS"], 14),
 		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], home+"/instructions.md"),
 
 		ConnectTimeout: secondsOr(proc["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
@@ -112,7 +127,7 @@ func Load() (*Config, error) {
 		PollInterval:   secondsOr(proc["HERMES_API_POLL_INTERVAL"], 2*time.Second),
 		APIRunTimeout:  secondsOr(proc["HERMES_API_RUN_TIMEOUT"], 600*time.Second),
 		APIRetries:     intOr(proc["HERMES_API_RETRIES"], 3),
-		MaxRounds:      intOr(proc["HERMES_HANDS_MAX_ROUNDS"], 8),
+		MaxRounds:      intOr(proc["HERMES_HANDS_MAX_ROUNDS"], 25),
 		RunTimeout:     intOr(proc["HERMES_HANDS_RUN_TIMEOUT"], 120),
 		MaxOutput:      intOr(proc["HERMES_HANDS_MAX_OUTPUT"], 20000),
 		StateDir:       firstNonEmpty(proc["HERMES_HANDS_STATE"], home),
@@ -263,6 +278,16 @@ func secondsOr(s string, def time.Duration) time.Duration {
 		return time.Duration(f * float64(time.Second))
 	}
 	return def
+}
+
+// sandboxMode normalises HERMES_HANDS_SANDBOX: smart | steer | show, anything
+// else (unset included) is smart.
+func sandboxMode(v string) string {
+	switch v = strings.ToLower(strings.TrimSpace(v)); v {
+	case "steer", "show":
+		return v
+	}
+	return "smart"
 }
 
 func intOr(s string, def int) int {

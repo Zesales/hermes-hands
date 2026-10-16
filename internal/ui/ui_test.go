@@ -81,15 +81,6 @@ func TestYouIndentsEveryLine(t *testing.T) {
 	}
 }
 
-func TestCallClipsPreviewAt72(t *testing.T) {
-	var b strings.Builder
-	newUI(&b, false, false).Call("shell", strings.Repeat("x", 100), 0)
-	want := "   ⟩ shell   " + strings.Repeat("x", 72) + "  exit 0\n"
-	if b.String() != want {
-		t.Errorf("Call =\n%q\nwant\n%q", b.String(), want)
-	}
-}
-
 func TestAnswerPlainPathIndents(t *testing.T) {
 	old := lookPath
 	lookPath = func(string) (string, error) { return "", errors.New("not found") }
@@ -128,6 +119,7 @@ func TestHelpByteExact(t *testing.T) {
 		"Type a message to your Hermes brain",
 		"in /home/x/repo,",
 		"/new", "/session <id>", "/sessions", "/fork", "/yolo", "/setup", "/config", "/check", "/help", "/exit",
+		"/history", "/out <n>", "/debug",
 		"Ctrl-C cancels the running turn",
 	} {
 		if !strings.Contains(got, want) {
@@ -193,6 +185,59 @@ func TestStartWorking_AnimatedLineShowsElapsedAndHint(t *testing.T) {
 	}
 }
 
+// TestStartWorking_ElapsedExcludesHeldTime pins the fix for a real complaint:
+// the elapsed counter (and, via Paused(), the final "worked for Xs") must not
+// count time spent waiting on the operator's y/n/a/q answer at an approval
+// prompt as "working" — that's the operator deciding, not hermes-agent doing
+// anything. The hold below (1.2s) dwarfs the actual active time (~240ms), so
+// without the fix the displayed counter would tick past "0s"; with the fix it
+// must not.
+func TestStartWorking_ElapsedExcludesHeldTime(t *testing.T) {
+	var b lockedBuf
+	u := newUI(&b, true, true) // tty -> animated
+	stop := u.StartWorking()
+	time.Sleep(120 * time.Millisecond) // some active ticks
+
+	resume := u.Hold()
+	time.Sleep(1200 * time.Millisecond) // a long "approval wait"
+	resume()
+
+	time.Sleep(120 * time.Millisecond) // a bit more active time after resuming
+	stop()
+
+	if got := b.String(); strings.Contains(got, " 1s ") || strings.Contains(got, " 2s ") {
+		t.Errorf("elapsed counter appears to include the 1.2s held wait: %q", got)
+	}
+}
+
+// TestHold_AccumulatesPausedTime checks Paused() itself: it should sum every
+// Hold/resume span this turn, and StartWorking (a fresh turn) resets it.
+func TestHold_AccumulatesPausedTime(t *testing.T) {
+	var b lockedBuf
+	u := newUI(&b, true, true)
+	stop := u.StartWorking()
+	if p := u.Paused(); p != 0 {
+		t.Fatalf("Paused() at turn start = %v, want 0", p)
+	}
+
+	for i := 0; i < 2; i++ {
+		resume := u.Hold()
+		time.Sleep(60 * time.Millisecond)
+		resume()
+	}
+	stop()
+
+	if p := u.Paused(); p < 100*time.Millisecond || p > 500*time.Millisecond {
+		t.Errorf("Paused() = %v, want roughly 120ms (two ~60ms holds)", p)
+	}
+
+	stop2 := u.StartWorking()
+	if got := u.Paused(); got != 0 {
+		t.Errorf("Paused() after a fresh StartWorking = %v, want 0 (new turn)", got)
+	}
+	stop2()
+}
+
 func TestTurnDone(t *testing.T) {
 	for _, tc := range []struct {
 		d       time.Duration
@@ -243,11 +288,11 @@ func TestSyncClearsSpinnerLine(t *testing.T) {
 	u.mu.Lock()
 	u.spinning = true
 	u.mu.Unlock()
-	u.Call("shell", "ls", 0)
+	u.CallStart(1, "shell", "ls", nil)
 	if !strings.HasPrefix(b.String(), "\r\x1b[K") {
-		t.Errorf("Call while spinning must clear the line first, got %q", b.String())
+		t.Errorf("CallStart while spinning must clear the line first, got %q", b.String())
 	}
 	if !strings.Contains(b.String(), "shell") {
-		t.Errorf("Call content missing: %q", b.String())
+		t.Errorf("CallStart content missing: %q", b.String())
 	}
 }

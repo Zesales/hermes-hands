@@ -58,46 +58,66 @@ func TestSha1HexNoTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestNewWritesFileAndPointer(t *testing.T) {
+func TestNewWritesSessionDir(t *testing.T) {
 	st := newStore(t)
-	cwd := "/some/dir"
-	rec, _ := st.New(cwd)
+	rec, _ := st.New("/some/dir")
 
 	if _, err := os.Stat(rec.path); err != nil {
 		t.Errorf("session file missing: %v", err)
 	}
-	ptr := st.cwdPtr(cwd)
-	if !strings.HasSuffix(ptr, "/by-cwd/"+sha1hex(cwd)+".id") {
-		t.Errorf("cwdPtr = %q", ptr)
+	if _, err := os.Stat(st.sessionDir(rec.ID)); err != nil {
+		t.Errorf("session dir missing: %v", err)
 	}
-	b, err := os.ReadFile(ptr)
-	if err != nil {
-		t.Fatalf("pointer missing: %v", err)
-	}
-	if string(b) != rec.ID {
-		t.Errorf("pointer content = %q, want %q (no newline)", string(b), rec.ID)
+	// sessions are addressed by id only — no per-directory pointer exists
+	if _, err := os.Stat(st.dir + "/by-cwd"); !os.IsNotExist(err) {
+		t.Errorf("by-cwd pointer dir must not exist")
 	}
 }
 
-func TestLatestForCwd(t *testing.T) {
-	st := newStore(t)
-	cwd := "/repo/a"
-
-	if _, ok := st.LatestForCwd(cwd); ok {
-		t.Errorf("absent pointer should not resolve")
+func TestOpenDropsLegacyByCwd(t *testing.T) {
+	state := t.TempDir()
+	if err := os.MkdirAll(state+"/sessions/by-cwd", 0o755); err != nil {
+		t.Fatal(err)
 	}
-	rec, _ := st.New(cwd)
-	if id, ok := st.LatestForCwd(cwd); !ok || id != rec.ID {
-		t.Errorf("LatestForCwd = %q,%v want %q,true", id, ok, rec.ID)
+	if err := os.WriteFile(state+"/sessions/by-cwd/deadbeef.id", []byte("hh_x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	// dangling: pointer present, session file gone
-	os.Remove(rec.path)
-	if _, ok := st.LatestForCwd(cwd); ok {
-		t.Errorf("dangling pointer should not resolve")
+	if _, err := Open(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(state + "/sessions/by-cwd"); !os.IsNotExist(err) {
+		t.Errorf("legacy by-cwd dir should be dropped on Open")
 	}
 }
 
-func TestResolve(t *testing.T) {
+func TestOpenTightensPermissions(t *testing.T) {
+	// what an older version left world-readable is tightened on Open
+	state := t.TempDir()
+	dir := state + "/sessions/hh_old"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(state+"/sessions", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/session.json", []byte(`{"id":"hh_old"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(state); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]os.FileMode{state + "/sessions": 0o700, dir: 0o700, dir + "/session.json": 0o600} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Errorf("%s perms = %v, want %v", p, fi.Mode().Perm(), want)
+		}
+	}
+}
+
+func TestResolveIsExplicit(t *testing.T) {
 	st := newStore(t)
 	cwd := "/resolve/dir"
 
@@ -105,28 +125,42 @@ func TestResolve(t *testing.T) {
 	if err != nil || r1 == nil {
 		t.Fatalf("Resolve(new): %v", err)
 	}
-
-	var warned int
-	st.Warnf = func(string, ...any) { warned++ }
-	// continue with a DIFFERENT dir that has no session -> quietly starts one
-	r2, err := st.Resolve("continue", "/resolve/other")
-	if err != nil || r2 == nil {
-		t.Fatalf("Resolve(continue, none): %v", err)
+	// the exact id resolves to itself (the plugin pattern)
+	got, err := st.Resolve(r1.ID, cwd)
+	if err != nil || got.ID != r1.ID {
+		t.Errorf("Resolve(id) = %v / %v, want %s", got, err, r1.ID)
 	}
-	if warned != 0 {
-		t.Errorf("continue-with-none should be silent now, got %d warnings", warned)
-	}
-
 	// explicit missing id -> error
 	if _, err := st.Resolve("hh_does_not_exist", cwd); err == nil ||
 		err.Error() != "no such session: hh_does_not_exist" {
 		t.Errorf("explicit-missing err = %v", err)
 	}
+	// "continue" is gone — it is not an id, so it errors like one
+	if _, err := st.Resolve("continue", cwd); err == nil {
+		t.Errorf("Resolve(continue) must error now")
+	}
+	// no id in any directory: just a fresh session
+	r2, err := st.Resolve("", "/resolve/other")
+	if err != nil || r2 == nil || r2.ID == r1.ID {
+		t.Errorf("Resolve('', other dir): %v %+v", err, r2)
+	}
+}
 
-	// continue now finds r1 for its dir
-	got, err := st.Resolve("continue", cwd)
-	if err != nil || got.ID != r1.ID {
-		t.Errorf("Resolve(continue) = %v / %v, want %s", got, err, r1.ID)
+func TestIdleForAndStale(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	fresh := &Record{Updated: "2026-09-02T11:30:00Z"}
+	if d := IdleFor(fresh, now); d != 30*time.Minute {
+		t.Errorf("IdleFor fresh = %v, want 30m", d)
+	}
+	if IdleFor(fresh, now) > StaleAfter {
+		t.Error("30m idle must not count as stale")
+	}
+	old := &Record{Updated: "2026-09-02T10:00:00Z"}
+	if IdleFor(old, now) <= StaleAfter {
+		t.Error("2h idle must count as stale")
+	}
+	if d := IdleFor(&Record{Updated: "garbage"}, now); d != 0 {
+		t.Errorf("unparseable timestamp should idle 0, got %v", d)
 	}
 }
 
@@ -217,7 +251,7 @@ func TestListOrderAndFallback(t *testing.T) {
 
 	out := FormatList(recs)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if !strings.HasPrefix(lines[0], "ID") || !strings.Contains(lines[0], "DIR") || !strings.HasSuffix(lines[0], "TITLE") {
+	if !strings.HasPrefix(lines[0], "ID") || !strings.Contains(lines[0], "IDLE") || !strings.Contains(lines[0], "DIR") || !strings.HasSuffix(lines[0], "TITLE") {
 		t.Errorf("header = %q", lines[0])
 	}
 	// newest row: no title -> the TITLE column is blank, and the DIR column
@@ -233,5 +267,10 @@ func TestListOrderAndFallback(t *testing.T) {
 	}
 	if strings.Contains(lines[1], "Z ") {
 		t.Errorf("updated should be clipped to 19 chars (no trailing Z): %q", lines[1])
+	}
+	// both sessions are long idle vs. real wall-clock now -> idle marker * +
+	// the informational legend must be present
+	if !strings.Contains(lines[1], "*") || !strings.Contains(out, "idle >1h") {
+		t.Errorf("stale rows must carry the idle * marker and the legend: %q", out)
 	}
 }

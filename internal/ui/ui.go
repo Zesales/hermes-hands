@@ -29,6 +29,11 @@ type UI struct {
 
 	mu       sync.Mutex // serialises every write vs. the spinner goroutine
 	spinning bool
+	paused   time.Duration // accumulated Hold() time this turn (approval waits) — reset by StartWorking
+
+	activity      string    // what the spinner waits on ("#14 shell"); "" = plain "working"
+	activitySince time.Time // when that started — the spinner counts from here
+	streamOpen    bool      // Delta printed the "hermes" label; StreamDone closes it
 }
 
 // New builds a UI writing to stderr. Colour is on when stderr is a tty,
@@ -94,6 +99,7 @@ func (u *UI) StartWorking() (stop func()) {
 	}
 	u.mu.Lock()
 	u.spinning = true
+	u.paused = 0 // fresh turn: no approval waits counted against it yet
 	u.mu.Unlock()
 	start := time.Now()
 	done := make(chan struct{})
@@ -106,11 +112,16 @@ func (u *UI) StartWorking() (stop func()) {
 			case <-done:
 				return
 			case <-tk.C:
-				el := int(time.Since(start).Seconds())
 				u.mu.Lock()
+				el := int((time.Since(start) - u.paused).Seconds())
+				label := "working"
+				if u.activity != "" {
+					label = u.activity + " running"
+					el = int(time.Since(u.activitySince).Seconds())
+				}
 				if u.spinning {
-					fmt.Fprintf(u.w, "\r%s   %s%sworking%s%s  ·  %ds  ·  Ctrl+C to cancel%s\x1b[K",
-						u.cDim, u.cAcc, frames[i%len(frames)], u.cR, u.cDim, el, u.cR)
+					fmt.Fprintf(u.w, "\r%s   %s%s%s%s%s  ·  %ds  ·  Ctrl+C to cancel%s\x1b[K",
+						u.cDim, u.cAcc, frames[i%len(frames)], label, u.cR, u.cDim, el, u.cR)
 				}
 				u.mu.Unlock()
 			}
@@ -130,20 +141,37 @@ func (u *UI) StartWorking() (stop func()) {
 
 // Hold suspends the spinner's repaint (wiping its current line) until the
 // returned resume runs. Wrap it around a foreground prompt that owns the line
-// — e.g. the approval y/n/a/q gate — so the spinner can't overwrite it.
+// — e.g. the approval y/n/a/q gate — so the spinner can't overwrite it. The
+// held interval is excluded from the elapsed counter (both the live spinner
+// and the turn's final "worked for Xs", via Paused()): waiting on the
+// operator's y/n/a/q answer is not hermes-agent taking time to work.
 func (u *UI) Hold() (resume func()) {
 	u.mu.Lock()
 	was := u.spinning
 	u.spinning = false
+	heldSince := time.Now()
 	if was {
 		fmt.Fprint(u.w, "\r\x1b[K")
 	}
 	u.mu.Unlock()
+	var once sync.Once
 	return func() {
-		u.mu.Lock()
-		u.spinning = was
-		u.mu.Unlock()
+		once.Do(func() {
+			u.mu.Lock()
+			u.paused += time.Since(heldSince)
+			u.spinning = was
+			u.mu.Unlock()
+		})
 	}
+}
+
+// Paused reports how long the current turn has spent held (approval prompts)
+// so far. Subtract it from a wall-clock turn duration to get actual working
+// time, e.g. before TurnDone.
+func (u *UI) Paused() time.Duration {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.paused
 }
 
 // Rule ports ui_rule: a full-width dim horizontal rule.
@@ -164,22 +192,6 @@ func (u *UI) Working() {
 	u.sync(func() {
 		fmt.Fprintf(u.w, "%s   %s⋯ working%s%s  ·  Ctrl+C to cancel%s\n",
 			u.cDim, u.cAcc, u.cR, u.cDim, u.cR)
-	})
-}
-
-// Call ports ui_call: a per-tool progress line. The exit code is green when 0,
-// red otherwise; the preview is clipped to 72 bytes.
-func (u *UI) Call(tool, preview string, exit int) {
-	ec := u.cOK
-	if exit != 0 {
-		ec = u.cBad
-	}
-	if len(preview) > 72 {
-		preview = preview[:72]
-	}
-	u.sync(func() {
-		fmt.Fprintf(u.w, "%s   ⟩ %-7s%s %s%s%s  %sexit %d%s\n",
-			u.cDim, tool, u.cR, u.cDim, preview, u.cR, ec, exit, u.cR)
 	})
 }
 
@@ -264,22 +276,42 @@ func humanDur(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", s/60, s%60)
 }
 
+// Line writes one plain line (spinner-safe); Line("") is a blank line.
+func (u *UI) Line(s string) {
+	u.sync(func() { fmt.Fprintln(u.w, s) })
+}
+
 // DimLine writes one dim line (used for HERMES_HANDS_VERBOSE chatter, matching
 // hh_vlog's dim wrapping).
 func (u *UI) DimLine(msg string) {
 	fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, msg, u.cR)
 }
 
-// Delta streams one answer-text chunk during a turn (dim, no newline) — a live
-// preview; the clean final still renders via Answer afterwards.
+// Delta streams one chunk of the answer as it arrives, after a blank line and
+// under the same "hermes" label and indent Answer uses — so a streamed answer
+// and the same answer replayed from the event log (a blank line, then Answer)
+// look alike. StreamDone ends it.
 func (u *UI) Delta(s string) {
 	u.sync(func() {
-		if u.cDim != "" {
-			fmt.Fprintf(u.w, "%s%s%s", u.cDim, s, u.cR)
-		} else {
-			fmt.Fprint(u.w, s)
+		if !u.streamOpen {
+			u.streamOpen = true
+			fmt.Fprintf(u.w, "\n%s%shermes%s\n   ", u.cB, u.cHermes, u.cR)
 		}
+		io.WriteString(u.w, strings.ReplaceAll(s, "\n", "\n   "))
 	})
+}
+
+// StreamDone closes a streamed answer (a final newline) and reports whether
+// one was open.
+func (u *UI) StreamDone() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !u.streamOpen {
+		return false
+	}
+	u.streamOpen = false
+	fmt.Fprintln(u.w)
+	return true
 }
 
 // TurnDone and NewSessionNote also coordinate with the spinner.
@@ -287,14 +319,17 @@ func (u *UI) Delta(s string) {
 // Help is the REPL `/help` block: what typing does, then the slash commands.
 func (u *UI) Help(cwd string) {
 	fmt.Fprintf(u.w, "%s  Type a message to your Hermes brain. It works this directory through\n", u.cDim)
-	fmt.Fprintf(u.w, "  you — shell, read_file, write_file, edit_file in %s,\n", cwd)
+	fmt.Fprintf(u.w, "  you — local_shell, local_read, local_write, local_edit in %s,\n", cwd)
 	io.WriteString(u.w, "  each with your approval.\n")
 	io.WriteString(u.w, "    /new          start a fresh session in this directory\n")
 	io.WriteString(u.w, "    /session      show this session's detail (turns, tokens, splits)\n")
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
 	io.WriteString(u.w, "    /sessions     list this machine's + hermes-agent's sessions\n")
+	io.WriteString(u.w, "    /history      replay this session (/history <n> = last n turns, /history <id> = another)\n")
+	io.WriteString(u.w, "    /out <n>      full output of call #n\n")
 	io.WriteString(u.w, "    /fork         branch this session on the server, switch to it\n")
 	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")
+	io.WriteString(u.w, "    /debug        toggle the redacted connection trace (session debug.jsonl)\n")
 	io.WriteString(u.w, "    /setup        (re)configure the gateway URL + key\n")
 	io.WriteString(u.w, "    /config       config file path + effective settings (read-only; edit by hand)\n")
 	io.WriteString(u.w, "    /check        re-test the gateway connection\n")

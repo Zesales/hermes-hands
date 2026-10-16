@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Zesales/hermes-hands/internal/config"
+	"github.com/Zesales/hermes-hands/internal/prompt"
 )
 
 func TestParseArgsTable(t *testing.T) {
@@ -34,9 +36,9 @@ func TestParseArgsTable(t *testing.T) {
 		{"--continue is gone", []string{"--continue"}, parsed{errMsg: "unknown option: --continue"}},
 		{"new explicit", []string{"--new"}, parsed{smode: "new"}},
 		{"rpc", []string{"--rpc"}, parsed{rpc: true}},
-		{"session bare == continue", []string{"--session"}, parsed{smode: "continue"}},
+		{"session bare needs an id", []string{"--session"}, parsed{errMsg: "--session needs a session id (ids from --session-list)"}},
 		{"session id", []string{"--session", "hh_abc"}, parsed{smode: "hh_abc"}},
-		{"session then flag == continue", []string{"--session", "--yolo"}, parsed{smode: "continue", yolo: true}},
+		{"session then flag needs an id", []string{"--session", "--yolo"}, parsed{errMsg: "--session needs a session id (ids from --session-list)", yolo: true}},
 		{"sessions new", []string{"sessions", "new"}, parsed{action: "sessionnew"}},
 		{"sessions list", []string{"sessions"}, parsed{action: "sessions"}},
 		{"yolo", []string{"--yolo"}, parsed{yolo: true}},
@@ -223,6 +225,17 @@ func TestSplitCmd(t *testing.T) {
 	}
 }
 
+func TestIsSlashCmd(t *testing.T) {
+	for in, want := range map[string]bool{
+		"/quit": true, "/q": true, "/?": true, "/chat-history": true,
+		"/etc/hosts": false, "/home/x/repo": false, "hello": false, "/": false, "": false,
+	} {
+		if got := isSlashCmd(in); got != want {
+			t.Errorf("isSlashCmd(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestRPCReqUnmarshal(t *testing.T) {
 	var r rpcReq
 	if err := json.Unmarshal([]byte(`{"id":7,"type":"turn","text":"hi"}`), &r); err != nil {
@@ -297,9 +310,115 @@ func TestFinalStreamer(t *testing.T) {
 		t.Errorf("tool-call round should stream nothing, got %q", got.String())
 	}
 
+	// the exact chunking a live gateway produced: the chunk ends right at
+	// "[" — must wait for the "]" instead of muting the preview as a calls-round
+	got.Reset()
+	fs3 := &finalStreamer{emit: func(s string) { got.WriteString(s) }}
+	for _, ch := range []string{`{"`, `calls`, `":[`, `],"`, `final`, `":"`, `OK`, `"}`} {
+		fs3.feed(ch)
+	}
+	if got.String() != "OK" {
+		t.Errorf("live chunking streamed %q, want OK", got.String())
+	}
+	// …and a real calls-round split the same way still streams nothing
+	got.Reset()
+	fs4 := &finalStreamer{emit: func(s string) { got.WriteString(s) }}
+	for _, ch := range []string{`{"`, `calls`, `":[`, `{"id":"c1","tool":"shell"}],"`, `final`, `":null}`} {
+		fs4.feed(ch)
+	}
+	if got.Len() != 0 {
+		t.Errorf("split calls-round streamed %q", got.String())
+	}
+
 	// reset keeps the emit fn, drops state
 	fs.reset()
 	if fs.started || fs.done || fs.pos != 0 || fs.emit == nil {
 		t.Errorf("reset left state: %+v", fs)
+	}
+}
+
+func TestOfferGuidanceImport(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
+	os.MkdirAll(filepath.Join(home, ".codex"), 0o755)
+	os.WriteFile(filepath.Join(home, ".claude", "CLAUDE.md"), []byte("no ssh to the LAN\n"), 0o644)
+	os.WriteFile(filepath.Join(home, ".codex", "AGENTS.md"), []byte("pin versions exactly\n"), 0o644)
+	os.WriteFile(filepath.Join(home, "AGENTS.md"), []byte("no ssh to the LAN"), 0o644) // same rules again
+	dir := filepath.Join(t.TempDir(), "hermes-hands")
+	dst := filepath.Join(dir, globalGuidanceFile)
+
+	offerGuidanceImport(bufio.NewReader(strings.NewReader("n\n")), dir)
+	if _, err := os.Stat(dst); err == nil {
+		t.Fatal("declined import must write nothing")
+	}
+	offerGuidanceImport(bufio.NewReader(strings.NewReader("y\n")), dir)
+	b, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Count(got, "no ssh to the LAN") != 1 || !strings.Contains(got, "pin versions exactly") ||
+		!strings.Contains(got, "## from "+filepath.Join(home, ".claude", "CLAUDE.md")) {
+		t.Errorf("guidance.md =\n%s", got)
+	}
+	if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0o600 {
+		t.Errorf("guidance.md perms = %v", fi.Mode().Perm())
+	}
+	// an existing import is only replaced on an explicit yes
+	os.WriteFile(dst, []byte("hand-edited"), 0o600)
+	offerGuidanceImport(bufio.NewReader(strings.NewReader("\n")), dir)
+	if b, _ := os.ReadFile(dst); string(b) != "hand-edited" {
+		t.Error("an existing import was replaced without a yes")
+	}
+}
+
+func TestAskServerApproval(t *testing.T) {
+	ask := func(mode, answer string, err error) string {
+		var out strings.Builder
+		ta := &prompt.TTYApprover{Mode: mode, Out: &out, AskLine: func(string) (string, error) { return answer, err }}
+		return askServerApproval(ta, "terminal", "rm -rf /tmp/build")
+	}
+	for _, tc := range []struct {
+		mode, answer string
+		err          error
+		want         string
+	}{
+		{"ask", "o", nil, "once"},
+		{"ask", "s", nil, "session"},
+		{"ask", "n", nil, "deny"},
+		{"ask", "", nil, "deny"},
+		{"ask", "o", io.EOF, "deny"}, // Ctrl-C / EOF at the prompt
+		{"auto", "o", nil, "deny"},   // yolo never approves a server command unseen
+		{"never", "o", nil, "deny"},
+	} {
+		if got := ask(tc.mode, tc.answer, tc.err); got != tc.want {
+			t.Errorf("mode %s answer %q -> %q, want %q", tc.mode, tc.answer, got, tc.want)
+		}
+	}
+	// the hands' [a]ll latch is another trust domain: it must not answer this
+	ta := &prompt.TTYApprover{Mode: "ask", AskLine: func(string) (string, error) { return "a", nil }}
+	if askServerApproval(ta, "terminal", "x") != "deny" {
+		t.Error("'a' (the hands' all-latch) must not approve a server command")
+	}
+}
+
+func TestSandboxGuardModes(t *testing.T) {
+	repo := t.TempDir()
+	if v := sandboxGuard("steer", repo, "")("execute_code", "print(2)"); !v.Steer {
+		t.Error("steer steers every server exec call")
+	}
+	if v := sandboxGuard("show", repo, "")("terminal", "make test"); v.Steer {
+		t.Error("show never steers")
+	}
+	smart := sandboxGuard("smart", repo, "")
+	if v := smart("terminal", "make test"); !v.Steer {
+		t.Error("smart steers make")
+	}
+	if v := smart("execute_code", "print(2)"); v.Steer {
+		t.Error("smart leaves a scratch computation alone")
+	}
+	if v := smart("tool_call", "Local Shell"); !v.Steer || v.Kind != "hands-tool" {
+		t.Errorf("smart steers a hands tool called as Hermes' own: %+v", v)
 	}
 }

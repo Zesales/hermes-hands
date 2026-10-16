@@ -164,3 +164,19 @@ func TestEncAbsentFallsBackToPlaintext(t *testing.T) {
 		t.Errorf("plaintext fallback not applied: %q / %q", c.APIURL, c.APIKey)
 	}
 }
+
+func TestPlatformUUIDFromIoreg(t *testing.T) {
+	// trimmed real `ioreg -rd1 -c IOPlatformExpertDevice` output (macOS)
+	out := `+-o J316sAP  <class IOPlatformExpertDevice, id 0x100000213, registered, matched, active, busy 0 (21 ms), retain 39>
+    {
+      "IOPlatformSerialNumber" = "C02XXXXXXX"
+      "IOPlatformUUID" = "1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"
+      "manufacturer" = <"Apple Inc.">
+    }`
+	if got := platformUUID(out); got != "1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809" {
+		t.Errorf("platformUUID = %q", got)
+	}
+	if platformUUID("no uuid here") != "" {
+		t.Error("no UUID, no id")
+	}
+}
