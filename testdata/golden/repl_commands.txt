@@ -21,7 +21,7 @@ hermes-hands - session <SESSION> >   Type a message to your Hermes brain. It wor
     /help         show this
     /exit         quit  (Ctrl-D too; Ctrl-C cancels the running turn)
 
-hermes-hands - session <SESSION> >   approvals: OFF (yolo) — shell / write run unattended
+hermes-hands - session <SESSION> >   approvals: OFF (yolo) — shell / write run unattended (this session only)
 
 hermes-hands - session <SESSION> >   approvals: ON — shell / write ask first
 
@@ -53,7 +53,7 @@ hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 hermes
    Read the README ("demo readme") and ran the shell.
    Two lines — ä ✓.
-— worked for <DUR> · hermes <DUR> · local <DUR> —
+— worked for <DUR> · hermes <DUR> · local <DUR> · 2 rounds · 2 calls —
 
 hermes-hands - session <SESSION> >  #2 output (7 bytes)
      one
@@ -86,7 +86,7 @@ you
 hermes
    Read the README ("demo readme") and ran the shell.
    Two lines — ä ✓.
-— worked for <DUR> · hermes <DUR> · local <DUR> —
+— worked for <DUR> · hermes <DUR> · local <DUR> · 2 rounds · 2 calls —
 
 
 hermes-hands - session <SESSION> > ID                        TURNS    TOKENS  UPDATED              IDLE     DIR             TITLE
@@ -116,21 +116,23 @@ hermes-hands - session <SESSION> >   home         : <TMP>/hermes-hands
   instructions : (built-in default)
   sessions     : <TMP>/hermes-hands/sessions
 
-  effective settings — edit the config file by hand; hermes-hands never writes these:
-    HERMES_API_URL                 <GATEWAY>
-    HERMES_API_PROFILE             (none)
-    HERMES_HANDS_APPROVE           ask
-    HERMES_HANDS_STREAM            (none)
-    HERMES_HANDS_RESPONSE_TIMEOUT  <DUR>
-    HERMES_HANDS_WATCHDOG_INTERVAL <DUR>
-    HERMES_HANDS_RETENTION_DAYS    14 days
-    HERMES_HANDS_DEBUG             off
-    HERMES_HANDS_SANDBOX           smart
-    HERMES_HANDS_MAX_ROUNDS        25
-    HERMES_HANDS_RUN_TIMEOUT       <DUR>
-    HERMES_API_RUN_TIMEOUT         <DUR>
-    HERMES_HANDS_MAX_OUTPUT        20000
-    HERMES_HANDS_DENY              (none)
+  effective settings — default < config < env < flag < runtime (runtime switches are never saved):
+    HERMES_API_URL                    <GATEWAY>   (env)
+    HERMES_API_PROFILE                (none)                   (default)
+    HERMES_HANDS_APPROVE              ask                      (env)
+    HERMES_HANDS_STREAM               (none)                   (default)
+    HERMES_HANDS_RESPONSE_TIMEOUT     <DUR>                     (default)
+    HERMES_HANDS_WATCHDOG_INTERVAL    <DUR>                     (default)
+    HERMES_HANDS_RETENTION_DAYS       14 days                  (default)
+    HERMES_HANDS_DEBUG                off                      (default)
+    HERMES_HANDS_SANDBOX              smart                    (default)
+    HERMES_HANDS_MAX_ROUNDS           25                       (default)
+    HERMES_HANDS_MAX_CALLS            100                      (default)
+    HERMES_HANDS_MAX_CALLS_PER_ROUND  20                       (default)
+    HERMES_HANDS_RUN_TIMEOUT          <DUR>                     (default)
+    HERMES_API_RUN_TIMEOUT            <DUR>                     (default)
+    HERMES_HANDS_MAX_OUTPUT           20000                    (default)
+    HERMES_HANDS_DENY                 (none)                   (default)
 
 hermes-hands - session <SESSION> >   this Hermes doesn't expose compaction over the API —
   it compacts automatically; use /new for a new task.

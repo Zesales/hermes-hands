@@ -1,13 +1,17 @@
 hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 {"approvals":"off","cwd":"<TMP>","hermes_agent":"0.22.2","session":"<SESSION>","type":"ready","version":"0.0.0-dev"}
+{"calls":0,"id":1,"max_calls":100,"max_rounds":25,"round":1,"type":"progress"}
 hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 {"action":"server","id":1,"preview":"echo probe","tool":"terminal","type":"hermes_tool"}
 {"action":"steered","id":1,"preview":"make test","tool":"terminal","type":"hermes_tool"}
 {"action":"denied","id":1,"preview":"rm -rf /tmp/scratch","tool":"terminal","type":"hermes_tool"}
 {"id":1,"preview":"README.md","ref":1,"tool":"local_read","type":"call"}
+{"calls":1,"id":1,"max_calls":100,"max_rounds":25,"round":1,"type":"progress"}
 {"exit":0,"id":1,"lines":1,"preview":"README.md","ref":1,"tool":"local_read","type":"tool"}
 {"id":1,"preview":"printf 'one\\ntwo\\n'","ref":2,"tool":"local_shell","type":"call"}
+{"calls":2,"id":1,"max_calls":100,"max_rounds":25,"round":1,"type":"progress"}
 {"exit":0,"id":1,"lines":2,"preview":"printf 'one\\ntwo\\n'","ref":2,"tool":"local_shell","type":"tool"}
+{"calls":2,"id":1,"max_calls":100,"max_rounds":25,"round":2,"type":"progress"}
 hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 {"id":1,"text":"R","type":"delta"}
 {"id":1,"text":"ead t","type":"delta"}
@@ -25,8 +29,8 @@ hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 {"id":1,"text":"es —","type":"delta"}
 {"id":1,"text":" ä ✓","type":"delta"}
 {"id":1,"text":".","type":"delta"}
-{"hermes_session":"<HERMES-SESSION>","id":1,"ok":true,"session":"<SESSION>","text":"Read the README (\"demo readme\") and ran the shell.\nTwo lines — ä ✓.","type":"answer"}
-{"events":[{"v":1,"seq":1,"at":"<AT>","turn":1,"kind":"user","text":"show me the readme"},{"v":1,"seq":2,"at":"<AT>","turn":1,"kind":"hermes_tool","text":"echo probe","tool":"terminal","action":"server"},{"v":1,"seq":3,"at":"<AT>","turn":1,"kind":"hermes_tool","text":"make test","tool":"terminal","action":"steered"},{"v":1,"seq":4,"at":"<AT>","turn":1,"kind":"hermes_tool","text":"rm -rf /tmp/scratch","tool":"terminal","action":"denied"},{"v":1,"seq":5,"at":"<AT>","turn":1,"kind":"call","ref":1,"id":"c1","tool":"local_read","args":{"path":"README.md"}},{"v":1,"seq":6,"at":"<AT>","turn":1,"kind":"result","ref":1,"tool":"local_read","exit":0,"lines":1,"bytes":12},{"v":1,"seq":7,"at":"<AT>","turn":1,"kind":"call","ref":2,"id":"c2","tool":"local_shell","args":{"cmd":"printf 'one\\ntwo\\n'"}},{"v":1,"seq":8,"at":"<AT>","turn":1,"kind":"result","ref":2,"tool":"local_shell","exit":0,"ms":<MS>,"lines":2,"bytes":7},{"v":1,"seq":9,"at":"<AT>","turn":1,"kind":"answer","text":"Read the README (\"demo readme\") and ran the shell.\nTwo lines — ä ✓.","ok":true},{"v":1,"seq":10,"at":"<AT>","turn":1,"kind":"turn_end","ms":<MS>,"local_ms":<MS>}],"hermes_session":"<HERMES-SESSION>","id":2,"session":"<SESSION>","type":"history"}
+{"calls":2,"hermes_session":"<HERMES-SESSION>","id":1,"ok":true,"rounds":2,"session":"<SESSION>","text":"Read the README (\"demo readme\") and ran the shell.\nTwo lines — ä ✓.","type":"answer"}
+{"events":[{"v":1,"seq":1,"at":"<AT>","turn":1,"kind":"user","text":"show me the readme"},{"v":1,"seq":2,"at":"<AT>","turn":1,"kind":"hermes_tool","text":"echo probe","tool":"terminal","action":"server"},{"v":1,"seq":3,"at":"<AT>","turn":1,"kind":"hermes_tool","text":"make test","tool":"terminal","action":"steered"},{"v":1,"seq":4,"at":"<AT>","turn":1,"kind":"hermes_tool","text":"rm -rf /tmp/scratch","tool":"terminal","action":"denied"},{"v":1,"seq":5,"at":"<AT>","turn":1,"kind":"call","ref":1,"id":"c1","tool":"local_read","args":{"path":"README.md"}},{"v":1,"seq":6,"at":"<AT>","turn":1,"kind":"result","ref":1,"tool":"local_read","exit":0,"lines":1,"bytes":12},{"v":1,"seq":7,"at":"<AT>","turn":1,"kind":"call","ref":2,"id":"c2","tool":"local_shell","args":{"cmd":"printf 'one\\ntwo\\n'"}},{"v":1,"seq":8,"at":"<AT>","turn":1,"kind":"result","ref":2,"tool":"local_shell","exit":0,"ms":<MS>,"lines":2,"bytes":7},{"v":1,"seq":9,"at":"<AT>","turn":1,"kind":"answer","text":"Read the README (\"demo readme\") and ran the shell.\nTwo lines — ä ✓.","ok":true},{"v":1,"seq":10,"at":"<AT>","turn":1,"kind":"turn_end","ms":<MS>,"local_ms":<MS>,"rounds":2,"calls":2}],"hermes_session":"<HERMES-SESSION>","id":2,"session":"<SESSION>","type":"history"}
 hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 {"base":"<GATEWAY>","id":3,"model":"hermes-agent","ok":true,"type":"check","version":"0.22.2"}
 {"id":4,"on":true,"path":"<TMP>/hermes-hands/sessions/<SESSION>/debug.jsonl","type":"debug"}
@@ -35,6 +39,6 @@ hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 {"id":7,"message":"turn needs a non-empty text","type":"error"}
 {"id":8,"message":"use needs a session id","type":"error"}
 {"id":9,"message":"no such session: <SESSION>","type":"error"}
-{"hermes_session":"<HERMES-SESSION>","id":10,"session":"<SESSION>","type":"session"}
+{"approvals":"off","hermes_session":"<HERMES-SESSION>","id":10,"session":"<SESSION>","type":"session"}
 {"id":11,"message":"unknown request type \"bogus\"","type":"error"}
 {"message":"invalid JSON request","type":"error"}
