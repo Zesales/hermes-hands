@@ -92,27 +92,29 @@ func (l *Loop) runCall(c callSpec, id string, round int) (resultElem, *Outcome) 
 	return e, nil
 }
 
-// fitRound applies the round output budget to a round's results: Hermes gets
-// the fitted outputs, the session keeps every output whole (it was stored
-// when its result was recorded) — local_output reads a cut part back.
-func (l *Loop) fitRound(elems []resultElem) []resultElem {
+// fitRound fits a round's results into limit bytes together (0 = no limit)
+// and returns the fitted copy: Hermes gets that, the session keeps every
+// output whole (stored when its result was recorded) — local_output reads a
+// cut part back. The operator is told what was cut.
+func (l *Loop) fitRound(elems []resultElem, limit int) []resultElem {
+	fitted := append([]resultElem(nil), elems...)
 	outs := make([]string, len(elems))
 	refs := make([]int, len(elems))
 	for i, e := range elems {
 		outs[i], refs[i] = e.Output, e.Ref
 	}
 	var cut []string
-	for i, out := range session.FitRound(outs, refs, l.MaxRoundOutput) {
+	for i, out := range session.FitRound(outs, refs, limit) {
 		if out != elems[i].Output {
-			elems[i].Output = out
+			fitted[i].Output = out
 			cut = append(cut, fmt.Sprintf("#%d", elems[i].Ref))
 		}
 	}
 	if len(cut) > 0 {
 		l.noteOperator(fmt.Sprintf("round output over %d bytes: %s cut for Hermes — the full output stays local (local_output)",
-			l.MaxRoundOutput, strings.Join(cut, " ")))
+			limit, strings.Join(cut, " ")))
 	}
-	return elems
+	return fitted
 }
 
 // newIDs hands out one correlation id per call of an envelope. Hermes may

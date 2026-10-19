@@ -83,23 +83,71 @@ func TestRunCompactsBeforeARequestThatWouldNotFit(t *testing.T) {
 	}
 }
 
-// A run refused for its size ends the turn BLOCKED with a hint; nothing is
-// retried, and the meter is full so the next request is compacted first.
-func TestRunOverflowIsNotRetried(t *testing.T) {
-	sa := &scriptAsker{
-		replies: []api.AskResult{reply(`{"calls":[],"final":"x"}`, true)},
-		errs:    []error{errors.New("run run_x failed: HTTP 400: prompt (150000 tokens) leaves no room to answer in the context (131072)")},
+// overflow is a model server refusing a request for its size.
+var overflow = errors.New("run run_x failed: HTTP 400: prompt (150000 tokens) leaves no room to answer in the context (131072)")
+
+// readBig is a turn that reads a 20 KB file in round 1 and answers in round
+// 2; errs are the errors of its requests, in order.
+func readBig(t *testing.T, errs ...error) (*historyAsker, *Loop, *compact.Keeper, Outcome) {
+	t.Helper()
+	ha := &historyAsker{scriptAsker: scriptAsker{
+		replies: []api.AskResult{
+			{Text: `{"calls":[{"id":"c1","tool":"local_read","args":{"path":"big.txt"}}],"final":null}`, Prompt: 30000, Threaded: true},
+			{Text: `{"calls":[],"final":"done"}`, Threaded: true},
+		},
+		errs: errs,
+	}}
+	l, k, log := keeperLoop(t, ha)
+	if err := os.WriteFile(filepath.Join(l.Dispatch.RepoRoot, "big.txt"), []byte(strings.Repeat("y", 20000)), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	l, k, log := keeperLoop(t, sa)
 	log.BeginTurn()
-	out := l.Run(context.Background(), "continue", k.Rec, func(string, string, int) {})
-	if out.OK || !strings.Contains(out.Answer, "hermes-hands compacts it before the next request") {
+	log.Add(session.Event{Kind: session.KindUser, Text: "read it"})
+	out := l.Run(context.Background(), "read it", k.Rec, func(string, string, int) {})
+	return ha, l, k, out
+}
+
+// A request refused for its size is handled locally: compacted as far as it
+// goes and sent again — same turn, same round, no BLOCKED.
+func TestRunRecoversARefusedRequestLocally(t *testing.T) {
+	ha, _, k, out := readBig(t, nil, overflow)
+	if !out.OK || out.Answer != "done" || out.Rounds != 2 {
+		t.Fatalf("out = %+v", out)
+	}
+	if len(ha.msgs) != 3 || ha.histories[1] != nil || len(ha.histories[2]) == 0 {
+		t.Fatalf("requests = %d, histories = %v", len(ha.msgs), ha.histories)
+	}
+	if ha.msgs[2] != ha.msgs[1] {
+		t.Error("the same request goes again — the transcript is what shrank")
+	}
+	evs, _ := k.Store.LoadEvents(k.Rec)
+	if c, ok := session.LastCompact(evs); !ok || c.Upto == 0 {
+		t.Errorf("no compaction: %+v", c)
+	}
+}
+
+// Still too large after compacting: the results the request carries are
+// fitted tighter — their full outputs stay local.
+func TestRunRefitsWhenCompactingIsNotEnough(t *testing.T) {
+	ha, _, _, out := readBig(t, nil, overflow, overflow)
+	if !out.OK || len(ha.msgs) != 4 {
+		t.Fatalf("out = %+v after %d requests", out, len(ha.msgs))
+	}
+	if len(ha.msgs[3]) >= len(ha.msgs[2]) || !strings.Contains(ha.msgs[3], `local_output {\"ref\":1`) {
+		t.Errorf("results not fitted tighter: %d -> %d bytes", len(ha.msgs[2]), len(ha.msgs[3]))
+	}
+}
+
+// Nothing left to make smaller: BLOCKED, saying why, and the meter full.
+func TestRunGivesUpAfterTheLocalRetries(t *testing.T) {
+	ha, _, k, out := readBig(t, nil, overflow, overflow, overflow)
+	if out.OK || !strings.Contains(out.Answer, "even compacted locally") {
 		t.Errorf("answer = %q", out.Answer)
 	}
-	if len(sa.msgs) != 1 {
-		t.Errorf("retried: %d requests", len(sa.msgs))
+	if len(ha.msgs) != 1+1+maxRecover {
+		t.Errorf("requests = %d", len(ha.msgs))
 	}
-	if k.Rec.Context != 150000 || !k.Due(k.Predict("continue", nil)) {
+	if k.Rec.Context != 150000 {
 		t.Errorf("meter = %d", k.Rec.Context)
 	}
 }

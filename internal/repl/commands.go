@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"hermes-hands/internal/app"
+	"hermes-hands/internal/compact"
 	"hermes-hands/internal/config"
 )
 
@@ -132,7 +133,7 @@ func (r *repl) compact(arg string) {
 	if arg != "" {
 		fmt.Fprintln(os.Stderr, "  /compact takes no focus — nothing is summarised away, every output stays readable.")
 	}
-	ev, err := r.a.Keeper.Compact(false)
+	ev, err := r.a.Keeper.Compact(compact.Now)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  %v\n\n", err)
 		return

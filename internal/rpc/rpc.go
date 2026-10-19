@@ -53,6 +53,7 @@ import (
 	"strings"
 
 	"hermes-hands/internal/app"
+	"hermes-hands/internal/compact"
 	"hermes-hands/internal/compat"
 	"hermes-hands/internal/session"
 	"hermes-hands/internal/turn"
@@ -324,7 +325,7 @@ func (s *server) check(_ request, id any) {
 
 // compact compacts the held session's transcript now (internal/compact).
 func (s *server) compact(_ request, id any) {
-	ev, err := s.a.Keeper.Compact(false)
+	ev, err := s.a.Keeper.Compact(compact.Now)
 	if err != nil {
 		s.emit(map[string]any{"type": "compact", "id": id, "ok": false, "session": s.rec.ID, "message": err.Error()})
 		return

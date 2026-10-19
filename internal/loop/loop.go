@@ -199,6 +199,11 @@ type turnState struct {
 	recap   bool
 
 	fixups, rejects int // recovery nudges spent: a botched / empty envelope, one over the budget
+
+	// pending: the results send carries, unfitted, and the round they ran
+	// in — what a request refused for its size is fitted tighter from
+	pending      []resultElem
+	pendingRound int
 }
 
 // opening is round 1's message: the framed problem, behind the one-off notes
@@ -232,7 +237,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 			// was shown) just apologizes for the formatting and asks what
 			// to do. Restate the question so fixing the envelope doesn't
 			// also mean abandoning the task.
-			t.send = fixupMsg + "\n" + questionNote(t.userMsg)
+			t.send, t.pending = fixupMsg+"\n"+questionNote(t.userMsg), nil
 			t.turnlog += fmt.Sprintf("[round %d] (invalid envelope, requested resend)\n", round)
 			return Outcome{}, false
 		}
@@ -244,7 +249,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 		}
 		if t.fixups < maxFixups {
 			t.fixups++
-			t.send = emptyMsg + "\n" + questionNote(t.userMsg) // same reasoning as the fixupMsg case above
+			t.send, t.pending = emptyMsg+"\n"+questionNote(t.userMsg), nil // same reasoning as the fixupMsg case above
 			return Outcome{}, false
 		}
 		return Outcome{Answer: "BLOCKED: Hermes returned an empty envelope repeatedly.", OK: false}, true
@@ -260,7 +265,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 		}
 		t.rejects++
 		l.noteOperator(note)
-		t.send = why + "\n" + questionNote(t.userMsg) + l.roundBudgetNote(round+1)
+		t.send, t.pending = why+"\n"+questionNote(t.userMsg)+l.roundBudgetNote(round+1), nil
 		t.turnlog += fmt.Sprintf("[round %d] (envelope of %d calls over the budget, nothing run)\n", round, len(env.calls))
 		return Outcome{}, false
 	}
@@ -270,7 +275,8 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 	if stopped != nil {
 		return *stopped, true
 	}
-	t.send = l.resultsMsg(l.fitRound(elems), t.userMsg, round)
+	t.pending, t.pendingRound = elems, round
+	t.send = l.resultsMsg(l.fitRound(elems, l.MaxRoundOutput), t.userMsg, round)
 	l.announce(round + 1)
 	return Outcome{}, false
 }

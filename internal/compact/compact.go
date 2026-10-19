@@ -219,15 +219,28 @@ var ErrNothing = errors.New("nothing to compact yet — no call output or turn t
 // that is enough: the replies and results the model is working with.
 const keepRounds = 2
 
-// Compact compacts the transcript and returns the KindCompact event the
-// caller appends to the log; the log itself is never rewritten. Before a
-// request (auto) it shrinks only as far as needed to reach its target — half
-// the share At of the Window: every round but the latest keepRounds elided,
-// then every round, then the oldest turns as question + answer (never the
-// latest turn). Asked for (/compact, rpc) it elides every output so far right
-// away, then collapses turns while still above the target (all but the
-// latest when no window is known).
-func (k *Keeper) Compact(auto bool) (session.Event, error) {
+// Depth is how far a compaction goes.
+type Depth int
+
+const (
+	// Auto, before a request that would come too close to the window: only
+	// as far as its target — half the share At of the Window — needs. Every
+	// round but the latest keepRounds elided, then every round, then the
+	// oldest turns as question + answer.
+	Auto Depth = iota
+	// Now, asked for (/compact, rpc): every output so far elided, then turns
+	// collapsed while still above the target (all but the latest when no
+	// window is known).
+	Now
+	// Max, after a request was refused for its size: every output elided and
+	// every turn but the latest as question + answer.
+	Max
+)
+
+// Compact compacts the transcript as deep as d says and returns the
+// KindCompact event the caller appends to the log; the log itself is never
+// rewritten, and the latest turn is never collapsed.
+func (k *Keeper) Compact(d Depth) (session.Event, error) {
 	evs := k.events()
 	last := session.LastTurn(evs)
 	if len(evs) == 0 || last == 0 {
@@ -239,12 +252,12 @@ func (k *Keeper) Compact(auto bool) (session.Event, error) {
 		before = k.size(evs, prev)
 	}
 	target := 0
-	if k.Window > 0 && k.At > 0 {
+	if k.Window > 0 && k.At > 0 && d != Max {
 		target = k.Window * k.At / 200
 	}
 	top := evs[len(evs)-1].Seq
 	c := session.Event{Kind: session.KindCompact, Upto: top, Collapse: prev.Collapse}
-	if auto {
+	if d == Auto {
 		if c.Upto = max(prev.Upto, keepFrom(evs, keepRounds)); k.size(evs, c) > target {
 			c.Upto = top
 		}

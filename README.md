@@ -371,9 +371,13 @@ anything:
   bytes of one round's results together: the small outputs stay whole, the
   big ones keep head and tail around a marker that names the cut bytes (and
   how to read them back). The full output stays local.
-- **A refused request is not retried.** If the model server refuses a
-  request for its size anyway, the turn ends BLOCKED with a note, the meter
-  goes to full — and the next request (your "continue") is compacted first.
+- **A refused request is handled locally.** If the model server refuses a
+  request for its size anyway, hermes-hands makes the same request smaller
+  and sends it again, within the same round: first the transcript compacted
+  as far as it goes (every output elided, every earlier turn as question +
+  answer), then the results the request carries fitted tighter. Only when
+  that cannot make it fit — the fixed part of the prompt and this request
+  alone are too large for the window — does the turn end BLOCKED.
 
 Keep `HERMES_HANDS_COMPACT_AT` below hermes-agent's `compression.threshold`
 (default 0.5): then hermes-hands compacts first and hermes-agent's own

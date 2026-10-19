@@ -39,9 +39,11 @@ included, again and again.
   together. A bigger round keeps its small outputs whole and the big ones'
   head and tail around a marker naming the cut bytes; the operator gets a
   note, the session keeps the full output.
-- **A run refused for its size** ends BLOCKED with a note and is not
-  retried; the meter goes to full, so the next request — the operator's
-  "continue" — is compacted first.
+- **A run refused for its size is handled locally**: the same request is
+  made smaller and sent again within the round — the transcript compacted
+  as far as it goes, then the request's own results fitted tighter. Only
+  when that cannot make it fit does the turn end BLOCKED, saying why; the
+  meter then stands at the refused size.
 - Splitting the loop and the SSE stream for this took both off the size
   budget's exception list: `Loop.Run` is the round loop, `request.go` the
   request (meter, compaction, transcript), `envelope.go` the reply parsing;

@@ -98,7 +98,7 @@ func TestOverflowSetsTheMeter(t *testing.T) {
 	}
 	// also once hermes-hands holds the transcript: the refused size wins
 	// over the estimate, the next request is compacted again
-	ev, err := k.Compact(false)
+	ev, err := k.Compact(Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestHistoryOnlyOnceCompacted(t *testing.T) {
 	if k.History() != nil || k.Owned() {
 		t.Fatal("hermes-agent holds the transcript until the first compaction")
 	}
-	ev, err := k.Compact(false)
+	ev, err := k.Compact(Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestHistoryOnlyOnceCompacted(t *testing.T) {
 func TestCompactAutoKeepsTheLatestRounds(t *testing.T) {
 	k, log := newKeeper(t, 4)
 	k.Window, k.At = 400000, 45 // a target the latest two rounds fit
-	ev, err := k.Compact(true)
+	ev, err := k.Compact(Auto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestCompactAutoKeepsTheLatestRounds(t *testing.T) {
 	}
 	// a tight window: everything elided, the oldest turns collapsed
 	k.Window = 60000
-	ev, err = k.Compact(true)
+	ev, err = k.Compact(Auto)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestCompactAutoKeepsTheLatestRounds(t *testing.T) {
 
 func TestCompactNothingYet(t *testing.T) {
 	k, _ := newKeeper(t, 0)
-	if _, err := k.Compact(false); !errors.Is(err, ErrNothing) {
+	if _, err := k.Compact(Now); !errors.Is(err, ErrNothing) {
 		t.Errorf("err = %v", err)
 	}
 }
