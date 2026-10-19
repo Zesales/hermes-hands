@@ -18,17 +18,18 @@ import (
 // verbatim — a frozen prefix: a later version's rendering never changes it,
 // and prompt caches keep it.
 type ChatCheckpoint struct {
-	V         int    `json:"v"`
-	N         int    `json:"n"`    // the session's compaction number
-	At        string `json:"at"`   // RFC 3339
-	Seq       int    `json:"seq"`  // the last event it covers
-	Turn      int    `json:"turn"` // the turn it was taken in
-	Depth     string `json:"depth"`
-	Before    int    `json:"before"` // estimated tokens before and after
-	After     int    `json:"after"`
-	Elided    string `json:"elided,omitempty"`    // "#1–#212": the outputs it carries as lines
-	Collapsed string `json:"collapsed,omitempty"` // "turns 1–5": sent as question + answer
-	Messages  []Msg  `json:"messages"`
+	V          int    `json:"v"`
+	N          int    `json:"n"`    // the session's compaction number
+	At         string `json:"at"`   // RFC 3339
+	Seq        int    `json:"seq"`  // the last event it covers
+	Turn       int    `json:"turn"` // the turn it was taken in
+	Depth      string `json:"depth"`
+	Before     int    `json:"before"`      // tokens before and after (After estimated)
+	BeforeFrom string `json:"before_from"` // measured | estimated | log (the whole log in full: the meter had nothing yet)
+	After      int    `json:"after"`
+	Elided     string `json:"elided,omitempty"`    // "#1–#212": the outputs it carries as lines
+	Collapsed  string `json:"collapsed,omitempty"` // "turns 1–5": sent as question + answer
+	Messages   []Msg  `json:"messages"`
 }
 
 // ChatCheckpointVersion is ChatCheckpoint.V; bump it only for an

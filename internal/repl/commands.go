@@ -34,6 +34,7 @@ var commands = []command{
 	{[]string{"/check"}, (*repl).check},
 	{[]string{"/config", "/hh-settings"}, (*repl).config},
 	{[]string{"/compact", "/compress"}, (*repl).compact},
+	{[]string{"/compact-aggressive"}, (*repl).compactAggressive},
 	{[]string{"/context"}, (*repl).context},
 }
 
@@ -127,14 +128,34 @@ func (r *repl) config(string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// compact compacts the open session's transcript now — hermes-hands' own
-// compaction (internal/compact): from here on it sends the transcript with
-// every run, old outputs elided but readable with local_output.
+// compact compacts the open session's chat now — hermes-hands' own
+// compaction (internal/compact): every output so far as a line, readable
+// with local_output; turns collapse only when the lines would not leave
+// room. It takes no argument: a mistyped "/compact agressive" does nothing
+// instead of something else.
 func (r *repl) compact(arg string) {
 	if arg != "" {
-		fmt.Fprintln(os.Stderr, "  /compact takes no focus — nothing is summarised away, every output stays readable.")
+		fmt.Fprintln(os.Stderr, "  /compact takes no argument — /compact-aggressive also turns every earlier turn into question + answer.")
+		fmt.Fprintln(os.Stderr)
+		return
 	}
-	ev, err := r.a.Keeper.Compact(compact.Now)
+	r.compactAs(compact.Now)
+}
+
+// compactAggressive is the deep one, for when /compact was not enough:
+// every output as a line and every turn but the latest as question + answer
+// (the files each one changed and read still named).
+func (r *repl) compactAggressive(arg string) {
+	if arg != "" {
+		fmt.Fprintln(os.Stderr, "  /compact-aggressive takes no argument.")
+		fmt.Fprintln(os.Stderr)
+		return
+	}
+	r.compactAs(compact.Aggressive)
+}
+
+func (r *repl) compactAs(d compact.Depth) {
+	ev, err := r.a.Keeper.Compact(d)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  %v\n\n", err)
 		return

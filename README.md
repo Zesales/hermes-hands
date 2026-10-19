@@ -169,7 +169,8 @@ numbers) `/session <id>` (switch; replays its last turns) `/sessions`
 `/history` (replay every turn of this session; `/history <n>` the last n,
 `/history <id>` another session's — read-only) `/out <n>` (the full output of
 call `#n`) `/compact` (compact this session's chat now — see
-[Context and compaction](#context-and-compaction)) `/context` (what Hermes
+[Context and compaction](#context-and-compaction)) `/compact-aggressive`
+(when `/compact` was not enough) `/context` (what Hermes
 reads now; `/context full` every message) `/fork` (branch on the
 server) `/debug` (toggle the redacted
 connection trace, see below) `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also
@@ -358,10 +359,16 @@ anything:
   (rpc: `context` / `window` on `progress`).
 - **Compaction before the request, never after it failed.** Before every
   request hermes-hands predicts its prompt; past `HERMES_HANDS_COMPACT_AT` %
-  of `HERMES_HANDS_CONTEXT_WINDOW` it compacts first, only as far as needed:
-  the outputs of all but the latest two rounds, then of every round, then the
-  oldest turns as question + answer (never the latest turn). `/compact` (rpc
-  `compact`) does it now and elides every output so far.
+  of `HERMES_HANDS_CONTEXT_WINDOW` it compacts first. Outputs are elided as
+  far as needed — those of all but the latest two rounds, then of every
+  round — which loses nothing. Turns are collapsed to question + answer only
+  as a last resort, while the prompt would otherwise stay above three
+  quarters of the trigger (never the latest turn); a collapsed turn still
+  names the files it edited and read. `/compact` (rpc `compact`) elides
+  every output so far now; **`/compact-aggressive`** (rpc `compact` with
+  `"text":"aggressive"`) also collapses every earlier turn — for when
+  `/compact` was not enough. `/compact` takes no argument, so a mistyped
+  `/compact agressive` does nothing.
 - **Nothing is thrown away.** An elided round's results go as one line per
   call — `#14 local_shell `go test ./...` → exit 1 · 312 lines · 18 KB ·`
   and the output's error or last line, picked by the same rule as the
@@ -370,8 +377,10 @@ anything:
   and `out/<n>.txt` stay untouched. No model writes a summary.
 - **A chat checkpoint per compaction.** What Hermes reads from then on is
   frozen in `<id>/chat-checkpoints/NNNN.json` (`n`, `seq` — the last event it
-  covers —, `depth`, `before` / `after`, which outputs and turns it carries
-  short, and the `messages`). Hermes reads the latest checkpoint plus every
+  covers —, `depth`, `before` / `after` and where `before` comes from —
+  `measured`, `estimated`, or `log`: a session from before the meter, the
+  whole log in full, more than hermes-agent ever held —, which outputs and
+  turns it carries short, and the `messages`). Hermes reads the latest checkpoint plus every
   event after it, so that prefix never changes. `events.jsonl` stays the
   whole chat: the `compact` event names its checkpoint and is the divider
   between the old chat and the compacted one — in the terminal a
@@ -429,7 +438,7 @@ One request object per line on **stdin**; one response object per line on
 {"id":2,"type":"new"}                                   // start a fresh session, becomes current
 {"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
 {"id":4,"type":"check"}
-{"id":5,"type":"compact"}                                 // compact this session's chat now
+{"id":5,"type":"compact"}                                 // compact this session's chat now ("text":"aggressive": every earlier turn too)
 {"id":7,"type":"context"}                                 // what Hermes reads now
 {"id":6,"type":"approvals","text":"auto"}                 // auto | never ("" = report) — this session only
 

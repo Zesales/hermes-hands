@@ -14,6 +14,7 @@ hermes-hands - session <SESSION> >   Type a message to your Hermes brain. It wor
     /out <n>      full output of call #n
     /fork         branch this session on the server, switch to it
     /compact      compact this session's chat now (a chat checkpoint; outputs stay readable)
+    /compact-aggressive  also every earlier turn as question + answer — when /compact was not enough
     /context      what Hermes reads now (/context full = every message)
     /yolo         toggle approvals for shell / write / edit
     /debug        toggle the redacted connection trace (session debug.jsonl)
@@ -138,6 +139,10 @@ hermes-hands - session <SESSION> >   home         : <TMP>/hermes-hands
     HERMES_HANDS_CONTEXT_WINDOW       131072 tokens            (default)
     HERMES_HANDS_COMPACT_AT           45%                      (default)
     HERMES_HANDS_DENY                 (none)                   (default)
+
+hermes-hands - session <SESSION> >   nothing to compact yet — no call output or turn to elide
+
+hermes-hands - session <SESSION> >   /compact takes no argument — /compact-aggressive also turns every earlier turn into question + answer.
 
 hermes-hands - session <SESSION> >   nothing to compact yet — no call output or turn to elide
 

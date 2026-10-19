@@ -93,10 +93,13 @@ func (t *transcript) add(role, content string) {
 }
 
 // collapsed sends a turn as its question and its answer, with a line that
-// says which calls ran in between — each still readable with local_output.
+// says which calls ran in between — each still readable with local_output —
+// and which files they changed and read: in a code session the knowledge a
+// collapsed turn must not lose.
 func (t *transcript) collapsed(turn []Event) {
 	var refs []int
 	tools := map[string]int{}
+	var edited, read files
 	answer, ok := "", true
 	for _, e := range turn {
 		switch e.Kind {
@@ -105,14 +108,26 @@ func (t *transcript) collapsed(turn []Event) {
 		case KindCall:
 			refs = append(refs, e.Ref)
 			tools[e.Tool]++
+			switch e.Tool {
+			case "local_write", "local_edit":
+				edited.add(argPath(e.Args))
+			case "local_read":
+				read.add(argPath(e.Args))
+			}
 		case KindAnswer:
 			answer, ok = e.Text, e.OK == nil || *e.OK
 		}
 	}
 	var b strings.Builder
 	if len(refs) > 0 {
-		fmt.Fprintf(&b, "[turn %d, compacted by hermes-hands: %s ran as calls #%d–#%d; local_output {\"ref\":N} reads any of their outputs]\n",
-			turn[0].Turn, toolCounts(tools), refs[0], refs[len(refs)-1])
+		fmt.Fprintf(&b, "[turn %d, compacted by hermes-hands: %s ran as calls #%d–#%d", turn[0].Turn, toolCounts(tools), refs[0], refs[len(refs)-1])
+		if len(edited) > 0 {
+			b.WriteString(" · edited: " + edited.String())
+		}
+		if len(read) > 0 {
+			b.WriteString(" · read: " + read.String())
+		}
+		b.WriteString(`; local_output {"ref":N} reads any of their outputs]` + "\n")
 	}
 	switch {
 	case answer == "":
@@ -123,6 +138,40 @@ func (t *transcript) collapsed(turn []Event) {
 		b.WriteString("(the turn stopped: " + answer + ")")
 	}
 	t.add("assistant", b.String())
+}
+
+// files is a list of paths, each once, in the order first seen.
+type files []string
+
+func (f *files) add(p string) {
+	if p == "" {
+		return
+	}
+	for _, have := range *f {
+		if have == p {
+			return
+		}
+	}
+	*f = append(*f, p)
+}
+
+// maxFiles is how many paths a collapsed turn names per list.
+const maxFiles = 12
+
+func (f files) String() string {
+	if len(f) <= maxFiles {
+		return strings.Join(f, ", ")
+	}
+	return strings.Join(f[:maxFiles], ", ") + fmt.Sprintf(" +%d more", len(f)-maxFiles)
+}
+
+// argPath is a file call's path argument.
+func argPath(args json.RawMessage) string {
+	var a struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(args, &a)
+	return a.Path
 }
 
 // turn sends a turn round by round: the operator's message, every reply,

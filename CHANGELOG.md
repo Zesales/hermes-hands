@@ -4,7 +4,37 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.13.0 — (unreleased, `bump:minor`) the operator's turn budget; config layers; hermes-hands' own compaction
+## 0.14.0 — 2026-10-19 — `/compact-aggressive`; compaction keeps more of a code session
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
+
+Tuned on a real code session of ~300 tool calls, compacted on 0.13.0.
+
+- **`/compact-aggressive`** (rpc `compact` with `"text":"aggressive"`): every
+  output as a line and every earlier turn as question + answer — for when
+  `/compact` was not enough. The same depth a request refused for its size
+  gets. `/compact` takes no argument any more: a mistyped
+  `/compact agressive` does nothing instead of something else (rpc: an
+  unknown `text` is an error).
+- **`/compact` collapses turns only when it must**: every output still
+  becomes a line, but turns are collapsed to question + answer only while
+  the prompt would otherwise stay above three quarters of the trigger
+  (`HERMES_HANDS_COMPACT_AT`) — not down to half of it. On a 128k window a
+  ~300-call session keeps the line of every call instead of losing its
+  first turns. Automatic compaction collapses by the same rule; with no
+  window known nothing collapses on its own.
+- **A collapsed turn names its files**: `· edited: a.go, b.go · read: …`
+  (from its `local_write` / `local_edit` / `local_read` calls, up to 12 per
+  list) — which files were read and changed is what a code session must not
+  lose.
+- **An honest "before"**: a session from before the meter had no reading,
+  and the divider showed the whole log rendered in full (`~359k`) as if
+  Hermes had held it. It now says `log ~359k → ~29k`; the checkpoint records
+  `before_from` (`measured` | `estimated` | `log`).
+
+## 0.13.0 — 2026-10-19 — the operator's turn budget; config layers; hermes-hands' own compaction
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
 ### Context: the meter and hermes-hands' own compaction
 
@@ -122,7 +152,7 @@ included, again and again.
   no lower than the call budget, compaction on with a round's worst-case
   size in mind, and prompt caching for the prefix every round re-sends.
 
-## 0.12.2 — (unreleased, `bump:patch`) a license badge that always renders
+## 0.12.2 — 2026-10-16 — a license badge that always renders
 
 - The README's license badge is static (`license: MIT`). The dynamic one
   asked the GitHub API through shields.io's token pool on every view and

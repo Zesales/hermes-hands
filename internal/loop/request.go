@@ -82,7 +82,7 @@ const maxRecover = 2
 // nothing left to make smaller. Same session, nothing thrown away.
 func (l *Loop) recover(t *turnState, try int) bool {
 	if try == 0 {
-		ev, err := l.Ctx.Compact(compact.Max)
+		ev, err := l.Ctx.Compact(compact.Aggressive)
 		if err == nil {
 			l.emit(ev)
 			l.noteOperator("the request was refused for its size — compacted locally, sending it again")

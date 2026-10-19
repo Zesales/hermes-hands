@@ -210,3 +210,28 @@ func TestLastCompact(t *testing.T) {
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
+
+// A collapsed turn names the files it changed and read.
+func TestTranscriptCollapsedTurnNamesFiles(t *testing.T) {
+	ok := true
+	call := func(seq, ref int, tool, path string) Event {
+		return Event{Seq: seq, Turn: 1, Kind: KindCall, Ref: ref, Tool: tool, Args: json.RawMessage(`{"path":"` + path + `"}`)}
+	}
+	evs := []Event{
+		{Seq: 1, Turn: 1, Kind: KindUser, Text: "fix it"},
+		call(2, 1, "local_read", "a.go"), call(3, 2, "local_read", "b.go"), call(4, 3, "local_edit", "a.go"),
+		call(5, 4, "local_read", "a.go"), call(6, 5, "local_write", "c_test.go"),
+		{Seq: 7, Turn: 1, Kind: KindAnswer, Text: "fixed", OK: &ok},
+	}
+	msgs := Transcript(evs, TranscriptOpts{Collapse: 1})
+	if !strings.Contains(msgs[1].Content, "ran as calls #1–#5 · edited: a.go, c_test.go · read: a.go, b.go;") {
+		t.Errorf("collapsed = %q", msgs[1].Content)
+	}
+	var many files
+	for i := 0; i < 15; i++ {
+		many.add(string(rune('a'+i)) + ".go")
+	}
+	if got := many.String(); !strings.HasSuffix(got, "l.go +3 more") {
+		t.Errorf("long list = %q", got)
+	}
+}

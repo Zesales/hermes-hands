@@ -77,22 +77,26 @@ var ErrNothing = errors.New("nothing to compact yet — no call output or turn t
 // that is enough: the replies and results the model is working with.
 const keepRounds = 2
 
-// Depth is how far a compaction goes.
+// Depth is how far a compaction goes. Outputs are elided first — that loses
+// nothing, local_output reads them back. Turns are collapsed to question +
+// answer only as a last resort: that drops which call did what (the files a
+// collapsed turn read and changed stay named).
 type Depth int
 
 const (
-	// Auto, before a request that would come too close to the window: only
-	// as far as its target — half the share At of the Window — needs. Every
-	// round but the latest keepRounds elided, then every round, then the
-	// oldest turns as question + answer.
+	// Auto, before a request that would come too close to the window:
+	// outputs elided only as far as the target — half the share At of the
+	// Window — needs (every round but the latest keepRounds, then every
+	// round); turns collapsed only while the prompt would stay above three
+	// quarters of At.
 	Auto Depth = iota
-	// Now, asked for (/compact, rpc): every output so far elided, then turns
-	// collapsed while still above the target (all but the latest when no
-	// window is known).
+	// Now, asked for (/compact, rpc compact): every output so far elided;
+	// turns collapsed only like Auto's.
 	Now
-	// Max, after a request was refused for its size: every output elided and
+	// Aggressive, asked for (/compact-aggressive, rpc compact "aggressive")
+	// or after a request was refused for its size: every output elided and
 	// every turn but the latest as question + answer.
-	Max
+	Aggressive
 )
 
 // Compact compacts the transcript as deep as d says and returns the
@@ -105,13 +109,11 @@ func (k *Keeper) Compact(d Depth) (session.Event, error) {
 		return session.Event{}, ErrNothing
 	}
 	prev, _ := session.LastCompact(evs)
-	before := k.Rec.Context // the last run's, measured when it could be
-	if before == 0 {
-		before = k.size(evs, prev)
-	}
-	target := 0
-	if k.Window > 0 && k.At > 0 && d != Max {
-		target = k.Window * k.At / 200
+	before, from := k.before(evs, prev)
+	target, collapseAbove := 0, 0 // no window known: outputs elided, nothing collapsed
+	if k.Window > 0 && k.At > 0 {
+		trigger := k.Window * k.At / 100
+		target, collapseAbove = trigger/2, trigger*3/4
 	}
 	top := evs[len(evs)-1].Seq
 	c := session.Event{Kind: session.KindCompact, Upto: top, Collapse: prev.Collapse}
@@ -120,8 +122,13 @@ func (k *Keeper) Compact(d Depth) (session.Event, error) {
 			c.Upto = top
 		}
 	}
-	for k.size(evs, c) > target && c.Collapse < last-1 {
-		c.Collapse++
+	switch {
+	case d == Aggressive:
+		c.Collapse = max(c.Collapse, last-1)
+	case collapseAbove > 0:
+		for k.size(evs, c) > collapseAbove && c.Collapse < last-1 {
+			c.Collapse++
+		}
 	}
 	if !elides(evs, prev, c) {
 		return session.Event{}, ErrNothing
@@ -129,7 +136,8 @@ func (k *Keeper) Compact(d Depth) (session.Event, error) {
 	c.Tokens, c.Before = k.size(evs, c), before
 	cp := &session.ChatCheckpoint{
 		N: k.Rec.Compactions + 1, Seq: top, Turn: last, Depth: d.String(),
-		Before: c.Before, After: c.Tokens, Elided: elidedRange(evs, c), Collapsed: collapsedRange(c),
+		Before: c.Before, BeforeFrom: from, After: c.Tokens,
+		Elided: elidedRange(evs, c), Collapsed: collapsedRange(c),
 		Messages: session.Transcript(evs, k.opts(c)),
 	}
 	rel, err := k.Store.SaveChatCheckpoint(k.Rec, cp)
@@ -145,9 +153,25 @@ func (k *Keeper) Compact(d Depth) (session.Event, error) {
 	return c, nil
 }
 
-// String is the depth's name in a checkpoint: auto | now | max.
+// before is the context a compaction starts from, and where that number
+// comes from: the meter after the last run (measured / estimated) or — when
+// the meter has nothing yet, a session from before it — the whole log
+// rendered in full ("log"), more than hermes-agent ever held of it.
+func (k *Keeper) before(evs []session.Event, prev session.Event) (int, string) {
+	switch {
+	case k.Rec.Context > 0 && k.Rec.Measured:
+		return k.Rec.Context, "measured"
+	case k.Rec.Context > 0:
+		return k.Rec.Context, "estimated"
+	case prev.Kind == session.KindCompact:
+		return k.size(evs, prev), "estimated"
+	}
+	return k.size(evs, prev), "log"
+}
+
+// String is the depth's name in a checkpoint: auto | now | aggressive.
 func (d Depth) String() string {
-	return [...]string{"auto", "now", "max"}[d]
+	return [...]string{"auto", "now", "aggressive"}[d]
 }
 
 // elides reports whether compaction c elides more than prev did: a call
@@ -220,7 +244,14 @@ func collapsedRange(c session.Event) string {
 // note is the divider line the terminal and the session log show for a
 // compaction.
 func note(cp *session.ChatCheckpoint, rel string) string {
-	s := fmt.Sprintf("compacted #%d · ~%s → ~%s tokens", cp.N, kilo(cp.Before), kilo(cp.After))
+	from := "~" + kilo(cp.Before)
+	if cp.BeforeFrom == "log" { // never what Hermes held — the whole log in full
+		from = "log ~" + kilo(cp.Before)
+	}
+	s := fmt.Sprintf("compacted #%d · %s → ~%s tokens", cp.N, from, kilo(cp.After))
+	if cp.Depth == Aggressive.String() {
+		s = fmt.Sprintf("compacted #%d (aggressive) · %s → ~%s tokens", cp.N, from, kilo(cp.After))
+	}
 	if cp.Elided != "" {
 		s += " · outputs " + cp.Elided + " as lines"
 	}

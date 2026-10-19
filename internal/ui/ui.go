@@ -355,6 +355,7 @@ func (u *UI) Help(cwd string) {
 	io.WriteString(u.w, "    /out <n>      full output of call #n\n")
 	io.WriteString(u.w, "    /fork         branch this session on the server, switch to it\n")
 	io.WriteString(u.w, "    /compact      compact this session's chat now (a chat checkpoint; outputs stay readable)\n")
+	io.WriteString(u.w, "    /compact-aggressive  also every earlier turn as question + answer — when /compact was not enough\n")
 	io.WriteString(u.w, "    /context      what Hermes reads now (/context full = every message)\n")
 	io.WriteString(u.w, "    /yolo         toggle approvals for shell / write / edit\n")
 	io.WriteString(u.w, "    /debug        toggle the redacted connection trace (session debug.jsonl)\n")
