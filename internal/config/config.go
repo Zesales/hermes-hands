@@ -11,6 +11,34 @@ import (
 	"time"
 )
 
+// The operator's budget per turn (internal/loop): requests to Hermes, hands
+// calls, and calls per envelope. Hermes sees it from the start and a countdown
+// once it gets close; 0 = no limit.
+const (
+	DefaultMaxRounds        = 25
+	DefaultMaxCalls         = 100
+	DefaultMaxCallsPerRound = 20
+)
+
+// The context (internal/compact): the model's window in tokens, the share of
+// it in percent a request may reach before hermes-hands compacts first — kept
+// below hermes-agent's own compression.threshold (default 0.5), so the
+// lossless compaction comes first — and the bytes of one round's results
+// together. 0 = unknown / off / no limit.
+const (
+	DefaultContextWindow  = 131072
+	DefaultCompactAt      = 45
+	DefaultMaxRoundOutput = 60000
+)
+
+// flags holds command-line overrides (SetFlag) — the strongest layer Load
+// resolves.
+var flags = map[string]string{}
+
+// SetFlag makes a command-line flag (--yolo → HERMES_HANDS_APPROVE=auto) win
+// over the environment and the config file for every later Load.
+func SetFlag(key, value string) { flags[key] = value }
+
 // Warnf mirrors bash `hh_warn`. Overridable in tests.
 var Warnf = func(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "hermes-hands: WARNING: "+format+"\n", a...)
@@ -24,10 +52,12 @@ var Warnf = func(format string, a ...any) {
 // layout. Each path still has its own override (HERMES_HANDS_CONFIG /
 // _SECRETS / _STATE / _INSTRUCTIONS) which wins over the Home-derived default.
 //
-// The API tuning knobs come from the process environment only; URL / key /
-// profile / approve / stream / deny / allow-http / verbose / debug / retention /
-// sandbox / the watchdog knobs are read after the config file so the file (and, conditionally, the
-// secrets store) wins over the environment for those.
+// Every setting resolves through layers, weakest first: the built-in
+// default < the config file (the operator's defaults for every session) < the
+// environment (a non-empty value) < a command-line flag. Runtime switches
+// (/yolo, /debug, rpc) sit on top in the running process only and are never
+// saved (internal/app). The secrets store fills the URL / key only while both
+// layers left one unset. Sources says which layer each key came from.
 type Config struct {
 	APIURL, APIKey, APIProfile            string
 	ConnectTimeout, MaxTime, PollInterval time.Duration
@@ -37,6 +67,9 @@ type Config struct {
 	Stream                                string // HERMES_HANDS_STREAM: "" / auto | on | off
 	Deny                                  []string
 	MaxRounds, RunTimeout, MaxOutput      int
+	MaxCalls, MaxCallsPerRound            int // the turn's call budget (MaxRounds: its requests)
+	MaxRoundOutput                        int // bytes of one round's results together (0 = no limit)
+	ContextWindow, CompactAt              int // the model's window in tokens; compact before a request past this percent of it
 
 	// ResponseTimeout is how long hermes-agent may go silent within one turn
 	// before the REPL's watchdog cancels it (HERMES_HANDS_RESPONSE_TIMEOUT,
@@ -67,12 +100,16 @@ type Config struct {
 	// read-only /config view: "secrets.enc" | "secrets" (plaintext fallback) |
 	// "" (nothing on disk contributed — env / config file, or unset).
 	SecretsSource string
+
+	// Sources maps a key to the layer it came from: "config" | "env" |
+	// "flag" | "runtime" | "secrets.enc" | "secrets"; a key not in it is the
+	// built-in default. The /config view shows it per row.
+	Sources map[string]string
 }
 
-// Load resolves configuration. It reads the config file (overriding the
-// environment for the live-read keys) and then the secrets file — but the
-// secrets file only when HERMES_API_URL or HERMES_API_KEY is still empty,
-// exactly as hh_load_config does. It dials nothing.
+// Load resolves configuration through the layers (see Config): the config
+// file, then the environment, then the flags — and the secrets store only when
+// HERMES_API_URL or HERMES_API_KEY is still empty afterwards. It dials nothing.
 func Load() (*Config, error) {
 	proc := environMap(os.Environ())
 
@@ -80,27 +117,29 @@ func Load() (*Config, error) {
 	cfgPath := firstNonEmpty(proc["HERMES_HANDS_CONFIG"], home+"/config")
 	secPath := firstNonEmpty(proc["HERMES_HANDS_SECRETS"], home+"/secrets")
 
-	merged := cloneMap(proc)
-	if b, err := os.ReadFile(cfgPath); err == nil {
-		for k, v := range parseAssignments(b) {
-			merged[k] = v
-		}
-	}
+	merged, src := layered(proc, cfgPath)
 	// A placeholder URL/key (from the shipped example, or a stale ~/.bashrc line
 	// exporting the old placeholder `secrets`) counts as unset: blank it so the
 	// secrets-store fallback runs and `setup` isn't a dead end.
 	for _, k := range []string{"HERMES_API_URL", "HERMES_API_KEY"} {
 		if LooksUnset(merged[k]) {
 			merged[k] = ""
+			delete(src, k)
 		}
 	}
 	secSrc := ""
 	if merged["HERMES_API_URL"] == "" || merged["HERMES_API_KEY"] == "" {
-		src, err := applyFallbackSecrets(merged, home, secPath)
+		before := map[string]string{"HERMES_API_URL": merged["HERMES_API_URL"], "HERMES_API_KEY": merged["HERMES_API_KEY"]}
+		s, err := applyFallbackSecrets(merged, home, secPath)
 		if err != nil {
 			return nil, err
 		}
-		secSrc = src
+		secSrc = s
+		for k, was := range before {
+			if merged[k] != was {
+				src[k] = secSrc
+			}
+		}
 	}
 
 	return &Config{
@@ -111,33 +150,64 @@ func Load() (*Config, error) {
 		Stream:     merged["HERMES_HANDS_STREAM"],
 		Deny:       splitDeny(merged["HERMES_HANDS_DENY"]),
 
-		// hand-tunable in the config file (like APPROVE / STREAM), not an
-		// env-only tuning knob — an operator adjusts these by editing config.
 		ResponseTimeout:  secondsOr(merged["HERMES_HANDS_RESPONSE_TIMEOUT"], 600*time.Second),
 		WatchdogInterval: secondsOr(merged["HERMES_HANDS_WATCHDOG_INTERVAL"], 200*time.Second),
 		AllowHTTP:        merged["HERMES_HANDS_ALLOW_HTTP"] == "1",
-		Verbose:          merged["HERMES_HANDS_VERBOSE"] != "",
-		Debug:            merged["HERMES_HANDS_DEBUG"] != "",
+		Verbose:          switchOn(merged["HERMES_HANDS_VERBOSE"]),
+		Debug:            switchOn(merged["HERMES_HANDS_DEBUG"]),
 		Sandbox:          sandboxMode(merged["HERMES_HANDS_SANDBOX"]),
 		RetentionDays:    intOr(merged["HERMES_HANDS_RETENTION_DAYS"], 14),
 		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], home+"/instructions.md"),
 
-		ConnectTimeout: secondsOr(proc["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
-		MaxTime:        secondsOr(proc["HERMES_API_MAX_TIME"], 30*time.Second),
-		PollInterval:   secondsOr(proc["HERMES_API_POLL_INTERVAL"], 2*time.Second),
-		APIRunTimeout:  secondsOr(proc["HERMES_API_RUN_TIMEOUT"], 600*time.Second),
-		APIRetries:     intOr(proc["HERMES_API_RETRIES"], 3),
-		MaxRounds:      intOr(proc["HERMES_HANDS_MAX_ROUNDS"], 25),
-		RunTimeout:     intOr(proc["HERMES_HANDS_RUN_TIMEOUT"], 120),
-		MaxOutput:      intOr(proc["HERMES_HANDS_MAX_OUTPUT"], 20000),
-		StateDir:       firstNonEmpty(proc["HERMES_HANDS_STATE"], home),
+		ConnectTimeout:   secondsOr(merged["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
+		MaxTime:          secondsOr(merged["HERMES_API_MAX_TIME"], 30*time.Second),
+		PollInterval:     secondsOr(merged["HERMES_API_POLL_INTERVAL"], 2*time.Second),
+		APIRunTimeout:    secondsOr(merged["HERMES_API_RUN_TIMEOUT"], 600*time.Second),
+		APIRetries:       intOr(merged["HERMES_API_RETRIES"], 3),
+		MaxRounds:        intOr(merged["HERMES_HANDS_MAX_ROUNDS"], DefaultMaxRounds),
+		MaxCalls:         intOr(merged["HERMES_HANDS_MAX_CALLS"], DefaultMaxCalls),
+		MaxCallsPerRound: intOr(merged["HERMES_HANDS_MAX_CALLS_PER_ROUND"], DefaultMaxCallsPerRound),
+		RunTimeout:       intOr(merged["HERMES_HANDS_RUN_TIMEOUT"], 120),
+		MaxOutput:        intOr(merged["HERMES_HANDS_MAX_OUTPUT"], 20000),
+		MaxRoundOutput:   intOr(merged["HERMES_HANDS_MAX_ROUND_OUTPUT"], DefaultMaxRoundOutput),
+		ContextWindow:    intOr(merged["HERMES_HANDS_CONTEXT_WINDOW"], DefaultContextWindow),
+		CompactAt:        min(intOr(merged["HERMES_HANDS_COMPACT_AT"], DefaultCompactAt), 95),
+		StateDir:         firstNonEmpty(merged["HERMES_HANDS_STATE"], home),
 
 		Home:          home,
 		ConfigPath:    cfgPath,
 		SecretsPath:   secPath,
 		SecretsSource: secSrc,
+		Sources:       src,
 	}, nil
 }
+
+// layered merges the config file, the environment and the flags, weakest
+// first, and records which layer each key came from. An empty environment
+// variable counts as unset (it never blanks a config value), and so does a
+// placeholder URL / key there — a stale `export` must not hide the real one.
+func layered(proc map[string]string, cfgPath string) (merged, src map[string]string) {
+	merged, src = map[string]string{}, map[string]string{}
+	if b, err := os.ReadFile(cfgPath); err == nil {
+		for k, v := range parseAssignments(b) {
+			merged[k], src[k] = v, "config"
+		}
+	}
+	for k, v := range proc {
+		if v == "" || (k == "HERMES_API_URL" || k == "HERMES_API_KEY") && LooksUnset(v) {
+			continue
+		}
+		merged[k], src[k] = v, "env"
+	}
+	for k, v := range flags {
+		merged[k], src[k] = v, "flag"
+	}
+	return merged, src
+}
+
+// Assignments is the narrowed config parser for callers outside the package
+// (setup reads which keys a config already sets).
+func Assignments(data []byte) map[string]string { return parseAssignments(data) }
 
 // applyFallbackSecrets fills still-empty HERMES_API_* keys, only when a URL or
 // key is missing. The encrypted store (secrets.enc + keyseed, in homeDir) is
@@ -232,14 +302,6 @@ func environMap(env []string) map[string]string {
 	return m
 }
 
-func cloneMap(m map[string]string) map[string]string {
-	n := make(map[string]string, len(m))
-	for k, v := range m {
-		n[k] = v
-	}
-	return n
-}
-
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {
@@ -288,6 +350,16 @@ func sandboxMode(v string) string {
 		return v
 	}
 	return "smart"
+}
+
+// switchOn reads an on/off setting: empty, 0, false, off and no are off;
+// anything else is on.
+func switchOn(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "0", "false", "off", "no":
+		return false
+	}
+	return true
 }
 
 func intOr(s string, def int) int {

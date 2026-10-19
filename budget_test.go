@@ -22,13 +22,10 @@ const (
 
 // overBudget is what is over the budget today, at its size today. An entry
 // may only shrink: growing fails, and once it fits the budget it must leave
-// this list. These are the delegation loop, the SSE stream and the brief —
-// split them when they are next changed for a reason of their own.
+// this list. That is the brief — split it when it is next changed for a
+// reason of their own.
 var overBudget = map[string]int{
-	"internal/loop/loop.go:Loop.Run":            189,
-	"internal/api/stream.go:Client.streamRun":   144,
 	"internal/knowsystem/brief.go:System.Brief": 102,
-	"internal/loop/loop.go":                     527,
 }
 
 func TestSizeBudget(t *testing.T) {

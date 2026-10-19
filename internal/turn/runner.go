@@ -79,7 +79,16 @@ func (r *Runner) Run(input string, fe Frontend) Result {
 
 	stop := make(chan struct{})
 	go wd.guard(stop)
-	out := r.Loop.Run(ctx, input, rec, func(runID, sid string, tok int) { _ = r.Store.BumpTurn(rec, runID, sid, tok) })
+	out := r.Loop.Run(ctx, input, rec, func(runID, sid string, tok int) {
+		prev, ran := rec.HermesSessionID, rec.Turns
+		_ = r.Store.BumpTurn(rec, runID, sid, tok)
+		if ran > 0 && prev != "" && rec.HermesSessionID != prev {
+			// a new hermes-agent session id mid-conversation: it compacted
+			// (or split) the context — worth one line, the work goes on
+			fe.Show(log.Add(session.Event{Kind: session.KindNote,
+				Text: "hermes-agent continued in a new session — it compacted (or split) the conversation"}))
+		}
+	})
 	close(stop)
 	timedOut := wd.disarm() // barrier: authoritative "did the watchdog fire?"
 	fe.Quiet()
@@ -92,7 +101,7 @@ func (r *Runner) Run(input string, fe Frontend) Result {
 
 	waited := r.paused()
 	end := session.Event{Kind: session.KindTurnEnd, Ms: (time.Since(start) - waited).Milliseconds(),
-		LocalMs: local, WaitMs: waited.Milliseconds()}
+		LocalMs: local, WaitMs: waited.Milliseconds(), Rounds: out.Rounds, Calls: out.Calls}
 	switch {
 	case timedOut:
 		end.Outcome, end.Limit = "timeout", int(r.Timeout/time.Second)
@@ -140,11 +149,18 @@ func (r *Runner) wire(wd *watchdog, log *session.Log, fe Frontend, pv *preview, 
 		fe.Show(log.Add(session.Event{Kind: session.KindHermesTool, Tool: tool, Text: preview, Action: action}))
 	}
 	r.Loop.Paused = r.Paused
-	// every hands call: recorded and shown BEFORE it runs, then its result
+	if pf, ok := fe.(ProgressFrontend); ok {
+		r.Loop.OnProgress = pf.Progress
+	}
+	// every hands call: recorded and shown BEFORE it runs, then its result;
+	// Hermes' replies are recorded only — the transcript is built from them
 	r.Loop.Emit = func(ev session.Event) {
 		wd.bump() // a call starting or finishing = progress
 		ev = log.Add(ev)
-		if ev.Kind == session.KindResult {
+		switch ev.Kind {
+		case session.KindReply:
+			return
+		case session.KindResult:
 			*local += ev.Ms
 		}
 		fe.Show(ev)
@@ -154,7 +170,7 @@ func (r *Runner) wire(wd *watchdog, log *session.Log, fe Frontend, pv *preview, 
 func (r *Runner) unwire() {
 	c := r.Client
 	c.OnRunStart, c.OnDelta, c.OnEvent, c.OnApproval, c.OnHermesTool = nil, nil, nil, nil, nil
-	r.Loop.Emit = nil
+	r.Loop.Emit, r.Loop.OnProgress = nil, nil
 }
 
 // watchdog cancels a turn when hermes-agent goes quiet past Timeout, but

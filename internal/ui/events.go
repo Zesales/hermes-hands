@@ -32,11 +32,13 @@ func (u *UI) Show(ev session.Event, out string) {
 		u.Approval(ev.Text, ev.Detail, ev.Action)
 	case session.KindNote:
 		u.Note(ev.Text)
+	case session.KindCompact:
+		u.Divider(ev.Text)
 	case session.KindAnswer:
 		u.Line("")
 		u.Answer(ev.Text)
 	case session.KindTurnEnd:
-		u.TurnDone(ms(ev.Ms), ev.Outcome, ev.Limit, ms(ev.LocalMs), ms(ev.WaitMs))
+		u.TurnDone(ms(ev.Ms), ev.Outcome, ev.Limit, ms(ev.LocalMs), ms(ev.WaitMs), ev.Rounds, ev.Calls)
 	}
 }
 

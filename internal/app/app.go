@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"hermes-hands/internal/api"
+	"hermes-hands/internal/compact"
 	"hermes-hands/internal/config"
 	"hermes-hands/internal/debuglog"
 	"hermes-hands/internal/dispatch"
@@ -32,6 +33,9 @@ type App struct {
 	Shell    *shell.Shell
 	Disp     *dispatch.Dispatcher
 	Loop     *loop.Loop
+	Keeper   *compact.Keeper // the open session's context (OpenSession)
+
+	start *startup // what the runtime switches reset to (runtime.go)
 }
 
 // New builds the app for cfg in the current directory. builtin is the
@@ -82,8 +86,10 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 	}
 	lp := &loop.Loop{
 		API: client.Runs(), Dispatch: disp,
-		MaxRounds: cfg.MaxRounds, Scrub: redact.Scrub,
-		RepoRoot: repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
+		MaxRounds: cfg.MaxRounds, MaxCalls: cfg.MaxCalls, MaxCallsPerRound: cfg.MaxCallsPerRound,
+		MaxRoundOutput: cfg.MaxRoundOutput,
+		Scrub:          redact.Scrub,
+		RepoRoot:       repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
 		Vlogf: vlogf, Warnf: Warnf,
 		OnResult: func(tool, out string, exit int) {
 			if known.ObserveShell(out, exit) { // learned 127: persist immediately
@@ -93,7 +99,9 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 			}
 		},
 	}
-	return &App{Cfg: cfg, RepoRoot: repoRoot, UI: u, Client: client, Store: store, Shell: sh, Disp: disp, Loop: lp}, nil
+	a := &App{Cfg: cfg, RepoRoot: repoRoot, UI: u, Client: client, Store: store, Shell: sh, Disp: disp, Loop: lp}
+	a.rememberStartup()
+	return a, nil
 }
 
 // probeKnown probes the machine once per session, so the brain is told what

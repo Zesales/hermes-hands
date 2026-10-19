@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"hermes-hands/internal/app"
+	"hermes-hands/internal/compact"
 	"hermes-hands/internal/config"
-	"hermes-hands/internal/prompt"
 )
 
 // command is one slash command: its names and what it does with the rest of
@@ -34,6 +34,7 @@ var commands = []command{
 	{[]string{"/check"}, (*repl).check},
 	{[]string{"/config", "/hh-settings"}, (*repl).config},
 	{[]string{"/compact", "/compress"}, (*repl).compact},
+	{[]string{"/context"}, (*repl).context},
 }
 
 // commandNamed finds a command by any of its names.
@@ -75,16 +76,15 @@ func (r *repl) setup(string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// yolo toggles approvals for the hands' shell / write / edit.
+// yolo toggles approvals for the hands' shell / write / edit — a runtime
+// switch: this session only, the next one opened starts from the config.
 func (r *repl) yolo(string) {
-	if ta, ok := r.a.Disp.Approver.(*prompt.TTYApprover); ok {
-		if ta.Mode == "auto" {
-			ta.Mode = "ask"
-			fmt.Fprintln(os.Stderr, "  approvals: ON — shell / write ask first")
-		} else {
-			ta.Mode = "auto"
-			fmt.Fprintln(os.Stderr, "  approvals: OFF (yolo) — shell / write run unattended")
-		}
+	if r.a.Approvals() == "auto" {
+		r.a.SetApprovals("ask")
+		fmt.Fprintln(os.Stderr, "  approvals: ON — shell / write ask first")
+	} else {
+		r.a.SetApprovals("auto")
+		fmt.Fprintln(os.Stderr, "  approvals: OFF (yolo) — shell / write run unattended (this session only)")
 	}
 	fmt.Fprintln(os.Stderr)
 }
@@ -99,6 +99,7 @@ func (r *repl) debug(arg string) {
 	default:
 		r.debugOn = !r.debugOn
 	}
+	r.a.NoteDebug(r.debugOn)
 	r.applyDebug()
 	if r.debugOn {
 		fmt.Fprintf(os.Stderr, "  debug: ON — redacted connection trace → %s\n", r.a.Store.DebugPath(r.rec))
@@ -126,11 +127,25 @@ func (r *repl) config(string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// compact: this gateway exposes no REST compaction endpoint (`/compress` is
-// an internal chat command). Hermes compacts on its own; a done task wants a
-// new session.
-func (r *repl) compact(string) {
-	fmt.Fprintln(os.Stderr, "  this Hermes doesn't expose compaction over the API —")
-	fmt.Fprintln(os.Stderr, "  it compacts automatically; use /new for a new task.")
+// compact compacts the open session's transcript now — hermes-hands' own
+// compaction (internal/compact): from here on it sends the transcript with
+// every run, old outputs elided but readable with local_output.
+func (r *repl) compact(arg string) {
+	if arg != "" {
+		fmt.Fprintln(os.Stderr, "  /compact takes no focus — nothing is summarised away, every output stays readable.")
+	}
+	ev, err := r.a.Keeper.Compact(compact.Now)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  %v\n\n", err)
+		return
+	}
+	r.a.UI.Show(r.runner.Record(ev), "")
+	fmt.Fprintln(os.Stderr)
+}
+
+// context shows what Hermes reads now: the meter, the latest chat
+// checkpoint and what came after it — "full" prints every message.
+func (r *repl) context(arg string) {
+	fmt.Fprint(os.Stderr, compact.Describe(r.a.Keeper.View(), arg == "full"))
 	fmt.Fprintln(os.Stderr)
 }

@@ -12,6 +12,8 @@
 //	<id>/out/<ref>.txt — the full (scrubbed) output of call #ref; events only
 //	                     carry its size, the excerpt is rendered from this
 //	<id>/debug.jsonl   — the /debug wire trace, redacted (only while /debug is on)
+//	<id>/chat-checkpoints/NNNN.json — what Hermes reads from compaction N on
+//	                     (ChatCheckpoint); the events stay the whole chat
 //
 // The conversation the model sees lives on the Hermes server; this store is
 // the operator's local record of it and never syncs anywhere. Sessions idle
@@ -48,6 +50,18 @@ type Record struct {
 	LastRunID        string `json:"last_run_id,omitempty"`
 	LastTokens       int    `json:"last_tokens,omitempty"` // best-effort tokens from the last run's usage
 	Splits           int    `json:"splits,omitempty"`      // times Hermes handed back a different session id (~ compactions)
+
+	// The context meter (internal/compact): Context is the size of the
+	// conversation the model sees after the last run, in tokens — measured
+	// when a run made one model call, estimated otherwise (Measured false).
+	// Overhead is the part of every prompt that is not the conversation —
+	// hermes-agent's system prompt, its tool schemas, the hands'
+	// instructions — calibrated from a measured run. Compactions counts
+	// hermes-hands' own compactions of this session.
+	Context     int  `json:"context,omitempty"`
+	Measured    bool `json:"measured,omitempty"`
+	Overhead    int  `json:"overhead,omitempty"`
+	Compactions int  `json:"compactions,omitempty"`
 
 	path      string // on-disk path; not serialised
 	seq       int    // last event Seq written (see AppendEvent)
@@ -174,6 +188,10 @@ func (s *Store) BumpTurn(rec *Record, runID, serverSID string, tokens int) error
 	}
 	return s.write(rec)
 }
+
+// Save writes rec's index entry — for state that changes outside a run (the
+// context meter, a compaction).
+func (s *Store) Save(rec *Record) error { return s.write(rec) }
 
 // SetTitleLocal ports the local half of hh_session_set_title: set .title once
 // (only while empty) to the message with newlines flattened to spaces and
@@ -319,6 +337,16 @@ func FormatDetail(r *Record) string {
 	fmt.Fprintf(&b, "  turns                : %d\n", r.Turns)
 	fmt.Fprintf(&b, "  splits (~compactions): %d\n", r.Splits)
 	fmt.Fprintf(&b, "  tokens               : %s\n", tok)
+	if r.Context > 0 {
+		how := "estimated"
+		if r.Measured {
+			how = "measured"
+		}
+		fmt.Fprintf(&b, "  context              : ~%d tokens after the last run (%s)\n", r.Context, how)
+	}
+	if r.Compactions > 0 {
+		fmt.Fprintf(&b, "  compacted            : %d× by hermes-hands — Hermes reads the local transcript\n", r.Compactions)
+	}
 	fmt.Fprintf(&b, "  created / updated    : %s  /  %s\n", r.Created, r.Updated)
 	idle := IdleFor(r, time.Now())
 	note := ""

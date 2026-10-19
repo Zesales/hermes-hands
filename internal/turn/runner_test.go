@@ -97,7 +97,7 @@ func TestRunnerShowsTheTurnInOrder(t *testing.T) {
 			for _, e := range evs {
 				kinds = append(kinds, e.Kind)
 			}
-			if strings.Join(kinds, " ") != "user answer turn_end" {
+			if strings.Join(kinds, " ") != "user reply answer turn_end" {
 				t.Errorf("recorded = %v", kinds)
 			}
 			if r.Client.OnDelta != nil || r.Loop.Emit != nil {

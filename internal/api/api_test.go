@@ -102,6 +102,46 @@ func TestAsk_401Fatal(t *testing.T) {
 	}
 }
 
+// AskWith sends the transcript as conversation_history; the run's usage
+// gives the prompt, and a polled run cannot say how many model calls it took.
+func TestAskWith_SendsTheHistory(t *testing.T) {
+	var body map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/runs"):
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(202)
+			_, _ = w.Write([]byte(`{"run_id":"run_1","status":"queued"}`))
+		case strings.HasSuffix(r.URL.Path, "/v1/runs/run_1"):
+			_, _ = w.Write([]byte(`{"status":"completed","output":"ok","session_id":"s1","usage":{"input_tokens":51234,"output_tokens":20,"total_tokens":51254}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	c := testClient(srv.URL)
+	hist := []Message{{Role: "user", Content: "[operator] hi"}, {Role: "assistant", Content: "hello"}}
+	res, err := c.Runs().AskWith(context.Background(), "next", "s1", "", hist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []Message
+	if json.Unmarshal(body["conversation_history"], &got) != nil || len(got) != 2 || got[1].Content != "hello" {
+		t.Errorf("conversation_history = %s", body["conversation_history"])
+	}
+	if res.Prompt != 51234 || res.Tokens != 51254 || res.HermesTools != -1 {
+		t.Errorf("res = %+v", res)
+	}
+	body = nil
+	if _, err := c.Runs().Ask(context.Background(), "plain", "s1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, sent := body["conversation_history"]; sent {
+		t.Error("Ask must not send a history")
+	}
+}
+
 func TestAsk_SessionDropRetry(t *testing.T) {
 	type postInfo struct {
 		hasSID bool
@@ -564,5 +604,23 @@ func TestStreamRun_GuardPolicyAndOperatorApproval(t *testing.T) {
 	}
 	if asked != "rm -rf /tmp/build" || len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"once"`) {
 		t.Errorf("approval: asked %q, sent %q", asked, approvals)
+	}
+}
+
+// A streamed run counts Hermes' own server tools: each one is one more model
+// call, so the run's prompt usage is no longer a single prompt.
+func TestStream_CountsHermesTools(t *testing.T) {
+	srv := hermesmock.NewStream("golden")
+	defer srv.Close()
+	c := testClient(srv.URL)
+	if _, err := c.Server().Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.Runs().Ask(context.Background(), "show me the readme", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.HermesTools != 2 {
+		t.Errorf("HermesTools = %d, want the 2 tool.started events", res.HermesTools)
 	}
 }

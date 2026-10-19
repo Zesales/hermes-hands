@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"hermes-hands/internal/app"
+	"hermes-hands/internal/config"
 )
 
 func TestDoSetupPlaintext(t *testing.T) {
@@ -62,6 +63,67 @@ func TestDoSetupEncryptedDefault(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "secrets")); err == nil {
 		t.Errorf("default setup must not write the plaintext secrets file")
+	}
+}
+
+func TestDoSetupKeepsExistingConfig(t *testing.T) {
+	stdinTTY = func() bool { return false }
+	defer func() { stdinTTY = func() bool { return true } }()
+
+	dir := filepath.Join(t.TempDir(), "hermes-hands")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const mine = "HERMES_HANDS_MAX_ROUNDS=40\n"
+	cfg := filepath.Join(dir, "config")
+	if err := os.WriteFile(cfg, []byte(mine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := bufio.NewReader(strings.NewReader("https://h.example.net\nsk-enckey\n"))
+	if code := Run(in, dir, false); code != 0 {
+		t.Fatalf("Run = %d", code)
+	}
+	b, _ := os.ReadFile(cfg)
+	got := config.Assignments(b)
+	if !strings.HasPrefix(string(b), mine) || got["HERMES_HANDS_MAX_ROUNDS"] != "40" {
+		t.Errorf("setup changed a value the operator set:\n%s", b)
+	}
+	if got["HERMES_HANDS_MAX_CALLS"] != "100" || got["HERMES_HANDS_APPROVE"] != "ask" {
+		t.Errorf("setup should append the missing settings at their defaults:\n%s", b)
+	}
+	if did, _ := EnsureConfig(cfg); !strings.Contains(did, "sets every setting") {
+		t.Errorf("a second run should change nothing, said %q", did)
+	}
+
+	// No config yet: setup creates it with every default set.
+	dir2 := filepath.Join(t.TempDir(), "hermes-hands")
+	in = bufio.NewReader(strings.NewReader("https://h.example.net\nsk-enckey\n"))
+	if code := Run(in, dir2, false); code != 0 {
+		t.Fatalf("Run = %d", code)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir2, "config")); string(b) != configBody() {
+		t.Errorf("fresh config = %q, want the default body", b)
+	}
+}
+
+func TestEnsureConfigReplacesCommentOnlyConfig(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config")
+	const old = "# hermes-hands config\n# HERMES_HANDS_APPROVE=ask\n"
+	if err := os.WriteFile(cfg, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	did, err := EnsureConfig(cfg)
+	if err != nil || !strings.HasPrefix(did, "replaced") {
+		t.Fatalf("EnsureConfig = %q, %v", did, err)
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != configBody() {
+		t.Errorf("config not replaced by the defaults: %q", b)
+	}
+	if b, _ := os.ReadFile(cfg + ".bak"); string(b) != old {
+		t.Errorf("old config not kept as .bak: %q", b)
+	}
+	if got := config.Assignments([]byte(configBody())); len(got) != len(configDefaults) {
+		t.Errorf("the fresh body sets %d keys, want all %d", len(got), len(configDefaults))
 	}
 }
 

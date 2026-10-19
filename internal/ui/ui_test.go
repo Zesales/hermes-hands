@@ -253,10 +253,18 @@ func TestTurnDone(t *testing.T) {
 		{603 * time.Second, "timeout", 600, 0, 0, "— timeout after 10m03s — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=600s) —"},
 	} {
 		var b strings.Builder
-		newUI(&b, false, false).TurnDone(tc.d, tc.outcome, tc.limit, tc.local, tc.wait)
+		newUI(&b, false, false).TurnDone(tc.d, tc.outcome, tc.limit, tc.local, tc.wait, 0, 0)
 		if got := strings.TrimRight(b.String(), "\n"); got != tc.want {
 			t.Errorf("TurnDone(%v,%q,%d) = %q, want %q", tc.d, tc.outcome, tc.limit, got, tc.want)
 		}
+	}
+	var b strings.Builder
+	newUI(&b, false, false).TurnDone(12*time.Second, "", 0, 0, 0, 7, 1)
+	if got, want := strings.TrimRight(b.String(), "\n"), "— worked for 12s · 7 rounds · 1 call —"; got != want {
+		t.Errorf("TurnDone with budget = %q, want %q", got, want)
+	}
+	if got := BudgetLabel(3, 25, 12, 0); got != "round 3/25 · calls 12" {
+		t.Errorf("BudgetLabel = %q", got)
 	}
 }
 

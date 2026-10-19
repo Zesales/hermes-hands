@@ -21,15 +21,35 @@ type AskResult struct {
 	SessionID string // .session_id from run status ("" if none)
 	Threaded  bool   // false after a session-id drop
 	Tokens    int    // best-effort token count from the run's .usage (0 if absent)
+
+	// Prompt is the run's usage.input_tokens: the prompt tokens of every
+	// model call in the run, cached ones included (hermes-agent's
+	// session_prompt_tokens). With one model call — no server tool of
+	// Hermes' own ran (HermesTools == 0) — it is the size of the prompt the
+	// model saw, the closest the API gets to a context meter
+	// (NousResearch/hermes-agent#15618). 0 when absent.
+	Prompt int
+	// HermesTools counts the run's tool.started events — Hermes' own server
+	// tools, each one more model call in the run. -1 when the run was
+	// polled: nothing says how many model calls it took.
+	HermesTools int
+}
+
+// Message is one entry of a run's conversation_history.
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // runReq is the POST /v1/runs body, in the same key order jq builds it:
 // input, then instructions (only when non-empty), then session_id (only when
-// present and not dropped).
+// present and not dropped), then conversation_history (only when hermes-hands
+// holds the transcript — see AskWith).
 type runReq struct {
-	Input        string `json:"input"`
-	Instructions string `json:"instructions,omitempty"`
-	SessionID    string `json:"session_id,omitempty"`
+	Input        string    `json:"input"`
+	Instructions string    `json:"instructions,omitempty"`
+	SessionID    string    `json:"session_id,omitempty"`
+	History      []Message `json:"conversation_history,omitempty"`
 }
 
 // Ask runs one turn: submit a run, ride the POST retry / one-shot
@@ -37,6 +57,17 @@ type runReq struct {
 // record's hermes_session_id / hermes_session_key ("" when none). On success
 // the caller adopts AskResult.SessionID + bumps the local index.
 func (r Runs) Ask(ctx context.Context, msg, sess, skey string) (AskResult, error) {
+	return r.AskWith(ctx, msg, sess, skey, nil)
+}
+
+// AskWith is Ask with the transcript the model sees supplied by the caller:
+// a non-empty history goes along as conversation_history, which hermes-agent
+// uses for this run INSTEAD of the transcript it stored for the session — the
+// session_id still names where the run's new messages are kept. It persists
+// only those new messages, never the supplied history again (agent
+// session_persistence, hermes-agent 0.22). hermes-hands sends it once it has
+// compacted a session itself (internal/compact).
+func (r Runs) AskWith(ctx context.Context, msg, sess, skey string, history []Message) (AskResult, error) {
 	c := r.c
 	if err := c.preflight(); err != nil {
 		return AskResult{}, err
@@ -53,7 +84,7 @@ func (r Runs) Ask(ctx context.Context, msg, sess, skey string) (AskResult, error
 		if sess != "" && !dropSess {
 			sid = sess
 		}
-		body, err := marshalJSON(runReq{Input: msg, Instructions: c.Instructions, SessionID: sid})
+		body, err := marshalJSON(runReq{Input: msg, Instructions: c.Instructions, SessionID: sid, History: history})
 		if err != nil {
 			return AskResult{}, err
 		}
@@ -103,10 +134,10 @@ func (r Runs) Ask(ctx context.Context, msg, sess, skey string) (AskResult, error
 
 	threaded := !dropSess
 	c.trace("run.start", map[string]any{"run_id": runID, "session_id": sess, "threaded": threaded,
-		"input": msg, "instructions_bytes": len(c.Instructions)})
+		"input": msg, "instructions_bytes": len(c.Instructions), "history_messages": len(history)})
 
 	res, err := c.awaitRun(ctx, base, runID, threaded)
-	f := map[string]any{"run_id": runID, "tokens": res.Tokens, "output": res.Text}
+	f := map[string]any{"run_id": runID, "tokens": res.Tokens, "prompt": res.Prompt, "output": res.Text}
 	if err != nil {
 		f["err"] = err.Error()
 	}
@@ -153,6 +184,9 @@ func (c *Client) pollRun(ctx context.Context, base, runID string, threaded bool)
 					SessionID: jsonString(respBody, "session_id"),
 					Threaded:  threaded,
 					Tokens:    usageTokens(respBody),
+					Prompt:    usagePrompt(respBody),
+
+					HermesTools: -1,
 				}, nil
 			case "failed", "cancelled":
 				return AskResult{}, fmt.Errorf("run %s %s: %s", runID, status,

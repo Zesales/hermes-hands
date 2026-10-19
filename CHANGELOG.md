@@ -4,6 +4,124 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
+## 0.13.0 — (unreleased, `bump:minor`) the operator's turn budget; config layers; hermes-hands' own compaction
+
+### Context: the meter and hermes-hands' own compaction
+
+A hands session could outgrow the model's window for good: hermes-agent's
+compaction keeps the latest messages whole (`compression.protect_last_n`),
+and in a hands session those are the last rounds' results. Once they alone
+were bigger than the window every request was refused — a "continue"
+included, again and again.
+
+- **The meter**: a run's `usage.input_tokens` is the prompt of its model
+  calls — with no server tool of Hermes' own in the run, exactly the prompt
+  the model saw. Between measurements hermes-hands estimates from bytes and
+  calibrates the fixed part (system prompt, tool schemas, instructions) from
+  measured runs. Shown on the working line (`· ctx 48k/131k`), in rpc
+  `progress` (`context` / `window`) and in `/session`.
+- **Compaction before the request**: past `HERMES_HANDS_COMPACT_AT` % (45)
+  of `HERMES_HANDS_CONTEXT_WINDOW` (131072) hermes-hands compacts first, only
+  as far as needed — the outputs of all but the latest two rounds, then of
+  every round, then the oldest turns as question + answer. Nothing is
+  summarised by a model and nothing is lost: an elided output goes as a stub
+  naming its `#ref`, the new hands tool **`local_output`** reads it back
+  (also the cut part of a round over its budget). The log is never rewritten
+  — a compaction is a new event (`compact`), Hermes' replies are recorded
+  (`reply`) so the transcript can be built from the log.
+- **Same session, no switch**: from the first compaction on, hermes-hands
+  sends its transcript with every run as `conversation_history` (hermes-agent
+  uses it instead of its stored one and persists only the run's new
+  messages). A resumed compacted session needs no recap.
+- **`/compact`** and rpc **`compact`** compact now (every output so far);
+  they say so when there is nothing to elide yet.
+- **Chat checkpoints**: each compaction freezes what Hermes reads from then
+  on in `<id>/chat-checkpoints/NNNN.json`; Hermes reads the latest one plus
+  every event after it, so that prefix never changes (a later version's
+  rules neither). `events.jsonl` stays the whole chat; the `compact` event
+  names its checkpoint and is the divider — in the terminal a `──── compacted
+  #1 · … ────` line, live and in `/history`. **`/context`** (`/context full`)
+  and rpc **`context`** show what Hermes reads now; rpc `history` carries
+  the dividers, so a plugin can show the old chat and the compacted one.
+- **An elided round, short**: one line per call (`#14 local_shell `go test
+  ./...` → exit 1 · 312 lines · 18 KB ·` and the output's error or last line
+  — the terminal excerpt's rule, now `internal/excerpt`), its reasoning
+  clipped to 200 characters; Hermes' replies stay the JSON envelope. Once
+  outputs are stubs, the JSON around them was what filled the context.
+- **`HERMES_HANDS_MAX_ROUND_OUTPUT`** (60000 bytes): one round's results
+  together. A bigger round keeps its small outputs whole and the big ones'
+  head and tail around a marker naming the cut bytes; the operator gets a
+  note, the session keeps the full output.
+- **A run refused for its size is handled locally**: the same request is
+  made smaller and sent again within the round — the transcript compacted
+  as far as it goes, then the request's own results fitted tighter. Only
+  when that cannot make it fit does the turn end BLOCKED, saying why; the
+  meter then stands at the refused size.
+- Splitting the loop and the SSE stream for this took both off the size
+  budget's exception list: `Loop.Run` is the round loop, `request.go` the
+  request (meter, compaction, transcript), `envelope.go` the reply parsing;
+  `streamRun` reads frames, `runStream.frame` handles one.
+- The golden transcripts had not been regenerated after the budget and
+  config-layer changes; the PR gate is green again.
+
+### Budget per turn
+
+- **Two budgets instead of one**: `HERMES_HANDS_MAX_ROUNDS` (default 25)
+  counts requests to Hermes, the new `HERMES_HANDS_MAX_CALLS` (default 100)
+  the hands calls a turn runs, the new `HERMES_HANDS_MAX_CALLS_PER_ROUND`
+  (default 20) the calls in one envelope. `0` = no limit (a 0 round budget
+  used to block every turn).
+- **Hermes knows it is the operator's limit**: the task frame states all
+  three; the results count down once the end gets close (rounds: a heads-up
+  over the last 40 %, "finish now" over the last 20 %, then the last round;
+  calls: from 75 % and 90 % used), and every stop asks for a final that says
+  what is done, what is open and what a continuation must do — the note a
+  "continue", and a compacted context, builds on. `share/instructions.md`
+  explains the budget once.
+- **All or nothing**: an envelope over the budget (too many calls for the
+  envelope or for what is left) is not run at all and Hermes is asked to
+  resend a smaller one — never a half-run batch. A turn out of calls ends
+  like one out of rounds: BLOCKED, with a resume note for the next turn.
+- **Visible in the terminal**: `round 3/25 · calls 12/100` on the working
+  line, a dim note (kept in the session log) when a countdown starts or an
+  envelope is refused, `· 12 rounds · 47 calls` in the turn footer, and a
+  note when hermes-agent continues in a new session (a compaction). The `#N`
+  next to a call is the session-wide call number, not a budget counter.
+- **`--rpc`**: new `progress` and `note` messages; `answer` carries
+  `rounds` / `calls`.
+- The delegation loop is split by job (`loop.go` / `calls.go` /
+  `budget.go`); `loop.go` left the size-budget exception list.
+
+### Config layers
+
+- **Environment and flags now win over the config file**: default < config
+  < environment (a non-empty value) < flag (`--yolo`) < runtime switch
+  (`/yolo`, `/debug`, rpc). The config file is the operator's defaults for
+  every session. Before, the config file won — a config that set
+  `HERMES_HANDS_APPROVE` silently disabled `--yolo`, and `--rpc --yolo`
+  refused to start. Every setting, the API tuning knobs included, can now be
+  set in the config file.
+- **Runtime switches are never saved**, and every session opened — a resumed
+  one, `/session`, rpc `use` / `new` — starts from config / env / flags
+  again. **rpc `approvals`** switches the hands' approvals (`auto` |
+  `never`) while the process runs; the `session` reply names the mode.
+- **`/config` shows each value's layer** (default / config / env / flag /
+  runtime / secrets store) and the three budgets.
+- **`HERMES_HANDS_DEBUG=0` (`off`, `false`, `no`) is off**; before, any
+  non-empty value was on. Same for `HERMES_HANDS_VERBOSE`.
+- **`setup` keeps your config**: a fresh config sets every setting at its
+  default; an existing one only gets the settings it lacks appended — a
+  value you set is never changed; a config that sets nothing (only comments,
+  an old template) is replaced, the old one kept as `config.bak`.
+  **`hermes-hands setup --config`** does only that step, without prompts.
+
+### Docs
+
+- **README: "Recommended setup"** — a context window of at least 128k
+  tokens (tested: clearly better than 64k), hermes-agent's `agent.max_turns`
+  no lower than the call budget, compaction on with a round's worst-case
+  size in mind, and prompt caching for the prefix every round re-sends.
+
 ## 0.12.2 — (unreleased, `bump:patch`) a license badge that always renders
 
 - The README's license badge is static (`license: MIT`). The dynamic one

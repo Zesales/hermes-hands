@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"hermes-hands/internal/compact"
 	"hermes-hands/internal/session"
 )
 
@@ -11,8 +12,13 @@ import (
 // call numbering, replays the last turns into the terminal when show is set,
 // and prepares the first turn when the server lost the conversation.
 func (a *App) OpenSession(rec *session.Record, show bool) *session.Log {
+	a.ResetRuntime() // a session starts from the configured settings, never the last one's switches
 	log, evs := a.Store.OpenLog(rec)
 	a.Loop.Ref = session.LastRef(evs)
+	a.Keeper = &compact.Keeper{Store: a.Store, Rec: rec,
+		Window: a.Cfg.ContextWindow, At: a.Cfg.CompactAt, RoundOutput: a.Cfg.MaxRoundOutput}
+	a.Loop.Ctx = a.Keeper
+	a.Disp.Recall = func(ref int) (string, error) { return a.Store.LoadOutput(rec, ref) }
 	if show && len(evs) > 0 {
 		a.UI.Replay(evs, ReplayTurns, rec.ID, StoredOutput(a.Store, rec))
 	}
@@ -40,6 +46,9 @@ func (a *App) prepareResume(rec *session.Record, evs []session.Event) {
 	a.Loop.ResumeNote = ""
 	if rec.HermesSessionID == "" || rec.Turns == 0 {
 		return // nothing has been said in this session yet
+	}
+	if _, owned := session.LastCompact(evs); owned {
+		return // hermes-hands sends the whole transcript with every run anyway
 	}
 	if idle := session.IdleFor(rec, time.Now()); idle > session.StaleAfter {
 		Logf("session %s: idle %s — model prompt caches (gateway/hermes-agent/Claude-style) likely expired; the first turn re-reads the full conversation (token cost)", rec.ID, idle.Round(time.Minute))

@@ -29,7 +29,7 @@ hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 hermes
    Read the README ("demo readme") and ran the shell.
    Two lines — ä ✓.
-— worked for <DUR> · hermes <DUR> · local <DUR> —
+— worked for <DUR> · hermes <DUR> · local <DUR> · 2 rounds · 2 calls —
 
 hermes-hands - session <SESSION> > 
 ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ you
 hermes
    Read the README ("demo readme") and ran the shell.
    Two lines — ä ✓.
-— worked for <DUR> · hermes <DUR> · local <DUR> —
+— worked for <DUR> · hermes <DUR> · local <DUR> · 2 rounds · 2 calls —
 
 
 hermes-hands - session <SESSION> > 

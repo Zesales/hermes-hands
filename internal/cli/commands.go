@@ -140,11 +140,22 @@ func runSessionNew() int {
 }
 
 // runSetup is `hermes-hands setup [--plaintext]`: the wizard, then a check.
+// `setup --config` only brings the config file up to date (EnsureConfig) —
+// no prompts, nothing else touched.
 func (b Build) runSetup(args []string) int {
 	plaintext := false
 	for _, a := range args {
-		if a == "--plaintext" {
+		switch a {
+		case "--plaintext":
 			plaintext = true
+		case "--config":
+			did, err := setup.EnsureConfig(setup.Home() + "/config")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+				return 1
+			}
+			fmt.Println(did)
+			return 0
 		}
 	}
 	if code := setup.Run(bufio.NewReader(os.Stdin), setup.Home(), plaintext); code != 0 {

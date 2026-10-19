@@ -21,6 +21,7 @@ starts a fresh session — resume an old one by its id only (plugins keep the id
                                   … each with its hermes-agent session (local vs. server)
   hermes-hands sessions new       mint a session id (for --session / --rpc)
   hermes-hands setup              first-run config  (also: /setup in-session)
+  hermes-hands setup --config     only bring the config file up to date (adds new settings)
   hermes-hands guidance           (re-)import your global agent rules (~/.claude/CLAUDE.md, …)
   hermes-hands check              preflight the API connection
   hermes-hands --version          print version

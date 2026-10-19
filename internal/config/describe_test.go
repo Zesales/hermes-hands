@@ -15,6 +15,7 @@ func TestFormatConfig(t *testing.T) {
 		Approve: "ask", Stream: "auto",
 		ResponseTimeout: 600 * time.Second, WatchdogInterval: 200 * time.Second,
 		APIRunTimeout: 600 * time.Second, MaxRounds: 8, RunTimeout: 120, MaxOutput: 20000,
+		Sources: map[string]string{"HERMES_HANDS_APPROVE": "env"},
 	}
 	out := Describe(cfg)
 
@@ -24,7 +25,8 @@ func TestFormatConfig(t *testing.T) {
 		"/app/hh/secrets.enc  (encrypted, machine-bound)",
 		"sessions     : /app/hh/sessions",
 		"(built-in default)",
-		"hermes-hands never writes these",
+		"default < config < env < flag < runtime",
+		"HERMES_HANDS_MAX_CALLS", "(default)", "(env)",
 		"HERMES_HANDS_RESPONSE_TIMEOUT", "600s",
 		"HERMES_HANDS_WATCHDOG_INTERVAL", "200s",
 		"https://hermes-api.example.net",

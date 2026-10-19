@@ -15,7 +15,8 @@ func (c *Config) Configured() bool { return !LooksUnset(c.APIURL) && !LooksUnset
 
 // Describe renders the read-only `/config` view: the files hermes-hands
 // reads, and the effective value of every hand-tunable knob with its env-var
-// name. It never offers to write anything — the operator edits the config file
+// name and the layer it came from (default / config / env / flag / runtime).
+// It never offers to write anything — the operator edits the config file
 // directly, so a fat-fingered `/config KEY=value` can't wedge the install.
 func Describe(cfg *Config) string {
 	none := func(s string) string {
@@ -54,7 +55,7 @@ func Describe(cfg *Config) string {
 	fmt.Fprintf(&b, "  secrets      : %s\n", secrets)
 	fmt.Fprintf(&b, "  instructions : %s\n", instr)
 	fmt.Fprintf(&b, "  sessions     : %s\n", filepath.Join(cfg.StateDir, "sessions"))
-	b.WriteString("\n  effective settings — edit the config file by hand; hermes-hands never writes these:\n")
+	b.WriteString("\n  effective settings — default < config < env < flag < runtime (runtime switches are never saved):\n")
 	for _, r := range [][2]string{
 		{"HERMES_API_URL", none(cfg.APIURL)},
 		{"HERMES_API_PROFILE", none(cfg.APIProfile)},
@@ -65,15 +66,49 @@ func Describe(cfg *Config) string {
 		{"HERMES_HANDS_RETENTION_DAYS", retention(cfg.RetentionDays)},
 		{"HERMES_HANDS_DEBUG", onOff(cfg.Debug)},
 		{"HERMES_HANDS_SANDBOX", cfg.Sandbox},
-		{"HERMES_HANDS_MAX_ROUNDS", strconv.Itoa(cfg.MaxRounds)},
+		{"HERMES_HANDS_MAX_ROUNDS", limit(cfg.MaxRounds)},
+		{"HERMES_HANDS_MAX_CALLS", limit(cfg.MaxCalls)},
+		{"HERMES_HANDS_MAX_CALLS_PER_ROUND", limit(cfg.MaxCallsPerRound)},
 		{"HERMES_HANDS_RUN_TIMEOUT", strconv.Itoa(cfg.RunTimeout) + "s"},
 		{"HERMES_API_RUN_TIMEOUT", secs(cfg.APIRunTimeout)},
 		{"HERMES_HANDS_MAX_OUTPUT", strconv.Itoa(cfg.MaxOutput)},
+		{"HERMES_HANDS_MAX_ROUND_OUTPUT", limit(cfg.MaxRoundOutput)},
+		{"HERMES_HANDS_CONTEXT_WINDOW", window(cfg.ContextWindow)},
+		{"HERMES_HANDS_COMPACT_AT", compactAt(cfg.CompactAt, cfg.ContextWindow)},
 		{"HERMES_HANDS_DENY", none(strings.Join(cfg.Deny, " | "))},
 	} {
-		fmt.Fprintf(&b, "    %-30s %s\n", r[0], r[1])
+		fmt.Fprintf(&b, "    %-33s %-24s %s\n", r[0], r[1], source(cfg, r[0]))
 	}
 	return b.String()
+}
+
+// source names the layer a key came from; no entry is the built-in default.
+func source(cfg *Config, key string) string {
+	if s := cfg.Sources[key]; s != "" {
+		return "(" + s + ")"
+	}
+	return "(default)"
+}
+
+func limit(n int) string {
+	if n <= 0 {
+		return "no limit"
+	}
+	return strconv.Itoa(n)
+}
+
+func window(tokens int) string {
+	if tokens <= 0 {
+		return "unknown"
+	}
+	return strconv.Itoa(tokens) + " tokens"
+}
+
+func compactAt(pct, window int) string {
+	if pct <= 0 || window <= 0 {
+		return "off (only /compact)"
+	}
+	return strconv.Itoa(pct) + "%"
 }
 
 func retention(days int) string {

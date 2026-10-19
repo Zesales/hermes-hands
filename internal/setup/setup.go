@@ -15,18 +15,10 @@ import (
 	"hermes-hands/internal/ttyio"
 )
 
-const setupConfigBody = "# hermes-hands config  —  edit by hand; `/config` shows what is in effect\n" +
-	"# HERMES_API_PROFILE=coder             # optional /p/<profile>/ prefix\n" +
-	"# HERMES_HANDS_APPROVE=ask              # ask | auto | never\n" +
-	"# HERMES_HANDS_STREAM=auto              # auto | on | off\n" +
-	"# HERMES_HANDS_RESPONSE_TIMEOUT=600     # seconds hermes-agent may go silent in a turn before it is cancelled (0 = no limit)\n" +
-	"# HERMES_HANDS_WATCHDOG_INTERVAL=200    # seconds between server-side 'still working?' checks that push that limit back\n" +
-	"# HERMES_HANDS_RETENTION_DAYS=14        # local sessions idle longer are deleted on start, debug trace included (0 = keep)\n" +
-	"# HERMES_HANDS_DEBUG=1                  # start with /debug on: redacted connection trace per session\n" +
-	"# HERMES_HANDS_SANDBOX=smart            # Hermes' own server terminal/file tools: smart | steer | show\n"
-
-// Run prompts, then writes config + the secrets store. Default: a
-// machine-bound secrets.enc + keyseed (nothing to add to the shell env).
+// Run prompts, then writes the secrets store and makes sure the config sets
+// every setting (EnsureConfig): a re-run (a new key, a new machine) keeps the
+// operator's values. Default: a machine-bound secrets.enc + keyseed (nothing
+// to add to the shell env).
 // --plaintext: the pre-M10 0600 `secrets` file + the ~/.bashrc offer, for
 // people who inject via env or a secrets manager.
 func Run(in *bufio.Reader, dir string, plaintext bool) int {
@@ -43,10 +35,12 @@ func Run(in *bufio.Reader, dir string, plaintext bool) int {
 		return 1
 	}
 
-	if err := os.WriteFile(dir+"/config", []byte(setupConfigBody), 0o644); err != nil {
+	did, err := EnsureConfig(dir + "/config")
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
 		return 1
 	}
+	fmt.Println(did)
 
 	if plaintext {
 		body := "# hermes-hands secrets - chmod 600, do not commit\n" +
@@ -56,7 +50,7 @@ func Run(in *bufio.Reader, dir string, plaintext bool) int {
 			fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
 			return 1
 		}
-		fmt.Printf("wrote %s/config and %s/secrets\n", dir, dir)
+		fmt.Printf("wrote %s/secrets\n", dir)
 		offerBashrc(in)
 		ImportGuidance(in, dir)
 		return 0
@@ -66,7 +60,7 @@ func Run(in *bufio.Reader, dir string, plaintext bool) int {
 		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
 		return 1
 	}
-	fmt.Printf("wrote %s/config, %s/secrets.enc and %s/keyseed (machine-bound; nothing to add to your shell)\n", dir, dir, dir)
+	fmt.Printf("wrote %s/secrets.enc and %s/keyseed (machine-bound; nothing to add to your shell)\n", dir, dir)
 	ImportGuidance(in, dir)
 	return 0
 }

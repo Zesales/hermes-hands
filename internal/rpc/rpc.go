@@ -12,6 +12,10 @@
 //	{"id":4,"type":"check"}
 //	{"id":5,"type":"history"}                 the open session's event log
 //	{"id":6,"type":"debug","text":"on"}       redacted wire trace on / off / toggle
+//	{"id":7,"type":"approvals","text":"auto"} hands approvals auto | never ("" = report) — a runtime
+//	                                          switch: the next new / use starts from config / env / flags
+//	{"id":8,"type":"compact"}                 compact the session's chat now (a chat checkpoint, internal/compact)
+//	{"id":9,"type":"context"}                 what Hermes reads now
 //
 // Responses:
 //
@@ -20,11 +24,18 @@
 //	{"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}       before it runs
 //	{"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 //	{"type":"hermes_tool","id":1,"tool":"terminal","preview":"...","action":"steered"}
-//	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"..."}
-//	{"type":"session","id":2,"session":"hh_...","hermes_session":"..."}
+//	{"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  the turn's budget (max 0 = no limit)
+//	                                     (+ "context":48000,"window":131072 once the context is known)
+//	{"type":"note","id":1,"text":"budget: 10 of 25 rounds · 29 of 100 calls left — …"}  what the terminal notes
+//	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"...","rounds":12,"calls":47}
+//	{"type":"session","id":2,"session":"hh_...","hermes_session":"...","approvals":"off"}
 //	{"type":"check","id":4,"ok":true,"model":"...","base":"...","version":"0.22.2"}   (+ "compat" as above)
 //	{"type":"history","id":5,"session":"hh_...","events":[...]}  (session.Event objects)
 //	{"type":"debug","id":6,"on":true,"path":".../debug.jsonl"}
+//	{"type":"approvals","id":7,"approvals":"off"}                  off (= auto) | never
+//	{"type":"compact","id":8,"ok":true,"session":"hh_...","before":98000,"after":31000,"text":"compacted #1 · …","checkpoint":"chat-checkpoints/0001.json"}
+//	{"type":"context","id":9,"session":"hh_...","owned":true,"checkpoint":"chat-checkpoints/0001.json","n":1,
+//	 "messages":[{"role":"user","content":"…"},…],"since":[…],"context":31000,"measured":false,"window":131072}
 //	{"type":"error","id":1,"message":"..."}
 //
 // Turns are recorded into the session's event log exactly like REPL turns,
@@ -42,10 +53,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"hermes-hands/internal/app"
+	"hermes-hands/internal/compact"
 	"hermes-hands/internal/compat"
-	"hermes-hands/internal/prompt"
 	"hermes-hands/internal/session"
 	"hermes-hands/internal/turn"
 )
@@ -115,16 +127,9 @@ func start(a *app.App, smode, version string, emit func(map[string]any)) (*serve
 	if err != nil {
 		return fail(err.Error())
 	}
-	approvals := "never"
-	if ta, ok := a.Disp.Approver.(*prompt.TTYApprover); ok {
-		switch ta.Mode {
-		case "auto":
-			approvals = "off"
-		case "never":
-			approvals = "never"
-		default:
-			return fail("--rpc needs --yolo (HERMES_HANDS_APPROVE=auto) or HERMES_HANDS_APPROVE=never - interactive approval over the pipe is not supported")
-		}
+	approvals, ok := pipeApprovals(a.Approvals())
+	if !ok {
+		return fail("--rpc needs --yolo (HERMES_HANDS_APPROVE=auto) or HERMES_HANDS_APPROVE=never - interactive approval over the pipe is not supported")
 	}
 	a.UI = nil // no terminal frames in rpc mode: the event log only records
 
@@ -178,14 +183,16 @@ func (s *server) serve(in io.Reader) {
 
 // handlers answers each request type; id is the request's id, echoed back.
 var handlers = map[string]func(s *server, req request, id any){
-	"turn":     (*server).turn,
-	"history":  (*server).history,
-	"new":      (*server).newSession,
-	"use":      (*server).use,
-	"debug":    (*server).debug,
-	"check":    (*server).check,
-	"compact":  (*server).compact,
-	"compress": (*server).compact,
+	"turn":      (*server).turn,
+	"history":   (*server).history,
+	"new":       (*server).newSession,
+	"use":       (*server).use,
+	"debug":     (*server).debug,
+	"approvals": (*server).approvals,
+	"check":     (*server).check,
+	"compact":   (*server).compact,
+	"context":   (*server).context,
+	"compress":  (*server).compact,
 }
 
 func (s *server) fail(id any, msg string) {
@@ -208,6 +215,7 @@ func (s *server) turn(req request, id any) {
 		s.emit(map[string]any{
 			"type": "answer", "id": id, "ok": res.Out.OK, "text": res.Out.Answer,
 			"session": s.rec.ID, "hermes_session": s.rec.HermesSessionID,
+			"rounds": res.Out.Rounds, "calls": res.Out.Calls,
 		})
 	}
 }
@@ -253,9 +261,42 @@ func (s *server) use(req request, id any) {
 // switchTo makes rec the open session and says which one it is.
 func (s *server) switchTo(rec *session.Record, id any) {
 	s.rec = rec
-	s.runner.Use(s.a.OpenSession(rec, false))
+	s.runner.Use(s.a.OpenSession(rec, false)) // drops the approvals / debug switches of the session before
+	s.debugOn = s.a.Cfg.Debug
 	s.applyDebug()
-	s.emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
+	approvals, _ := pipeApprovals(s.a.Approvals())
+	s.emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID,
+		"approvals": approvals})
+}
+
+// approvals switches the hands' approvals for this process: auto (also off /
+// yolo) | never; "" only reports. Interactive "ask" cannot work over the pipe
+// — the editor runs its own approval UI before sending a turn.
+func (s *server) approvals(req request, id any) {
+	switch strings.ToLower(strings.TrimSpace(req.Text)) {
+	case "":
+	case "auto", "off", "yolo":
+		s.a.SetApprovals("auto")
+	case "never":
+		s.a.SetApprovals("never")
+	default:
+		s.fail(id, "approvals takes auto | never - interactive approval over the pipe is not supported")
+		return
+	}
+	approvals, _ := pipeApprovals(s.a.Approvals())
+	s.emit(map[string]any{"type": "approvals", "id": id, "approvals": approvals})
+}
+
+// pipeApprovals names an approvals mode the way the protocol does: auto is
+// "off", never is "never"; ask (anything else) has no pipe form.
+func pipeApprovals(mode string) (string, bool) {
+	switch mode {
+	case "auto":
+		return "off", true
+	case "never":
+		return "never", true
+	}
+	return "", false
 }
 
 // debug switches the redacted wire trace: on | off | anything else = toggle.
@@ -268,6 +309,7 @@ func (s *server) debug(req request, id any) {
 	default:
 		s.debugOn = !s.debugOn
 	}
+	s.a.NoteDebug(s.debugOn)
 	s.applyDebug()
 	s.emit(map[string]any{"type": "debug", "id": id, "on": s.debugOn, "path": s.a.Store.DebugPath(s.rec)})
 }
@@ -285,9 +327,26 @@ func (s *server) check(_ request, id any) {
 	s.emit(msg)
 }
 
+// compact compacts the held session's transcript now (internal/compact).
 func (s *server) compact(_ request, id any) {
-	s.emit(map[string]any{"type": "compact", "id": id, "ok": false,
-		"message": "this gateway exposes no REST compaction endpoint; Hermes compacts automatically"})
+	ev, err := s.a.Keeper.Compact(compact.Now)
+	if err != nil {
+		s.emit(map[string]any{"type": "compact", "id": id, "ok": false, "session": s.rec.ID, "message": err.Error()})
+		return
+	}
+	ev = s.runner.Record(ev)
+	s.emit(map[string]any{"type": "compact", "id": id, "ok": true, "session": s.rec.ID,
+		"before": ev.Before, "after": ev.Tokens, "text": ev.Text, "checkpoint": ev.Checkpoint})
+}
+
+// context is what Hermes reads now: the latest chat checkpoint's messages and
+// those after it (owned false: hermes-agent holds the transcript, nothing is
+// compacted yet), and the meter.
+func (s *server) context(_ request, id any) {
+	v := s.a.Keeper.View()
+	s.emit(map[string]any{"type": "context", "id": id, "session": s.rec.ID, "owned": v.Owned,
+		"checkpoint": v.Checkpoint, "n": v.N, "messages": v.Messages, "since": v.Since,
+		"context": v.Meter.Tokens, "measured": v.Meter.Measured, "window": v.Meter.Window})
 }
 
 func (s *server) applyDebug() { s.a.SetDebug(s.rec, s.debugOn) }

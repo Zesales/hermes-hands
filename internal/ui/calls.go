@@ -3,11 +3,12 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"hermes-hands/internal/excerpt"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // CallStart is the line a hands call gets BEFORE it runs — so the operator
@@ -38,7 +39,7 @@ func (u *UI) CallStart(ref int, tool, head string, more []string) {
 // read_file shows no excerpt (the operator has the file); the full output of
 // any call stays available through /out.
 func (u *UI) CallDone(ref int, tool string, exit int, dur time.Duration, out string) {
-	lines := outputLines(out)
+	lines := excerpt.Lines(out)
 	mark, col := "✓", u.cOK
 	if exit != 0 {
 		mark, col = "✗", u.cBad
@@ -61,20 +62,20 @@ func (u *UI) CallDone(ref int, tool string, exit int, dur time.Duration, out str
 	} else {
 		info = append(info, nLines(len(lines)))
 	}
-	var rows []row
+	var rows []excerpt.Row
 	if tool != "local_read" && tool != "read_file" {
-		rows = excerpt(lines, exit)
+		rows = excerpt.Pick(lines, exit)
 	}
 	width := u.cols() - 8
 	u.sync(func() {
 		fmt.Fprintf(u.w, " %s%s#%d%s %s%s%s %s%s%s\n", u.cB, u.cAcc, ref, u.cR,
 			col, mark, u.cR, u.cDim, strings.Join(info, " · "), u.cR)
 		for _, r := range rows {
-			if r.gap > 0 {
-				fmt.Fprintf(u.w, "     %s│ … %s — /out %d%s\n", u.cDim, nLines(r.gap), ref, u.cR)
+			if r.Gap > 0 {
+				fmt.Fprintf(u.w, "     %s│ … %s — /out %d%s\n", u.cDim, nLines(r.Gap), ref, u.cR)
 				continue
 			}
-			fmt.Fprintf(u.w, "     %s│%s %s\n", u.cDim, u.cR, clipWidth(r.text, width))
+			fmt.Fprintf(u.w, "     %s│%s %s\n", u.cDim, u.cR, clipWidth(r.Text, width))
 		}
 	})
 }
@@ -128,6 +129,17 @@ func (u *UI) Note(msg string) {
 	u.sync(func() { fmt.Fprintf(u.w, " %s%s%s\n", u.cDim, msg, u.cR) })
 }
 
+// Divider is a dim rule with a label — where a session's chat was compacted:
+// above it the whole chat, below it what Hermes reads from then on.
+//
+//	──── compacted #1 · ~98k → ~31k tokens · … · chat-checkpoints/0001.json ────
+func (u *UI) Divider(label string) {
+	u.sync(func() {
+		fill := max(u.cols()-utf8.RuneCountInString(label)-6, 4)
+		fmt.Fprintf(u.w, "%s──── %s %s%s\n", u.cDim, label, strings.Repeat("─", fill), u.cR)
+	})
+}
+
 // SetActivity names what the spinner line is waiting on ("#14 shell"), with
 // its own elapsed counter; "" goes back to the plain "working".
 func (u *UI) SetActivity(label string) {
@@ -135,6 +147,55 @@ func (u *UI) SetActivity(label string) {
 	u.activity = label
 	u.activitySince = time.Now()
 	u.mu.Unlock()
+}
+
+// SetBudget puts where the turn stands against the operator's budget on the
+// spinner line (BudgetLabel); "" takes it off.
+func (u *UI) SetBudget(label string) {
+	u.mu.Lock()
+	u.budget = label
+	u.mu.Unlock()
+}
+
+// BudgetLabel is "round 3/25 · calls 12/100" — a max of 0 (no limit) drops
+// its "/max".
+func BudgetLabel(round, maxRounds, calls, maxCalls int) string {
+	of := func(n, limit int) string {
+		if limit > 0 {
+			return strconv.Itoa(n) + "/" + strconv.Itoa(limit)
+		}
+		return strconv.Itoa(n)
+	}
+	return "round " + of(round, maxRounds) + " · calls " + of(calls, maxCalls)
+}
+
+// ContextLabel is " · ctx 48k/131k" for the working line: the estimated
+// prompt of the request in flight against the model's window — "" while
+// nothing is known yet.
+func ContextLabel(tokens, window int) string {
+	if tokens <= 0 {
+		return ""
+	}
+	if window <= 0 {
+		return " · ctx " + kilo(tokens)
+	}
+	return " · ctx " + kilo(tokens) + "/" + kilo(window)
+}
+
+// kilo is "48k" / "950".
+func kilo(n int) string {
+	if n >= 1000 {
+		return strconv.Itoa((n+500)/1000) + "k"
+	}
+	return strconv.Itoa(n)
+}
+
+// plural is "1 round" / "3 rounds".
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
 }
 
 // Summarize turns a call's args into the CallStart head line plus up to two
@@ -170,87 +231,15 @@ func Summarize(tool string, args json.RawMessage) (head string, more []string) {
 		head = fmt.Sprintf("%s   (%d lines)", str("path"), n+1)
 	case "local_edit", "edit_file":
 		head = str("path")
+	case "local_output":
+		head = "output of #" + strings.TrimPrefix(str("ref"), "#")
+		if o := str("offset"); o != "" && o != "0" {
+			head += " from byte " + o
+		}
 	default:
 		head = clipWidth(string(args), 100)
 	}
 	return head, more
-}
-
-// row is one excerpt line, or (gap > 0) a "… N lines" marker.
-type row struct {
-	text string
-	gap  int
-}
-
-var (
-	ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
-	errRe  = regexp.MustCompile(`(?i)\b(error|fail(ed|ure)?|fatal|panic|denied|not found|no such|cannot|undefined|exception)\b`)
-)
-
-// outputLines splits output for display: ANSI and carriage returns stripped,
-// trailing blank lines dropped.
-func outputLines(out string) []string {
-	out = ansiRe.ReplaceAllString(out, "")
-	out = strings.ReplaceAll(out, "\r", "")
-	out = strings.TrimRight(out, "\n \t")
-	if strings.TrimSpace(out) == "" {
-		return nil
-	}
-	return strings.Split(out, "\n")
-}
-
-// excerpt picks the lines worth showing — deterministic, no model involved:
-//   - up to 6 lines: all of them
-//   - success: the first 2 and the last 3 (what ran, how it ended)
-//   - failure: the last 5 (errors land at the end) plus up to 3 earlier lines
-//     that look like errors
-//
-// Hidden stretches become one "… N lines" marker each.
-func excerpt(lines []string, exit int) []row {
-	n := len(lines)
-	if n == 0 {
-		return nil
-	}
-	keep := make([]bool, n)
-	switch {
-	case n <= 6:
-		for i := range keep {
-			keep[i] = true
-		}
-	case exit == 0:
-		keep[0], keep[1] = true, true
-		for i := n - 3; i < n; i++ {
-			keep[i] = true
-		}
-	default:
-		for i := n - 5; i < n; i++ {
-			keep[i] = true
-		}
-		found := 0
-		for i := 0; i < n-5 && found < 3; i++ {
-			if errRe.MatchString(lines[i]) {
-				keep[i] = true
-				found++
-			}
-		}
-	}
-	var rows []row
-	gap := 0
-	for i, k := range keep {
-		if !k {
-			gap++
-			continue
-		}
-		if gap > 0 {
-			rows = append(rows, row{gap: gap})
-			gap = 0
-		}
-		rows = append(rows, row{text: lines[i]})
-	}
-	if gap > 0 {
-		rows = append(rows, row{gap: gap})
-	}
-	return rows
 }
 
 func nLines(n int) string {
