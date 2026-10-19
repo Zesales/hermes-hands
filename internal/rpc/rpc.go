@@ -22,7 +22,9 @@
 //	{"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}       before it runs
 //	{"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 //	{"type":"hermes_tool","id":1,"tool":"terminal","preview":"...","action":"steered"}
-//	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"..."}
+//	{"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  the turn's budget (max 0 = no limit)
+//	{"type":"note","id":1,"text":"budget: 10 of 25 rounds · 29 of 100 calls left — …"}  what the terminal notes
+//	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"...","rounds":12,"calls":47}
 //	{"type":"session","id":2,"session":"hh_...","hermes_session":"...","approvals":"off"}
 //	{"type":"check","id":4,"ok":true,"model":"...","base":"...","version":"0.22.2"}   (+ "compat" as above)
 //	{"type":"history","id":5,"session":"hh_...","events":[...]}  (session.Event objects)
@@ -205,6 +207,7 @@ func (s *server) turn(req request, id any) {
 		s.emit(map[string]any{
 			"type": "answer", "id": id, "ok": res.Out.OK, "text": res.Out.Answer,
 			"session": s.rec.ID, "hermes_session": s.rec.HermesSessionID,
+			"rounds": res.Out.Rounds, "calls": res.Out.Calls,
 		})
 	}
 }

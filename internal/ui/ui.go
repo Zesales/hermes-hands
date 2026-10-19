@@ -33,6 +33,7 @@ type UI struct {
 
 	activity      string    // what the spinner waits on ("#14 shell"); "" = plain "working"
 	activitySince time.Time // when that started — the spinner counts from here
+	budget        string    // where the turn stands ("round 3/25 · calls 12/100"); "" = not shown
 	streamOpen    bool      // Delta printed the "hermes" label; StreamDone closes it
 }
 
@@ -119,9 +120,13 @@ func (u *UI) StartWorking() (stop func()) {
 					label = u.activity + " running"
 					el = int(time.Since(u.activitySince).Seconds())
 				}
+				budget := ""
+				if u.budget != "" {
+					budget = "  ·  " + u.budget
+				}
 				if u.spinning {
-					fmt.Fprintf(u.w, "\r%s   %s%s%s%s%s  ·  %ds  ·  Ctrl+C to cancel%s\x1b[K",
-						u.cDim, u.cAcc, frames[i%len(frames)], label, u.cR, u.cDim, el, u.cR)
+					fmt.Fprintf(u.w, "\r%s   %s%s%s%s%s  ·  %ds%s  ·  Ctrl+C to cancel%s\x1b[K",
+						u.cDim, u.cAcc, frames[i%len(frames)], label, u.cR, u.cDim, el, budget, u.cR)
 				}
 				u.mu.Unlock()
 			}
@@ -257,7 +262,7 @@ func (u *UI) NewSessionNote(id string) {
 //	outcome "interrupted" -> "— interrupted after 8s —"  (Ctrl-C)
 //	outcome "timeout"     -> "— timeout after 603s — no reply from hermes-agent
 //	                          (HERMES_HANDS_RESPONSE_TIMEOUT=600) —"
-func (u *UI) TurnDone(d time.Duration, outcome string, limitSec int, local, wait time.Duration) {
+func (u *UI) TurnDone(d time.Duration, outcome string, limitSec int, local, wait time.Duration, rounds, calls int) {
 	var msg string
 	switch outcome {
 	case "interrupted":
@@ -272,6 +277,9 @@ func (u *UI) TurnDone(d time.Duration, outcome string, limitSec int, local, wait
 		if wait >= time.Second {
 			msg += " · waited on you " + humanDur(wait)
 		}
+	}
+	if rounds > 0 { // what the turn took against the budget; absent in old logs
+		msg += " · " + plural(rounds, "round") + " · " + plural(calls, "call")
 	}
 	u.sync(func() { fmt.Fprintf(u.w, "%s— %s —%s\n\n", u.cDim, msg, u.cR) })
 }

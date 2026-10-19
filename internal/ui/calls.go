@@ -137,6 +137,34 @@ func (u *UI) SetActivity(label string) {
 	u.mu.Unlock()
 }
 
+// SetBudget puts where the turn stands against the operator's budget on the
+// spinner line (BudgetLabel); "" takes it off.
+func (u *UI) SetBudget(label string) {
+	u.mu.Lock()
+	u.budget = label
+	u.mu.Unlock()
+}
+
+// BudgetLabel is "round 3/25 · calls 12/100" — a max of 0 (no limit) drops
+// its "/max".
+func BudgetLabel(round, maxRounds, calls, maxCalls int) string {
+	of := func(n, limit int) string {
+		if limit > 0 {
+			return strconv.Itoa(n) + "/" + strconv.Itoa(limit)
+		}
+		return strconv.Itoa(n)
+	}
+	return "round " + of(round, maxRounds) + " · calls " + of(calls, maxCalls)
+}
+
+// plural is "1 round" / "3 rounds".
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
+}
+
 // Summarize turns a call's args into the CallStart head line plus up to two
 // continuation lines: a shell command's text (and a non-default timeout), a
 // file path (and a write's size). Unknown tools show their compact args.

@@ -5,7 +5,10 @@
 // writes JSON lines.
 package turn
 
-import "hermes-hands/internal/session"
+import (
+	"hermes-hands/internal/loop"
+	"hermes-hands/internal/session"
+)
 
 // Frontend shows a turn as it happens.
 type Frontend interface {
@@ -20,4 +23,10 @@ type Frontend interface {
 	EndPreview() bool
 	// Quiet says the turn is no longer waiting: stop a "working" indicator.
 	Quiet()
+}
+
+// ProgressFrontend is a Frontend that also shows where the turn stands
+// against the operator's budget (round x/y, calls x/y) while it runs. Optional.
+type ProgressFrontend interface {
+	Progress(p loop.Progress)
 }

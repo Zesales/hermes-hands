@@ -36,7 +36,7 @@ func (u *UI) Show(ev session.Event, out string) {
 		u.Line("")
 		u.Answer(ev.Text)
 	case session.KindTurnEnd:
-		u.TurnDone(ms(ev.Ms), ev.Outcome, ev.Limit, ms(ev.LocalMs), ms(ev.WaitMs))
+		u.TurnDone(ms(ev.Ms), ev.Outcome, ev.Limit, ms(ev.LocalMs), ms(ev.WaitMs), ev.Rounds, ev.Calls)
 	}
 }
 

@@ -26,7 +26,7 @@ const (
 	KindApproval   = "approval"    // an approval prompt the operator answered (Text = summary, Detail, Action = answer, Ms = wait)
 	KindAnswer     = "answer"      // the turn's answer (Text, OK, Tokens)
 	KindNote       = "note"        // anything else the terminal said in a turn (Text)
-	KindTurnEnd    = "turn_end"    // the turn footer (Ms, Outcome: "" | interrupted | timeout, Limit, LocalMs, WaitMs)
+	KindTurnEnd    = "turn_end"    // the turn footer (Ms, Outcome: "" | interrupted | timeout, Limit, LocalMs, WaitMs, Rounds, Calls)
 )
 
 // Event is one line of <id>/events.jsonl: one thing the terminal showed. The
@@ -63,6 +63,8 @@ type Event struct {
 	Limit   int             `json:"limit,omitempty"`    // turn_end timeout: the response timeout in seconds
 	LocalMs int64           `json:"local_ms,omitempty"` // turn_end: time the hands' calls ran
 	WaitMs  int64           `json:"wait_ms,omitempty"`  // turn_end: time spent waiting on the operator's approvals
+	Rounds  int             `json:"rounds,omitempty"`   // turn_end: requests to Hermes this turn took
+	Calls   int             `json:"calls,omitempty"`    // turn_end: hands calls this turn ran
 
 	// Out is a result's output in flight, never serialised: the recorder
 	// stores it in out/<Ref>.txt and keeps only Lines / Bytes in the event.

@@ -92,7 +92,7 @@ func (r *Runner) Run(input string, fe Frontend) Result {
 
 	waited := r.paused()
 	end := session.Event{Kind: session.KindTurnEnd, Ms: (time.Since(start) - waited).Milliseconds(),
-		LocalMs: local, WaitMs: waited.Milliseconds()}
+		LocalMs: local, WaitMs: waited.Milliseconds(), Rounds: out.Rounds, Calls: out.Calls}
 	switch {
 	case timedOut:
 		end.Outcome, end.Limit = "timeout", int(r.Timeout/time.Second)
@@ -140,6 +140,9 @@ func (r *Runner) wire(wd *watchdog, log *session.Log, fe Frontend, pv *preview, 
 		fe.Show(log.Add(session.Event{Kind: session.KindHermesTool, Tool: tool, Text: preview, Action: action}))
 	}
 	r.Loop.Paused = r.Paused
+	if pf, ok := fe.(ProgressFrontend); ok {
+		r.Loop.OnProgress = pf.Progress
+	}
 	// every hands call: recorded and shown BEFORE it runs, then its result
 	r.Loop.Emit = func(ev session.Event) {
 		wd.bump() // a call starting or finishing = progress
@@ -154,7 +157,7 @@ func (r *Runner) wire(wd *watchdog, log *session.Log, fe Frontend, pv *preview, 
 func (r *Runner) unwire() {
 	c := r.Client
 	c.OnRunStart, c.OnDelta, c.OnEvent, c.OnApproval, c.OnHermesTool = nil, nil, nil, nil, nil
-	r.Loop.Emit = nil
+	r.Loop.Emit, r.Loop.OnProgress = nil, nil
 }
 
 // watchdog cancels a turn when hermes-agent goes quiet past Timeout, but

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"hermes-hands/internal/loop"
 	"hermes-hands/internal/prompt"
 	"hermes-hands/internal/session"
 	"hermes-hands/internal/ui"
@@ -43,6 +44,12 @@ func (f *front) EndPreview() bool { return f.ui.StreamDone() }
 func (f *front) Quiet() {
 	f.quiet()
 	f.ui.SetActivity("")
+	f.ui.SetBudget("")
+}
+
+// Progress keeps "round 3/25 · calls 12/100" on the working line.
+func (f *front) Progress(p loop.Progress) {
+	f.ui.SetBudget(ui.BudgetLabel(p.Round, p.MaxRounds, p.Calls, p.MaxCalls))
 }
 
 func (f *front) quiet() {

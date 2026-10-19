@@ -1,13 +1,15 @@
 package rpc
 
 import (
+	"hermes-hands/internal/loop"
 	"hermes-hands/internal/session"
 	"hermes-hands/internal/ui"
 )
 
 // front shows a turn as --rpc JSON lines: a hands call before it runs
 // (call) and its result (tool), Hermes' own tool events (hermes_tool), the
-// answer text as it streams (delta). The answer itself — or why there is
+// answer text as it streams (delta), a terminal note (note: a budget
+// countdown, a compaction) and where the turn stands (progress). The answer itself — or why there is
 // none — is written by Run from the turn's result.
 type front struct {
 	emit  func(map[string]any)
@@ -28,7 +30,16 @@ func (f *front) Show(ev session.Event) {
 		f.emit(map[string]any{"type": "tool", "id": f.id, "ref": ev.Ref, "tool": ev.Tool, "preview": f.heads[ev.Ref], "exit": exit, "lines": ev.Lines})
 	case session.KindHermesTool:
 		f.emit(map[string]any{"type": "hermes_tool", "id": f.id, "tool": ev.Tool, "preview": ev.Text, "action": ev.Action})
+	case session.KindNote:
+		f.emit(map[string]any{"type": "note", "id": f.id, "text": ev.Text})
 	}
+}
+
+// Progress: where the turn stands against the operator's budget (a max of
+// 0 = no limit) — at every request to Hermes and after every call.
+func (f *front) Progress(p loop.Progress) {
+	f.emit(map[string]any{"type": "progress", "id": f.id, "round": p.Round, "max_rounds": p.MaxRounds,
+		"calls": p.Calls, "max_calls": p.MaxCalls})
 }
 
 func (f *front) Preview(s string) {
