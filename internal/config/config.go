@@ -342,14 +342,14 @@ func secondsOr(s string, def time.Duration) time.Duration {
 	return def
 }
 
-// sandboxMode normalises HERMES_HANDS_SANDBOX: smart | steer | show, anything
-// else (unset included) is smart.
+// sandboxMode normalises HERMES_HANDS_SANDBOX: steer (the default — also for
+// anything unknown) | smart | show.
 func sandboxMode(v string) string {
 	switch v = strings.ToLower(strings.TrimSpace(v)); v {
-	case "steer", "show":
+	case "smart", "show":
 		return v
 	}
-	return "smart"
+	return "steer"
 }
 
 // switchOn reads an on/off setting: empty, 0, false, off and no are off;

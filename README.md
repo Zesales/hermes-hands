@@ -196,18 +196,24 @@ in its results, so both of you can point at a call:
      │ ok   …/internal/ui     1.914s
 ```
 
-**Two machines, nothing taken away.** Hermes keeps all of its own tools —
-cron, memory, web, browser, delegation, and its server-side `terminal` /
-`read_file` / `execute_code` for server work (a scratch computation, a
-download, a cron job's shell). hermes-hands only sorts out *which machine*:
-it watches the run's tool events, and when one of Hermes' server-side exec /
-file calls is aimed at **your** workspace — it names your paths or your
-repo's files, runs `make` or a repo-local `git`, or echoes a hands envelope —
-the run is steered back to the hands (`POST /v1/runs/{id}/steer`) and a
-`⚠ hermes-sandbox` line says so. Other server-side work shows as a dim
-`· hermes server-sandbox …` line and runs. `HERMES_HANDS_SANDBOX` = `smart`
-(that, the default) | `steer` (every server exec / file call) | `show`
-(never steer).
+**Your machine does the work.** Hermes keeps its own thinking-side tools —
+cron, memory, web, browser, delegation. Its server-side `terminal` /
+`read_file` / `execute_code` are another matter: a model that meets a
+missing tool on your machine tends to rebuild your project in its own
+sandbox — install the toolchain there, clone your code there, look around
+the server's containers. hermes-hands watches the run's tool events and, by
+default, steers **every** server-side exec / file call back to the hands
+(`POST /v1/runs/{id}/steer`); a `⚠ hermes-sandbox` line says so. The steer
+tells Hermes where the work belongs and what to do about a missing tool:
+the project's own way (`make`, docker, scripts) — or a final that names
+what is missing and the exact command for **you** to install it (the hands
+refuse `sudo`). A steer redirects the run; the call it answers has started
+already. `HERMES_HANDS_SANDBOX` = `steer` (the default) | `smart` (steer
+only calls meant for your project — your paths or files, `make`, a
+repo-local `git`, a hands envelope — or environment work: installing a
+toolchain or dependencies, `curl … | sh`, `git clone`, exploring the
+server's containers or network; other server work shows as a dim
+`· hermes server-sandbox …` line and runs) | `show` (never steer).
 
 When one of Hermes' server-side tools asks for **approval**, you decide —
 in its own prompt, separate from the hands' approvals (their `[a]ll` never
@@ -524,7 +530,7 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_HANDS_STREAM` | `auto` | SSE answer streaming: `auto` (when advertised) \| `on` \| `off` |
 | `HERMES_HANDS_DEBUG` | `0` | `1` = start with `/debug` on (redacted connection trace); `0` / `off` = off |
 | `HERMES_HANDS_RETENTION_DAYS` | `14` | delete local sessions idle longer than this on start (`0` keeps all) |
-| `HERMES_HANDS_SANDBOX` | `smart` | Hermes' own server-side terminal / file tools in a hands run: `smart` (steer only calls aimed at your machine) \| `steer` (all) \| `show` (never) |
+| `HERMES_HANDS_SANDBOX` | `steer` | Hermes' own server-side terminal / file tools in a hands run: `steer` (all back to the hands) \| `smart` (only calls meant for your project, or environment work) \| `show` (never) |
 | `HERMES_HANDS_DENY` | — | extra denied `local_shell` commands, `\|`-separated shell globs |
 | `HERMES_HANDS_MAX_ROUNDS` | `25` | requests to Hermes per turn (`0` = no limit) |
 | `HERMES_HANDS_MAX_CALLS` | `100` | hands calls per turn (`0` = no limit) |

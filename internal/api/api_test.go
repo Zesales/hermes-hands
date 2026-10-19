@@ -599,8 +599,8 @@ func TestStreamRun_GuardPolicyAndOperatorApproval(t *testing.T) {
 	if strings.Join(seen, " ") != "execute_code/server terminal/steered approval/approved" {
 		t.Errorf("hermes tools = %q", seen)
 	}
-	if len(steers) != 1 || !strings.Contains(steers[0], "`make`") || !strings.Contains(steers[0], "server-side work") {
-		t.Errorf("steer = %q, want the policy's reason and the server-side allowance", steers)
+	if len(steers) != 1 || !strings.Contains(steers[0], "`make`") || !strings.Contains(steers[0], "the exact command to install it") {
+		t.Errorf("steer = %q, want the policy's reason and what to do about a missing tool", steers)
 	}
 	if asked != "rm -rf /tmp/build" || len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"once"`) {
 		t.Errorf("approval: asked %q, sent %q", asked, approvals)

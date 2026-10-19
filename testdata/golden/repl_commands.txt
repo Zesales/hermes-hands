@@ -36,7 +36,8 @@ you
    show me the readme
    ⋯ working  ·  Ctrl+C to cancel
 hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
- · hermes server-sandbox terminal  echo probe
+ ⚠ hermes-sandbox terminal  echo probe
+     ↳ not your machine — steered back to the hands
  ⚠ hermes-sandbox terminal  make test
      ↳ not your machine — steered back to the hands
 
@@ -68,7 +69,8 @@ hermes-hands - session <SESSION> >
 ────────────────────────────────────────────────────────────────────────────────────────────────
 you
    show me the readme
- · hermes server-sandbox terminal  echo probe
+ ⚠ hermes-sandbox terminal  echo probe
+     ↳ not your machine — steered back to the hands
  ⚠ hermes-sandbox terminal  make test
      ↳ not your machine — steered back to the hands
 
@@ -128,7 +130,7 @@ hermes-hands - session <SESSION> >   home         : <TMP>/hermes-hands
     HERMES_HANDS_WATCHDOG_INTERVAL    <DUR>                     (default)
     HERMES_HANDS_RETENTION_DAYS       14 days                  (default)
     HERMES_HANDS_DEBUG                off                      (default)
-    HERMES_HANDS_SANDBOX              smart                    (default)
+    HERMES_HANDS_SANDBOX              steer                    (default)
     HERMES_HANDS_MAX_ROUNDS           25                       (default)
     HERMES_HANDS_MAX_CALLS            100                      (default)
     HERMES_HANDS_MAX_CALLS_PER_ROUND  20                       (default)

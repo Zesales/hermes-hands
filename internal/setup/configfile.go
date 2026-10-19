@@ -18,7 +18,7 @@ import (
 var configDefaults = []struct{ key, val, note string }{
 	{"HERMES_HANDS_APPROVE", "ask", "ask | auto | never — --yolo and /yolo switch it per run"},
 	{"HERMES_HANDS_STREAM", "auto", "auto | on | off"},
-	{"HERMES_HANDS_SANDBOX", "smart", "Hermes' own server terminal/file tools: smart | steer | show"},
+	{"HERMES_HANDS_SANDBOX", "steer", "Hermes' own server terminal/file tools: steer (back to the hands) | smart | show"},
 	{"HERMES_HANDS_MAX_ROUNDS", strconv.Itoa(config.DefaultMaxRounds), "requests to Hermes per turn (0 = no limit)"},
 	{"HERMES_HANDS_MAX_CALLS", strconv.Itoa(config.DefaultMaxCalls), "hands calls per turn (0 = no limit)"},
 	{"HERMES_HANDS_MAX_CALLS_PER_ROUND", strconv.Itoa(config.DefaultMaxCallsPerRound), "calls per envelope — a bigger one is not run (0 = no limit)"},

@@ -53,7 +53,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.MaxRoundOutput != 60000 || c.ContextWindow != 131072 || c.CompactAt != 45 {
 		t.Errorf("context defaults wrong: round output %d, window %d, compact at %d", c.MaxRoundOutput, c.ContextWindow, c.CompactAt)
 	}
-	if c.Sandbox != "smart" || sandboxMode(" Steer ") != "steer" || sandboxMode("show") != "show" || sandboxMode("bogus") != "smart" {
+	if c.Sandbox != "steer" || sandboxMode(" Smart ") != "smart" || sandboxMode("show") != "show" || sandboxMode("bogus") != "steer" {
 		t.Errorf("Sandbox = %q (normalisation broken)", c.Sandbox)
 	}
 	if c.ResponseTimeout != 600*time.Second || c.WatchdogInterval != 200*time.Second {

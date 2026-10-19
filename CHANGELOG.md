@@ -4,6 +4,37 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
+## 0.14.2 — 2026-10-19 — Hermes works on the operator's machine: `steer` by default
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
+
+Seen in real code sessions: when a tool was missing on the operator's
+machine, Hermes rebuilt the project in its own server sandbox — installed
+the toolchain there, tried to get the code there, looked around the
+server's containers. The instructions allowed it ("a download" was
+server-side work), and smart steered only calls that named the operator's
+paths or files.
+
+- **`HERMES_HANDS_SANDBOX=steer` is the default** (was `smart`): every
+  server-side exec / file call of Hermes' is steered back to the hands. Its
+  web, memory, cron and delegation tools are untouched. An unknown value
+  means `steer` too. A config written by `setup` before carries
+  `HERMES_HANDS_SANDBOX=smart` as a value of its own — change it to `steer`
+  (or remove the line) to get the new default.
+- **A missing tool is the operator's call**: the instructions and every
+  steer say it — the project's own way first (`make` targets, docker,
+  scripts); else a final that names what is missing and the exact command
+  for the operator to install it (`sudo apt install …`; the hands refuse
+  `sudo`). Never set it up in the sandbox. The project's environment —
+  toolchain, dependencies, services, containers — belongs to the hands'
+  side; "a download" is no server-side work any more.
+- **smart catches environment work** (guard.Setup): installing a toolchain
+  or dependencies (`apt` / `apk` / `brew` … `install`, `pip` / `npm` /
+  `go` / `cargo` … `install`, `curl … | sh`, toolchain downloads),
+  `git clone`, exploring the server's containers or network (`docker ps`,
+  `docker network`, `ss -`, `ip a`, `host.docker.internal`, the docker
+  socket).
+
 ## 0.14.0 — 2026-10-19 — `/compact-aggressive`; compaction keeps more of a code session
 
 hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).

@@ -9,7 +9,8 @@ you
    show me the readme
    ⋯ working  ·  Ctrl+C to cancel
 hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
- · hermes server-sandbox terminal  echo probe
+ ⚠ hermes-sandbox terminal  echo probe
+     ↳ not your machine — steered back to the hands
  ⚠ hermes-sandbox terminal  make test
      ↳ not your machine — steered back to the hands
 
@@ -35,7 +36,8 @@ hermes-hands - session <SESSION> >
 ────────────────────────────────────────────────────────────────────────────────────────────────
 you
    show me the readme
- · hermes server-sandbox terminal  echo probe
+ ⚠ hermes-sandbox terminal  echo probe
+     ↳ not your machine — steered back to the hands
  ⚠ hermes-sandbox terminal  make test
      ↳ not your machine — steered back to the hands
 

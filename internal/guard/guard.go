@@ -1,19 +1,27 @@
-// Package guard decides whether one of Hermes' OWN server-side tool calls
-// (terminal, execute_code, read_file, …) is aimed at the operator's workspace
-// — which only the hands can reach — or is legitimate server-side work (a
-// scratch computation, a download, a cron job's shell).
+// Package guard decides what to do about one of Hermes' OWN server-side tool
+// calls (terminal, execute_code, read_file, …) in a hands run. A hands
+// session's work is the operator's project, on the operator's machine — only
+// the hands reach it. Its toolchain and services belong there too: a model
+// that meets a missing tool tends to rebuild the project in its own sandbox
+// (install the toolchain, clone the code, look around the server's
+// containers), which is work on the wrong machine.
 //
-// Hermes keeps every tool: hermes-hands only steers a run back to the hands
-// when a call clearly means the operator's machine. Deterministic, no model:
+// The default (steer, Strict) steers every server-side exec / file call back
+// to the hands. smart (Check) steers only what is clearly meant for the
+// operator's project. Deterministic, no model:
 //
 //   - it echoes a hands envelope through a tool ({"calls": …})
 //   - it names the operator's workspace or home path
 //   - it runs make, or a repo-local git command (status, diff, commit, …)
 //   - it names a file or directory that exists in the operator's repo
+//   - it sets up an environment: installs a toolchain or dependencies, pipes
+//     a download into a shell, clones code
+//   - it explores the server: its containers, its network, the docker socket
 //
-// Anything else is shown to the operator and left alone. Separately, a hands
-// tool (local_shell, …) that Hermes tries to call as one of its own — via its
-// tool_call / tool_search deferral mechanism, say — is steered too.
+// Separately, a hands tool (local_shell, …) that Hermes tries to call as one
+// of its own — via its tool_call / tool_search deferral mechanism, say — is
+// steered in every mode but show. Hermes' other tools (web, memory, cron,
+// delegation) are never steered.
 package guard
 
 import (
@@ -26,8 +34,8 @@ import (
 
 // Modes for HERMES_HANDS_SANDBOX.
 const (
-	Smart = "smart" // steer only calls aimed at the operator's workspace (default)
-	Steer = "steer" // steer every server-side exec / file call
+	Steer = "steer" // steer every server-side exec / file call (default)
+	Smart = "smart" // steer only calls meant for the operator's project
 	Show  = "show"  // never steer — only show them
 )
 
@@ -54,7 +62,13 @@ var handsToolRe = regexp.MustCompile(`(?i)\blocal[ _-]?(shell|read|write|edit)\b
 
 const handsToolMsg = "[hermes-hands] `local_shell` / `local_read` / `local_write` / `local_edit` are not tools of yours — not even via tool_call or tool_search. They are names you put in your reply envelope, and the hands run them on the operator's machine: reply with {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell\",\"args\":{\"cmd\":\"…\"}}],\"final\":null}."
 
-const sandboxMsg = "[hermes-hands] your `%s` call ran in YOUR server sandbox, but %s. The operator's machine — their repo, files, git, build — is reachable only through the hands: put that work in a hands envelope {\"calls\":[...],\"final\":null}. Your own tools stay fine for server-side work (scratch computations, downloads, cron jobs)."
+// localWork is what every steer tells Hermes: where the work belongs, and
+// what to do when a tool is missing there.
+const localWork = "Everything for the operator's project — code, files, git, build, tests, its toolchain, its dependencies, its services — is on THEIR machine, reachable only through the hands: put it in a hands envelope {\"calls\":[...],\"final\":null}. A tool missing there: use the project's own way (make targets, docker, scripts), or end with a final that tells the operator what is missing and the exact command to install it (e.g. `sudo apt install …`) — never set it up in your sandbox."
+
+const sandboxMsg = "[hermes-hands] your `%s` call ran in YOUR server sandbox, but %s. " + localWork
+
+const strictMsg = "[hermes-hands] your `%s` call ran in YOUR server sandbox — in a hands session your own exec and file tools are not for the work. " + localWork
 
 // Check is the smart policy (HERMES_HANDS_SANDBOX=smart) for one of Hermes'
 // tool.started events: a hands tool called as if it were Hermes' own, or a
@@ -69,7 +83,39 @@ func Check(tool, preview, workspace, home string) Verdict {
 	if aimed, why := Targets(tool, preview, workspace, home); aimed {
 		return Verdict{Steer: true, Kind: "sandbox", Message: fmt.Sprintf(sandboxMsg, tool, why)}
 	}
+	if why := Setup(preview); why != "" {
+		return Verdict{Steer: true, Kind: "setup", Message: fmt.Sprintf(sandboxMsg, tool, why)}
+	}
 	return Verdict{}
+}
+
+// The environment work a model reaches for in its own sandbox when a tool is
+// missing on the operator's machine.
+var (
+	installRe = regexp.MustCompile(`(?i)\b(apt-get|apt|apk|yum|dnf|pacman|zypper|brew|snap|choco)\s+(-\S+\s+)*(install|add)\b|` +
+		`\b(pip3?|pipx|uv|npm|pnpm|yarn|bun|cargo|gem|go|composer)\s+(-\S+\s+)*(install|add|get|i)\b|` +
+		`\b(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba|z)?sh\b|` +
+		`go\.dev/dl|golang\.org/dl|nodejs\.org/dist|sh\.rustup\.rs|get\.docker\.com`)
+	cloneRe   = regexp.MustCompile(`(?i)\b(git\s+clone|gh\s+repo\s+clone)\b`)
+	exploreRe = regexp.MustCompile(`(?i)\bdocker(-compose)?\s+(ps|inspect|network|exec|logs|images|container|compose|info)\b|` +
+		`\b(kubectl|nmap|netstat|arp)\b|\bss\s+-|\bip\s+(a|addr|route|neigh)\b|` +
+		`host\.docker\.internal|docker\.sock`)
+)
+
+// Setup reports why a server-side call is environment work that belongs on
+// the operator's machine ("" when it is none): a toolchain or dependency
+// installed in the sandbox, code cloned into it, the server's containers or
+// network explored.
+func Setup(preview string) string {
+	switch {
+	case installRe.MatchString(preview):
+		return "it sets up a toolchain or dependencies there — the operator's project and its environment are on their machine"
+	case cloneRe.MatchString(preview):
+		return "it clones code into your sandbox — the operator's project is on their machine already"
+	case exploreRe.MatchString(preview):
+		return "it explores the server's containers / network — neither the operator's machine nor your task"
+	}
+	return ""
 }
 
 // Strict is HERMES_HANDS_SANDBOX=steer: every server-side exec / file call is
@@ -79,7 +125,7 @@ func Strict(tool, preview string) Verdict {
 		return v
 	}
 	if SandboxTools[tool] {
-		return Verdict{Steer: true, Kind: "sandbox", Message: fmt.Sprintf(sandboxMsg, tool, "it reached for the operator's machine")}
+		return Verdict{Steer: true, Kind: "sandbox", Message: fmt.Sprintf(strictMsg, tool)}
 	}
 	return Verdict{}
 }

@@ -61,7 +61,12 @@ Prefer the artifact that generates a fact over prose that merely mentions it:
   from here, entirely locally.
 - When a command is missing or fails (`exit 127`, tool not installed), say so
   and try the next-best local source instead of quietly falling back to a
-  guess.
+  guess. A missing toolchain (go, node, python, …): first the project's own
+  way — its `make` targets, docker, scripts (the brief lists them). If there
+  is none, install nothing yourself and set nothing up in your sandbox: end
+  with a `final` that says what is missing and gives the operator the exact
+  command to install it (`sudo apt install golang-go`, say) — the hands
+  refuse `sudo`, the operator runs it.
 
 ## The hands
 
@@ -126,17 +131,19 @@ tool is closest:
 
 | the work is about … | use |
 |---|---|
-| the operator's repo, files, git, build, tests, local services | **the hands** (`calls`) — nothing else reaches that machine |
-| server-side work: a scratch computation, a download, web research, your memory, skills, a cron job, delegation | **your own tools**, as usual |
+| the operator's project: its repo, files, git, build, tests — and its environment: toolchain, dependencies, local services and containers | **the hands** (`calls`) — nothing else reaches that machine |
+| nothing of the project: web research, your memory, skills, a cron job, delegation | **your own tools**, as usual |
 
 Your own `terminal`, `read_file`, `write_file`, `execute_code`, `search_files`
 run in your **server sandbox** — the operator's directory is not there, and
-their absolute paths (`/home/you/…`) do not resolve there. A cron job you set
+their absolute paths (`/home/you/…`) do not resolve there. They are not for
+this session's work: never rebuild the operator's project or its environment
+in your sandbox — no installing their toolchain there, no cloning their code
+there, no exploring the server's containers or network. A cron job you set
 up runs on the server later, without the hands: it cannot touch the
-operator's machine. hermes-hands watches your tool events: a tool call of
-yours that is aimed at the operator's workspace (their paths, their repo's
-files, `git` / `make` on their repo) gets the run steered back to the hands,
-and the operator approves or denies any approval request of yours.
+operator's machine. hermes-hands watches your tool events and steers such
+calls back to the hands; the operator approves or denies any approval
+request of yours.
 
 A problem genuinely about *you* (your memory, our past conversations, general
 knowledge) you answer straight in `final`, no hands needed.
