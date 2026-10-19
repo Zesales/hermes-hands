@@ -35,6 +35,19 @@ included, again and again.
   messages). A resumed compacted session needs no recap.
 - **`/compact`** and rpc **`compact`** compact now (every output so far);
   they say so when there is nothing to elide yet.
+- **Chat checkpoints**: each compaction freezes what Hermes reads from then
+  on in `<id>/chat-checkpoints/NNNN.json`; Hermes reads the latest one plus
+  every event after it, so that prefix never changes (a later version's
+  rules neither). `events.jsonl` stays the whole chat; the `compact` event
+  names its checkpoint and is the divider — in the terminal a `──── compacted
+  #1 · … ────` line, live and in `/history`. **`/context`** (`/context full`)
+  and rpc **`context`** show what Hermes reads now; rpc `history` carries
+  the dividers, so a plugin can show the old chat and the compacted one.
+- **An elided round, short**: one line per call (`#14 local_shell `go test
+  ./...` → exit 1 · 312 lines · 18 KB ·` and the output's error or last line
+  — the terminal excerpt's rule, now `internal/excerpt`), its reasoning
+  clipped to 200 characters; Hermes' replies stay the JSON envelope. Once
+  outputs are stubs, the JSON around them was what filled the context.
 - **`HERMES_HANDS_MAX_ROUND_OUTPUT`** (60000 bytes): one round's results
   together. A bigger round keeps its small outputs whole and the big ones'
   head and tail around a marker naming the cut bytes; the operator gets a

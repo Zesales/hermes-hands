@@ -14,7 +14,8 @@
 //	{"id":6,"type":"debug","text":"on"}       redacted wire trace on / off / toggle
 //	{"id":7,"type":"approvals","text":"auto"} hands approvals auto | never ("" = report) — a runtime
 //	                                          switch: the next new / use starts from config / env / flags
-//	{"id":8,"type":"compact"}                 compact the session's transcript now (internal/compact)
+//	{"id":8,"type":"compact"}                 compact the session's chat now (a chat checkpoint, internal/compact)
+//	{"id":9,"type":"context"}                 what Hermes reads now
 //
 // Responses:
 //
@@ -32,7 +33,9 @@
 //	{"type":"history","id":5,"session":"hh_...","events":[...]}  (session.Event objects)
 //	{"type":"debug","id":6,"on":true,"path":".../debug.jsonl"}
 //	{"type":"approvals","id":7,"approvals":"off"}                  off (= auto) | never
-//	{"type":"compact","id":8,"ok":true,"session":"hh_...","before":98000,"after":31000,"text":"compacted: …"}
+//	{"type":"compact","id":8,"ok":true,"session":"hh_...","before":98000,"after":31000,"text":"compacted #1 · …","checkpoint":"chat-checkpoints/0001.json"}
+//	{"type":"context","id":9,"session":"hh_...","owned":true,"checkpoint":"chat-checkpoints/0001.json","n":1,
+//	 "messages":[{"role":"user","content":"…"},…],"since":[…],"context":31000,"measured":false,"window":131072}
 //	{"type":"error","id":1,"message":"..."}
 //
 // Turns are recorded into the session's event log exactly like REPL turns,
@@ -188,6 +191,7 @@ var handlers = map[string]func(s *server, req request, id any){
 	"approvals": (*server).approvals,
 	"check":     (*server).check,
 	"compact":   (*server).compact,
+	"context":   (*server).context,
 	"compress":  (*server).compact,
 }
 
@@ -332,7 +336,17 @@ func (s *server) compact(_ request, id any) {
 	}
 	ev = s.runner.Record(ev)
 	s.emit(map[string]any{"type": "compact", "id": id, "ok": true, "session": s.rec.ID,
-		"before": ev.Before, "after": ev.Tokens, "text": ev.Text})
+		"before": ev.Before, "after": ev.Tokens, "text": ev.Text, "checkpoint": ev.Checkpoint})
+}
+
+// context is what Hermes reads now: the latest chat checkpoint's messages and
+// those after it (owned false: hermes-agent holds the transcript, nothing is
+// compacted yet), and the meter.
+func (s *server) context(_ request, id any) {
+	v := s.a.Keeper.View()
+	s.emit(map[string]any{"type": "context", "id": id, "session": s.rec.ID, "owned": v.Owned,
+		"checkpoint": v.Checkpoint, "n": v.N, "messages": v.Messages, "since": v.Since,
+		"context": v.Meter.Tokens, "measured": v.Meter.Measured, "window": v.Meter.Window})
 }
 
 func (s *server) applyDebug() { s.a.SetDebug(s.rec, s.debugOn) }

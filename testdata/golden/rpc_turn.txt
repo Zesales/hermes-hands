@@ -40,5 +40,6 @@ hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 {"id":8,"message":"use needs a session id","type":"error"}
 {"id":9,"message":"no such session: <SESSION>","type":"error"}
 {"approvals":"off","hermes_session":"<HERMES-SESSION>","id":10,"session":"<SESSION>","type":"session"}
-{"id":11,"message":"unknown request type \"bogus\"","type":"error"}
+{"checkpoint":"","context":0,"id":11,"measured":false,"messages":null,"n":0,"owned":false,"session":"<SESSION>","since":null,"type":"context","window":131072}
+{"id":12,"message":"unknown request type \"bogus\"","type":"error"}
 {"message":"invalid JSON request","type":"error"}

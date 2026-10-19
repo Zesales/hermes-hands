@@ -34,6 +34,7 @@ var commands = []command{
 	{[]string{"/check"}, (*repl).check},
 	{[]string{"/config", "/hh-settings"}, (*repl).config},
 	{[]string{"/compact", "/compress"}, (*repl).compact},
+	{[]string{"/context"}, (*repl).context},
 }
 
 // commandNamed finds a command by any of its names.
@@ -138,6 +139,13 @@ func (r *repl) compact(arg string) {
 		fmt.Fprintf(os.Stderr, "  %v\n\n", err)
 		return
 	}
-	ev = r.runner.Record(ev)
-	fmt.Fprintf(os.Stderr, "  %s\n\n", ev.Text)
+	r.a.UI.Show(r.runner.Record(ev), "")
+	fmt.Fprintln(os.Stderr)
+}
+
+// context shows what Hermes reads now: the meter, the latest chat
+// checkpoint and what came after it — "full" prints every message.
+func (r *repl) context(arg string) {
+	fmt.Fprint(os.Stderr, compact.Describe(r.a.Keeper.View(), arg == "full"))
+	fmt.Fprintln(os.Stderr)
 }

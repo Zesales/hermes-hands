@@ -12,6 +12,8 @@
 //	<id>/out/<ref>.txt — the full (scrubbed) output of call #ref; events only
 //	                     carry its size, the excerpt is rendered from this
 //	<id>/debug.jsonl   — the /debug wire trace, redacted (only while /debug is on)
+//	<id>/chat-checkpoints/NNNN.json — what Hermes reads from compaction N on
+//	                     (ChatCheckpoint); the events stay the whole chat
 //
 // The conversation the model sees lives on the Hermes server; this store is
 // the operator's local record of it and never syncs anywhere. Sessions idle

@@ -24,10 +24,8 @@ package compact
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 
-	"hermes-hands/internal/api"
 	"hermes-hands/internal/session"
 )
 
@@ -49,28 +47,6 @@ type Keeper struct {
 // until a measured run calibrates it.
 const DefaultOverhead = 16000
 
-// Tokens estimates the tokens of s: 3 bytes a token, on the high side for
-// prose (about 4) and about right for code and JSON — the meter would rather
-// compact a little early than send a request that does not fit.
-func Tokens(s string) int { return (len(s) + 2) / 3 }
-
-// tokensOf estimates a transcript: its text plus a few tokens of chat
-// template per message.
-func tokensOf(h []api.Message) int {
-	n := 0
-	for _, m := range h {
-		n += Tokens(m.Content) + 4
-	}
-	return n
-}
-
-func (k *Keeper) overhead() int {
-	if k.Rec.Overhead > 0 {
-		return k.Rec.Overhead
-	}
-	return DefaultOverhead
-}
-
 func (k *Keeper) events() []session.Event {
 	evs, _ := k.Store.LoadEvents(k.Rec)
 	return evs
@@ -91,124 +67,6 @@ func (k *Keeper) Owned() bool {
 	}
 	_, ok := session.LastCompact(k.events())
 	return ok
-}
-
-// History is the transcript to send with the next run — nil while
-// hermes-agent holds it. The operator's message or the results the loop is
-// about to send are already in the log; they go as the run's input, so a
-// trailing user message is left out here.
-func (k *Keeper) History() []api.Message {
-	if k == nil {
-		return nil
-	}
-	evs := k.events()
-	c, ok := session.LastCompact(evs)
-	if !ok {
-		return nil
-	}
-	return history(session.Transcript(evs, k.opts(c)))
-}
-
-func history(msgs []session.Msg) []api.Message {
-	if n := len(msgs); n > 0 && msgs[n-1].Role == "user" {
-		msgs = msgs[:n-1]
-	}
-	h := make([]api.Message, 0, len(msgs))
-	for _, m := range msgs {
-		h = append(h, api.Message{Role: m.Role, Content: m.Content})
-	}
-	return h
-}
-
-// Predict estimates the prompt of the next request: the context after the
-// last run plus msg, and — once hermes-hands holds the transcript — the fixed
-// part plus that transcript plus msg; the larger of the two, so a refused
-// run (Overflow) is compacted first either way. 0 = unknown (nothing
-// measured yet).
-func (k *Keeper) Predict(msg string, history []api.Message) int {
-	if k == nil {
-		return 0
-	}
-	p := 0
-	if k.Rec.Context > 0 {
-		p = k.Rec.Context + Tokens(msg)
-	}
-	if history != nil {
-		p = max(p, k.overhead()+tokensOf(history)+Tokens(msg))
-	}
-	return p
-}
-
-// Due reports whether a request of predicted tokens should be compacted
-// first.
-func (k *Keeper) Due(predicted int) bool {
-	return k != nil && k.Window > 0 && k.At > 0 && predicted*100 >= k.Window*k.At
-}
-
-// Observe updates the meter after a completed run: res is its result, msg
-// and history what was sent, predicted what Predict said.
-func (k *Keeper) Observe(res api.AskResult, msg string, history []api.Message, predicted int) {
-	if k == nil {
-		return
-	}
-	reply := Tokens(res.Text)
-	switch {
-	case res.Prompt > 0 && res.HermesTools == 0:
-		// one model call: the prompt it saw, measured
-		switch {
-		case history != nil:
-			k.Rec.Overhead = max(res.Prompt-tokensOf(history)-Tokens(msg), 0)
-		case k.Rec.Turns == 0: // the session's first run: nothing but msg in the conversation
-			k.Rec.Overhead = max(res.Prompt-Tokens(msg), 0)
-		}
-		k.Rec.Context, k.Rec.Measured = res.Prompt+reply, true
-	case predicted > 0:
-		k.Rec.Context, k.Rec.Measured = predicted+reply, false
-	}
-}
-
-// overflowRe matches a provider's or hermes-agent's "the prompt does not fit
-// the context window" — wordings differ by model server.
-var overflowRe = regexp.MustCompile(`(?i)context.{0,60}(no room|exceed|too (long|large|many)|overflow|maximum|window|limit)|(no room|exceed|too long|overflow|maximum).{0,60}context|context_(overflow|length_exceeded|compression_exhausted)`)
-
-// promptRe finds the prompt's size in such an error ("prompt (150000
-// tokens)", "you requested 150000 tokens").
-var promptRe = regexp.MustCompile(`(\d{4,8}) tokens`)
-
-// IsOverflow reports whether a failed run's error says the conversation no
-// longer fits the model's context window.
-func IsOverflow(reason string) bool { return overflowRe.MatchString(reason) }
-
-// Overflow records a run refused for its size: the meter goes to what the
-// error names (or the full window), so the next request is compacted first.
-func (k *Keeper) Overflow(reason string) {
-	if k == nil {
-		return
-	}
-	n := k.Window
-	if m := promptRe.FindStringSubmatch(reason); m != nil {
-		if v, err := strconv.Atoi(m[1]); err == nil {
-			n = v
-		}
-	}
-	if n > k.Rec.Context {
-		k.Rec.Context, k.Rec.Measured = n, true
-		_ = k.Store.Save(k.Rec)
-	}
-}
-
-// Meter is the meter's reading for the working line and /session.
-type Meter struct {
-	Tokens, Window int
-	Measured       bool
-}
-
-// Meter is the context after the last run (0 tokens: nothing known yet).
-func (k *Keeper) Meter() Meter {
-	if k == nil {
-		return Meter{}
-	}
-	return Meter{Tokens: k.Rec.Context, Window: k.Window, Measured: k.Rec.Measured}
 }
 
 // ErrNothing: nothing a compaction could elide yet — no call output and no
@@ -269,12 +127,27 @@ func (k *Keeper) Compact(d Depth) (session.Event, error) {
 		return session.Event{}, ErrNothing
 	}
 	c.Tokens, c.Before = k.size(evs, c), before
-	c.Text = note(evs, c)
+	cp := &session.ChatCheckpoint{
+		N: k.Rec.Compactions + 1, Seq: top, Turn: last, Depth: d.String(),
+		Before: c.Before, After: c.Tokens, Elided: elidedRange(evs, c), Collapsed: collapsedRange(c),
+		Messages: session.Transcript(evs, k.opts(c)),
+	}
+	rel, err := k.Store.SaveChatCheckpoint(k.Rec, cp)
+	if err != nil {
+		return session.Event{}, fmt.Errorf("chat checkpoint: %w", err)
+	}
+	c.Checkpoint = rel
+	c.Text = note(cp, rel)
 
-	k.Rec.Compactions++
+	k.Rec.Compactions = cp.N
 	k.Rec.Context, k.Rec.Measured = c.Tokens, false
 	_ = k.Store.Save(k.Rec)
 	return c, nil
+}
+
+// String is the depth's name in a checkpoint: auto | now | max.
+func (d Depth) String() string {
+	return [...]string{"auto", "now", "max"}[d]
 }
 
 // elides reports whether compaction c elides more than prev did: a call
@@ -315,8 +188,8 @@ func keepFrom(evs []session.Event, n int) int {
 	return evs[len(evs)-1].Seq
 }
 
-// note is the line the operator sees for compaction c.
-func note(evs []session.Event, c session.Event) string {
+// elidedRange is "#1–#212": the outputs compaction c sends as lines.
+func elidedRange(evs []session.Event, c session.Event) string {
 	lo, hi := 0, 0
 	for _, e := range evs {
 		if e.Kind == session.KindResult && e.Bytes >= session.ElideMin && e.Seq <= c.Upto {
@@ -326,14 +199,35 @@ func note(evs []session.Event, c session.Event) string {
 			hi = e.Ref
 		}
 	}
-	s := fmt.Sprintf("compacted: ~%s → ~%s tokens", kilo(c.Before), kilo(c.Tokens))
-	if hi > 0 {
-		s += fmt.Sprintf(" · outputs #%d–#%d elided (local_output reads them back)", lo, hi)
+	if hi == 0 {
+		return ""
 	}
-	if c.Collapse > 0 {
-		s += fmt.Sprintf(" · turns 1–%d as question + answer", c.Collapse)
+	return fmt.Sprintf("#%d–#%d", lo, hi)
+}
+
+// collapsedRange is "turns 1–5": the turns compaction c sends as question +
+// answer.
+func collapsedRange(c session.Event) string {
+	switch c.Collapse {
+	case 0:
+		return ""
+	case 1:
+		return "turn 1"
 	}
-	return s + " · Hermes now reads hermes-hands' transcript"
+	return fmt.Sprintf("turns 1–%d", c.Collapse)
+}
+
+// note is the divider line the terminal and the session log show for a
+// compaction.
+func note(cp *session.ChatCheckpoint, rel string) string {
+	s := fmt.Sprintf("compacted #%d · ~%s → ~%s tokens", cp.N, kilo(cp.Before), kilo(cp.After))
+	if cp.Elided != "" {
+		s += " · outputs " + cp.Elided + " as lines"
+	}
+	if cp.Collapsed != "" {
+		s += " · " + cp.Collapsed + " as question + answer"
+	}
+	return s + " · " + rel
 }
 
 // kilo is "48k" / "950".

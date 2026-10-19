@@ -92,8 +92,9 @@ func TestTranscriptVerbatim(t *testing.T) {
 	}
 }
 
-// Elided: the output becomes a stub naming its #ref, the reply keeps a short
-// prose and the final; a small output costs less than its stub and stays.
+// Elided: a batch's results become one line per call — #ref, what ran, how
+// it ended, its size and the gist; a small output costs less than its line
+// and stays.
 func TestTranscriptElided(t *testing.T) {
 	big := strings.Repeat("x", 5000)
 	evs := append(roundTurn(1, 1, big), roundTurn(2, 8, "ok")...)
@@ -106,11 +107,29 @@ func TestTranscriptElided(t *testing.T) {
 	if got := roles(msgs); got != "user assistant user assistant user assistant user assistant" {
 		t.Fatalf("roles = %s", got)
 	}
-	if strings.Contains(msgs[2].Content, big) || !strings.Contains(msgs[2].Content, `local_output {\"ref\":1}`) {
-		t.Errorf("big output not elided to a stub: %.300s", msgs[2].Content)
+	if strings.Contains(msgs[2].Content, big) || !strings.Contains(msgs[2].Content, `local_output {"ref":N} reads any of them back`) ||
+		!strings.Contains(msgs[2].Content, "\n#1 local_shell `cat ci.yml` → exit 0 · 1 line · 5 KB · xxx") {
+		t.Errorf("big output not elided to a line: %.300s", msgs[2].Content)
 	}
-	if !strings.Contains(msgs[6].Content, `"output":"ok"`) {
+	if !strings.HasSuffix(msgs[6].Content, "#2 local_shell `cat ci.yml` → exit 0: ok") {
 		t.Errorf("small output should stay: %s", msgs[6].Content)
+	}
+}
+
+// A failed command's line carries its error line and how it ended.
+func TestTranscriptElidedGist(t *testing.T) {
+	out := "=== RUN TestA\n" + strings.Repeat("noise\n", 80) + "loop_test.go:88: FAIL: want 2, got 3\n" + strings.Repeat("more\n", 20) + "FAIL hermes-hands/internal/loop 0.4s\n"
+	ok := false
+	evs := []Event{
+		{Seq: 1, Turn: 1, Kind: KindUser, Text: "test"},
+		{Seq: 2, Turn: 1, Kind: KindCall, Ref: 3, ID: "c1", Tool: "local_shell", Args: json.RawMessage(`{"cmd":"go test ./..."}`)},
+		{Seq: 3, Turn: 1, Kind: KindResult, Ref: 3, Exit: Int(1), Bytes: len(out), Lines: 103},
+		{Seq: 4, Turn: 1, Kind: KindAnswer, Text: "a test fails", OK: &ok},
+	}
+	msgs := Transcript(evs, TranscriptOpts{Upto: 4, Output: func(int) string { return out }})
+	want := "#3 local_shell `go test ./...` → exit 1 · 103 lines · 668 B · loop_test.go:88: FAIL: want 2, got 3 ⏎ FAIL hermes-hands/internal/loop 0.4s"
+	if !strings.Contains(msgs[2].Content, want) {
+		t.Errorf("line = %q", msgs[2].Content)
 	}
 }
 
@@ -120,7 +139,7 @@ func TestTranscriptElideReplyKeepsFinalAndShortArgs(t *testing.T) {
 	if strings.Contains(got, long) || !strings.Contains(got, "[2000 bytes — elided by hermes-hands]") || !strings.Contains(got, `"path":"a.go"`) {
 		t.Errorf("long arg not elided: %.300s", got)
 	}
-	if strings.Count(got, "p") > 700 {
+	if strings.Count(got, "p") > 300 {
 		t.Errorf("prose not clipped")
 	}
 	if got := elideReply(`{"calls":[],"final":"` + long + `"}`); !strings.Contains(got, long) {

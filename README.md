@@ -168,8 +168,9 @@ numbers) `/session <id>` (switch; replays its last turns) `/sessions`
 (`/sessions -v`: with their hermes-agent sessions)
 `/history` (replay every turn of this session; `/history <n>` the last n,
 `/history <id>` another session's — read-only) `/out <n>` (the full output of
-call `#n`) `/compact` (compact this session's transcript now — see
-[Context and compaction](#context-and-compaction)) `/fork` (branch on the
+call `#n`) `/compact` (compact this session's chat now — see
+[Context and compaction](#context-and-compaction)) `/context` (what Hermes
+reads now; `/context full` every message) `/fork` (branch on the
 server) `/debug` (toggle the redacted
 connection trace, see below) `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also
 exits; `Ctrl-C` at the prompt just hints, during a turn it cancels the turn
@@ -301,6 +302,7 @@ The local session store lives in `~/hermes-hands/sessions/`
 | `<id>/events.jsonl` | everything the terminal showed, as an append-only, versioned event log: your messages, every hands call (before it runs) and result, the approval prompts you answered, Hermes' own tool attempts, answers, turn footers — plus Hermes' replies and the compactions, which the transcript of a compacted session is built from |
 | `<id>/out/<n>.txt` | the full (scrubbed) output of call `#n` |
 | `<id>/debug.jsonl` | the `/debug` trace, only while it is on |
+| `<id>/chat-checkpoints/NNNN.json` | what Hermes reads from compaction N on — see [Context and compaction](#context-and-compaction) |
 
 Live turns and reopened sessions are rendered from the **same** events, so
 `--session <id>` / `/session <id>` show the last 5 turns exactly as they ran
@@ -360,9 +362,21 @@ anything:
   the outputs of all but the latest two rounds, then of every round, then the
   oldest turns as question + answer (never the latest turn). `/compact` (rpc
   `compact`) does it now and elides every output so far.
-- **Nothing is thrown away.** An elided output goes as a stub naming its
-  `#ref`; Hermes reads any of them back with `local_output` — the log and
-  `out/<n>.txt` stay untouched. No model writes a summary.
+- **Nothing is thrown away.** An elided round's results go as one line per
+  call — `#14 local_shell `go test ./...` → exit 1 · 312 lines · 18 KB ·`
+  and the output's error or last line, picked by the same rule as the
+  terminal's excerpt — its reasoning clipped, Hermes' own reply still the
+  JSON envelope. Hermes reads any output back with `local_output`; the log
+  and `out/<n>.txt` stay untouched. No model writes a summary.
+- **A chat checkpoint per compaction.** What Hermes reads from then on is
+  frozen in `<id>/chat-checkpoints/NNNN.json` (`n`, `seq` — the last event it
+  covers —, `depth`, `before` / `after`, which outputs and turns it carries
+  short, and the `messages`). Hermes reads the latest checkpoint plus every
+  event after it, so that prefix never changes. `events.jsonl` stays the
+  whole chat: the `compact` event names its checkpoint and is the divider
+  between the old chat and the compacted one — in the terminal a
+  `──── compacted #1 · ~98k → ~31k tokens · … · chat-checkpoints/0001.json ────`
+  line, live and in `/history`.
 - **Same session.** From the first compaction on, hermes-hands sends its
   transcript with every run as `conversation_history`; hermes-agent uses it
   instead of its stored one and keeps only each run's new messages under the
@@ -378,6 +392,11 @@ anything:
   answer), then the results the request carries fitted tighter. Only when
   that cannot make it fit — the fixed part of the prompt and this request
   alone are too large for the window — does the turn end BLOCKED.
+
+An editor plugin puts the two side by side from the same files: rpc
+`history` returns every event (the `compact` events with their
+`checkpoint`), rpc `context` what Hermes reads now — the checkpoint's
+messages and those after it.
 
 Keep `HERMES_HANDS_COMPACT_AT` below hermes-agent's `compression.threshold`
 (default 0.5): then hermes-hands compacts first and hermes-agent's own
@@ -410,7 +429,8 @@ One request object per line on **stdin**; one response object per line on
 {"id":2,"type":"new"}                                   // start a fresh session, becomes current
 {"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
 {"id":4,"type":"check"}
-{"id":5,"type":"compact"}                                 // compact this session's transcript now
+{"id":5,"type":"compact"}                                 // compact this session's chat now
+{"id":7,"type":"context"}                                 // what Hermes reads now
 {"id":6,"type":"approvals","text":"auto"}                 // auto | never ("" = report) — this session only
 
 // responses
@@ -422,7 +442,8 @@ One request object per line on **stdin**; one response object per line on
 {"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…","rounds":12,"calls":47}
 {"type":"session","id":2,"session":"hh_…","hermes_session":"…","approvals":"off"}
 {"type":"check","id":4,"ok":true,"model":"…","base":"…","version":"0.22.2"}
-{"type":"compact","id":5,"ok":true,"session":"hh_…","before":98000,"after":31000,"text":"compacted: …"}
+{"type":"compact","id":5,"ok":true,"session":"hh_…","before":98000,"after":31000,"text":"compacted #1 · …","checkpoint":"chat-checkpoints/0001.json"}
+{"type":"context","id":7,"session":"hh_…","owned":true,"checkpoint":"chat-checkpoints/0001.json","n":1,"messages":[…],"since":[…],"context":31000,"measured":false,"window":131072}
 {"type":"approvals","id":6,"approvals":"off"}             // off (= auto) | never
 {"type":"error","id":1,"message":"…"}
 ```

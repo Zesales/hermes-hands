@@ -13,6 +13,8 @@ hermes-hands - session <SESSION> >   Type a message to your Hermes brain. It wor
     /history      replay this session (/history <n> = last n turns, /history <id> = another)
     /out <n>      full output of call #n
     /fork         branch this session on the server, switch to it
+    /compact      compact this session's chat now (a chat checkpoint; outputs stay readable)
+    /context      what Hermes reads now (/context full = every message)
     /yolo         toggle approvals for shell / write / edit
     /debug        toggle the redacted connection trace (session debug.jsonl)
     /setup        (re)configure the gateway URL + key
@@ -138,6 +140,9 @@ hermes-hands - session <SESSION> >   home         : <TMP>/hermes-hands
     HERMES_HANDS_DENY                 (none)                   (default)
 
 hermes-hands - session <SESSION> >   nothing to compact yet — no call output or turn to elide
+
+hermes-hands - session <SESSION> >   context      : not measured yet (after the first run)
+  hermes reads : its own stored transcript — not compacted yet (/compact)
 
 hermes-hands - session <SESSION> >   BLOCKED: fork -> HTTP 404: {"error":"nf"}
 

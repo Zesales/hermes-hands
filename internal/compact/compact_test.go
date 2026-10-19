@@ -3,6 +3,8 @@ package compact
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -103,7 +105,7 @@ func TestOverflowSetsTheMeter(t *testing.T) {
 		t.Fatal(err)
 	}
 	log.Add(ev)
-	if !strings.HasPrefix(ev.Text, "compacted: ~150k → ") {
+	if !strings.HasPrefix(ev.Text, "compacted #1 · ~150k → ") {
 		t.Errorf("note = %q", ev.Text)
 	}
 	k.Overflow(reason)
@@ -156,7 +158,7 @@ func TestCompactAutoKeepsTheLatestRounds(t *testing.T) {
 	if ev.Upto >= last.Seq || ev.Collapse != 0 {
 		t.Errorf("auto compaction went further than needed: %+v", ev)
 	}
-	if !strings.Contains(ev.Text, "outputs #1–#3 elided") {
+	if !strings.Contains(ev.Text, "outputs #1–#3 as lines") {
 		t.Errorf("note = %q", ev.Text)
 	}
 	// a tight window: everything elided, the oldest turns collapsed
@@ -174,5 +176,75 @@ func TestCompactNothingYet(t *testing.T) {
 	k, _ := newKeeper(t, 0)
 	if _, err := k.Compact(Now); !errors.Is(err, ErrNothing) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A compaction freezes what Hermes reads in a chat checkpoint; the log stays
+// the whole chat. Later turns go behind the checkpoint verbatim — its
+// messages, the prefix of every later request, never change.
+func TestCompactWritesAChatCheckpoint(t *testing.T) {
+	k, log := newKeeper(t, 3)
+	ev, err := k.Compact(Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev = log.Add(ev)
+	if ev.Checkpoint != "chat-checkpoints/0001.json" || !strings.HasSuffix(ev.Text, ev.Checkpoint) {
+		t.Fatalf("event = %+v", ev)
+	}
+	cp, err := k.Store.LoadChatCheckpoint(k.Rec, ev.Checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.N != 1 || cp.Depth != "now" || cp.Elided != "#1–#3" || cp.Seq != ev.Seq-1 || len(cp.Messages) == 0 {
+		t.Errorf("checkpoint = n %d depth %s elided %s seq %d/%d, %d messages", cp.N, cp.Depth, cp.Elided, cp.Seq, ev.Seq, len(cp.Messages))
+	}
+	before := k.History()
+
+	// a new turn: behind the checkpoint, verbatim
+	log.BeginTurn()
+	log.Add(session.Event{Kind: session.KindUser, Text: "next"})
+	log.Add(session.Event{Kind: session.KindReply, Round: 1, Text: `{"calls":[],"final":"fine"}`})
+	log.Add(session.Event{Kind: session.KindAnswer, Text: "fine", OK: session.Bool(true)})
+	after := k.History()
+	if len(after) <= len(before) {
+		t.Fatalf("history did not grow: %d -> %d", len(before), len(after))
+	}
+	for i := range before[:len(before)-1] { // the last one may take the next message in at the seam
+		if after[i] != before[i] {
+			t.Fatalf("message %d of the frozen prefix changed", i)
+		}
+	}
+	if last := after[len(after)-1]; last.Role != "assistant" || !strings.Contains(last.Content, `"final":"fine"`) {
+		t.Errorf("tail = %+v", last)
+	}
+
+	v := k.View()
+	if !v.Owned || v.N != 1 || v.Checkpoint != ev.Checkpoint || len(v.Messages) != len(cp.Messages) || len(v.Since) == 0 {
+		t.Errorf("view = owned %v n %d %s, %d + %d messages", v.Owned, v.N, v.Checkpoint, len(v.Messages), len(v.Since))
+	}
+}
+
+// A checkpoint that cannot be read is rendered from the log again.
+func TestHistoryWithoutItsCheckpoint(t *testing.T) {
+	k, log := newKeeper(t, 2)
+	ev, err := k.Compact(Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Add(ev)
+	want := k.History()
+	if err := os.Remove(filepath.Join(k.Store.DebugPath(k.Rec), "..", ev.Checkpoint)); err != nil {
+		t.Fatal(err)
+	}
+	if got := k.History(); len(got) != len(want) {
+		t.Errorf("fallback history = %d messages, want %d", len(got), len(want))
+	}
+}
+
+func TestViewBeforeAnyCompaction(t *testing.T) {
+	k, _ := newKeeper(t, 1)
+	if v := k.View(); v.Owned || v.Checkpoint != "" || v.Messages != nil {
+		t.Errorf("view = %+v", v)
 	}
 }

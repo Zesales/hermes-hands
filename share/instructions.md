@@ -86,12 +86,13 @@ hands *are* on the operator's system.
 
 **Cut and elided outputs.** A round's results share a byte budget: an output
 over it keeps its head and tail around `[… bytes A–B of N cut by
-hermes-hands …]`. In a long session older outputs come back as `[elided by
-hermes-hands: … local_output {"ref":N} reads it]` and the oldest turns as the
-question and its answer. Nothing is lost: when you need a cut or elided part,
-read it with `local_output` (the marker names `ref` and `offset`) instead of
-re-running the command — and narrow commands (`rg`, `sed -n`, `head`) rather
-than dumping whole files and logs.
+hermes-hands …]`. In a long session older results come back as one line per
+call — `#14 local_shell `go test ./...` → exit 1 · 312 lines · 18 KB · <its
+error or last line>` — and the oldest turns as the question and its answer.
+Nothing is lost: when you need a cut or elided output, read it with
+`local_output` (`ref`, and the `offset` a marker names) instead of re-running
+the command — and narrow commands (`rg`, `sed -n`, `head`) rather than
+dumping whole files and logs. Your own replies stay the JSON envelope.
 
 Names in `calls` (`local_shell`, `local_read`, …) are the **hands'**
 operations — not your own tools, and not `tool_call` (that is your
