@@ -20,6 +20,17 @@ const (
 	DefaultMaxCallsPerRound = 20
 )
 
+// The context (internal/compact): the model's window in tokens, the share of
+// it in percent a request may reach before hermes-hands compacts first — kept
+// below hermes-agent's own compression.threshold (default 0.5), so the
+// lossless compaction comes first — and the bytes of one round's results
+// together. 0 = unknown / off / no limit.
+const (
+	DefaultContextWindow  = 131072
+	DefaultCompactAt      = 45
+	DefaultMaxRoundOutput = 60000
+)
+
 // flags holds command-line overrides (SetFlag) — the strongest layer Load
 // resolves.
 var flags = map[string]string{}
@@ -57,6 +68,8 @@ type Config struct {
 	Deny                                  []string
 	MaxRounds, RunTimeout, MaxOutput      int
 	MaxCalls, MaxCallsPerRound            int // the turn's call budget (MaxRounds: its requests)
+	MaxRoundOutput                        int // bytes of one round's results together (0 = no limit)
+	ContextWindow, CompactAt              int // the model's window in tokens; compact before a request past this percent of it
 
 	// ResponseTimeout is how long hermes-agent may go silent within one turn
 	// before the REPL's watchdog cancels it (HERMES_HANDS_RESPONSE_TIMEOUT,
@@ -156,6 +169,9 @@ func Load() (*Config, error) {
 		MaxCallsPerRound: intOr(merged["HERMES_HANDS_MAX_CALLS_PER_ROUND"], DefaultMaxCallsPerRound),
 		RunTimeout:       intOr(merged["HERMES_HANDS_RUN_TIMEOUT"], 120),
 		MaxOutput:        intOr(merged["HERMES_HANDS_MAX_OUTPUT"], 20000),
+		MaxRoundOutput:   intOr(merged["HERMES_HANDS_MAX_ROUND_OUTPUT"], DefaultMaxRoundOutput),
+		ContextWindow:    intOr(merged["HERMES_HANDS_CONTEXT_WINDOW"], DefaultContextWindow),
+		CompactAt:        min(intOr(merged["HERMES_HANDS_COMPACT_AT"], DefaultCompactAt), 95),
 		StateDir:         firstNonEmpty(merged["HERMES_HANDS_STATE"], home),
 
 		Home:          home,

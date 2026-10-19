@@ -125,11 +125,18 @@ func (r *repl) config(string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// compact: this gateway exposes no REST compaction endpoint (`/compress` is
-// an internal chat command). Hermes compacts on its own; a done task wants a
-// new session.
-func (r *repl) compact(string) {
-	fmt.Fprintln(os.Stderr, "  this Hermes doesn't expose compaction over the API —")
-	fmt.Fprintln(os.Stderr, "  it compacts automatically; use /new for a new task.")
-	fmt.Fprintln(os.Stderr)
+// compact compacts the open session's transcript now — hermes-hands' own
+// compaction (internal/compact): from here on it sends the transcript with
+// every run, old outputs elided but readable with local_output.
+func (r *repl) compact(arg string) {
+	if arg != "" {
+		fmt.Fprintln(os.Stderr, "  /compact takes no focus — nothing is summarised away, every output stays readable.")
+	}
+	ev, err := r.a.Keeper.Compact(false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  %v\n\n", err)
+		return
+	}
+	ev = r.runner.Record(ev)
+	fmt.Fprintf(os.Stderr, "  %s\n\n", ev.Text)
 }

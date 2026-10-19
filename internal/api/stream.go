@@ -84,100 +84,15 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-
+	rs := &runStream{c: c, ctx: ctx, base: base, runID: runID, threaded: threaded, steered: map[string]bool{}}
 	var data strings.Builder
-	var answer strings.Builder
-	sawDelta := false
-	steered := map[string]bool{} // the guard steers a run once per kind of mistake; repeats are only reported
-
-	dispatch := func() (AskResult, bool, error) {
-		raw := strings.TrimSpace(data.String())
-		data.Reset()
-		if raw == "" || raw == "[DONE]" {
-			return AskResult{}, false, nil
-		}
-		c.trace("sse", map[string]any{"run_id": runID, "data": raw})
-		var e sseEvent
-		if json.Unmarshal([]byte(raw), &e) != nil {
-			return AskResult{}, false, nil // tolerate an unknown frame
-		}
-		if c.OnEvent != nil {
-			c.OnEvent(e.Event)
-		}
-		switch e.Event {
-		case "message.delta", "response.output_text.delta", "assistant.delta", "token":
-			t := e.Delta
-			if t == "" {
-				t = e.Text
-			}
-			if t != "" {
-				sawDelta = true
-				answer.WriteString(t)
-				if c.OnDelta != nil {
-					c.OnDelta(t)
-				}
-			}
-		case "tool.started":
-			action := ""
-			if guard.SandboxTools[e.Tool] {
-				action = "server" // server-side work, unless the guard says otherwise
-			}
-			check := c.Guard
-			if check == nil {
-				check = guard.Strict
-			}
-			if v := check(e.Tool, e.Preview); v.Steer {
-				action = "steered"
-				if !steered[v.Kind] {
-					steered[v.Kind] = true
-					c.steer(ctx, base, runID, v.Message)
-				}
-			}
-			if c.OnHermesTool != nil {
-				c.OnHermesTool(e.Tool, e.Preview, action)
-			}
-		case "approval.request":
-			// Only Hermes' own server-side tools ask for approval — the hands
-			// never do. The operator decides (OnApproval); without one it is a
-			// deny. Unanswered, the run would hang until the watchdog.
-			what := firstNonEmptyStr(e.Command, e.Desc, e.Preview)
-			choice := "deny"
-			if c.OnApproval != nil {
-				choice = c.OnApproval(e.Tool, what)
-			}
-			c.answerApproval(ctx, base, runID, e.RequestID, choice)
-			action := "denied"
-			if choice != "deny" {
-				action = "approved"
-			}
-			if c.OnHermesTool != nil {
-				c.OnHermesTool(firstNonEmptyStr(e.Tool, "approval"), what, action)
-			}
-		case "run.completed", "response.completed", "done":
-			out := e.Output
-			if out == "" {
-				out = answer.String()
-			}
-			if strings.TrimSpace(out) == "" {
-				return AskResult{}, true, fmt.Errorf("stream completed with empty output")
-			}
-			return AskResult{
-				State: "completed", Text: out, RunID: runID,
-				SessionID: e.SessionID, Threaded: threaded,
-				Tokens: usageTokensRaw(e.Usage),
-			}, true, nil
-		case "run.failed", "run.cancelled", "error":
-			m := firstNonEmptyStr(e.Error, e.Message, "run failed")
-			return AskResult{}, true, fmt.Errorf("run %s: %s", runID, m)
-		}
-		return AskResult{}, false, nil
-	}
-
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
 		case line == "": // frame boundary
-			res, done, derr := dispatch()
+			raw := strings.TrimSpace(data.String())
+			data.Reset()
+			res, done, derr := rs.frame(raw)
 			if derr != nil {
 				return AskResult{}, derr
 			}
@@ -200,10 +115,120 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 		return AskResult{}, err
 	}
 	// stream ended without a terminal event
-	if sawDelta {
+	if rs.sawDelta {
 		return AskResult{}, fmt.Errorf("stream ended before run.completed")
 	}
 	return AskResult{}, fmt.Errorf("no usable stream events")
+}
+
+// runStream is one run's event stream being read.
+type runStream struct {
+	c           *Client
+	ctx         context.Context
+	base, runID string
+	threaded    bool
+	answer      strings.Builder
+	sawDelta    bool
+	tools       int             // Hermes' own server tools this run: one more model call each
+	steered     map[string]bool // the guard steers a run once per kind of mistake; repeats are only reported
+}
+
+// frame handles one SSE frame's data: done when the run ended (a result or
+// an error).
+func (rs *runStream) frame(raw string) (AskResult, bool, error) {
+	c := rs.c
+	if raw == "" || raw == "[DONE]" {
+		return AskResult{}, false, nil
+	}
+	c.trace("sse", map[string]any{"run_id": rs.runID, "data": raw})
+	var e sseEvent
+	if json.Unmarshal([]byte(raw), &e) != nil {
+		return AskResult{}, false, nil // tolerate an unknown frame
+	}
+	if c.OnEvent != nil {
+		c.OnEvent(e.Event)
+	}
+	switch e.Event {
+	case "message.delta", "response.output_text.delta", "assistant.delta", "token":
+		t := e.Delta
+		if t == "" {
+			t = e.Text
+		}
+		if t != "" {
+			rs.sawDelta = true
+			rs.answer.WriteString(t)
+			if c.OnDelta != nil {
+				c.OnDelta(t)
+			}
+		}
+	case "tool.started":
+		rs.tools++
+		c.hermesTool(rs.ctx, rs.base, rs.runID, e, rs.steered)
+	case "approval.request":
+		c.serverApproval(rs.ctx, rs.base, rs.runID, e)
+	case "run.completed", "response.completed", "done":
+		out := e.Output
+		if out == "" {
+			out = rs.answer.String()
+		}
+		if strings.TrimSpace(out) == "" {
+			return AskResult{}, true, fmt.Errorf("stream completed with empty output")
+		}
+		return AskResult{
+			State: "completed", Text: out, RunID: rs.runID,
+			SessionID: e.SessionID, Threaded: rs.threaded,
+			Tokens: usageTokensRaw(e.Usage), Prompt: usagePromptRaw(e.Usage),
+			HermesTools: rs.tools,
+		}, true, nil
+	case "run.failed", "run.cancelled", "error":
+		m := firstNonEmptyStr(e.Error, e.Message, "run failed")
+		return AskResult{}, true, fmt.Errorf("run %s: %s", rs.runID, m)
+	}
+	return AskResult{}, false, nil
+}
+
+// serverApproval answers an approval request. Only Hermes' own server-side
+// tools ask for approval — the hands never do. The operator decides
+// (OnApproval); without one it is a deny. Unanswered, the run would hang
+// until the watchdog.
+func (c *Client) serverApproval(ctx context.Context, base, runID string, e sseEvent) {
+	what := firstNonEmptyStr(e.Command, e.Desc, e.Preview)
+	choice := "deny"
+	if c.OnApproval != nil {
+		choice = c.OnApproval(e.Tool, what)
+	}
+	c.answerApproval(ctx, base, runID, e.RequestID, choice)
+	action := "denied"
+	if choice != "deny" {
+		action = "approved"
+	}
+	if c.OnHermesTool != nil {
+		c.OnHermesTool(firstNonEmptyStr(e.Tool, "approval"), what, action)
+	}
+}
+
+// hermesTool handles one of Hermes' OWN server tool calls: the sandbox guard
+// steers a call aimed at the operator's machine back to the hands (once per
+// kind of mistake a run; steered remembers), and the turn is told.
+func (c *Client) hermesTool(ctx context.Context, base, runID string, e sseEvent, steered map[string]bool) {
+	action := ""
+	if guard.SandboxTools[e.Tool] {
+		action = "server" // server-side work, unless the guard says otherwise
+	}
+	check := c.Guard
+	if check == nil {
+		check = guard.Strict
+	}
+	if v := check(e.Tool, e.Preview); v.Steer {
+		action = "steered"
+		if !steered[v.Kind] {
+			steered[v.Kind] = true
+			c.steer(ctx, base, runID, v.Message)
+		}
+	}
+	if c.OnHermesTool != nil {
+		c.OnHermesTool(e.Tool, e.Preview, action)
+	}
 }
 
 // steer redirects a running run (POST /v1/runs/{id}/steer). Best-effort: the

@@ -152,11 +152,15 @@ func (r *Runner) wire(wd *watchdog, log *session.Log, fe Frontend, pv *preview, 
 	if pf, ok := fe.(ProgressFrontend); ok {
 		r.Loop.OnProgress = pf.Progress
 	}
-	// every hands call: recorded and shown BEFORE it runs, then its result
+	// every hands call: recorded and shown BEFORE it runs, then its result;
+	// Hermes' replies are recorded only — the transcript is built from them
 	r.Loop.Emit = func(ev session.Event) {
 		wd.bump() // a call starting or finishing = progress
 		ev = log.Add(ev)
-		if ev.Kind == session.KindResult {
+		switch ev.Kind {
+		case session.KindReply:
+			return
+		case session.KindResult:
 			*local += ev.Ms
 		}
 		fe.Show(ev)

@@ -33,7 +33,7 @@ func (l *Loop) runCalls(calls []callSpec, round int, turnlog *string) ([]resultE
 	elems := make([]resultElem, 0, len(calls))
 	l.Dispatch.NextRound() // rules handed out before now were seen when this batch was written
 	for i, c := range calls {
-		e, stopped := l.runCall(c, ids(i, c.id()))
+		e, stopped := l.runCall(c, ids(i, c.id()), round)
 		if stopped != nil {
 			return nil, stopped
 		}
@@ -44,9 +44,9 @@ func (l *Loop) runCalls(calls []callSpec, round int, turnlog *string) ([]resultE
 	return elems, nil
 }
 
-// runCall runs one call: shown before it runs (KindCall) and after
-// (KindResult), counted against the turn's call budget.
-func (l *Loop) runCall(c callSpec, id string) (resultElem, *Outcome) {
+// runCall runs one call of request round: shown before it runs (KindCall)
+// and after (KindResult), counted against the turn's call budget.
+func (l *Loop) runCall(c callSpec, id string, round int) (resultElem, *Outcome) {
 	tool := firstNonEmpty(c.Tool, c.Name)
 	if canon := dispatch.Canonical(tool); canon != "" {
 		tool = canon // events, results and the terminal speak local_*
@@ -54,7 +54,7 @@ func (l *Loop) runCall(c callSpec, id string) (resultElem, *Outcome) {
 	args := callArgs(c)
 	l.Ref++
 	ref := l.Ref
-	l.emit(session.Event{Kind: session.KindCall, Ref: ref, ID: id, Tool: tool, Args: args})
+	l.emit(session.Event{Kind: session.KindCall, Ref: ref, ID: id, Tool: tool, Args: args, Round: round})
 	l.calls++
 	l.progress()
 
@@ -63,7 +63,7 @@ func (l *Loop) runCall(c callSpec, id string) (resultElem, *Outcome) {
 	ran := max(time.Since(start)-(l.paused()-held), 0).Milliseconds()
 	if errors.Is(derr, dispatch.ErrAbortTurn) {
 		l.emit(session.Event{Kind: session.KindResult, Ref: ref, Tool: tool, Exit: session.Int(125),
-			Ms: ran, Out: "(declined by the operator — turn stopped)"})
+			Ms: ran, Out: "(declined by the operator — turn stopped)", Round: round})
 		// Ctrl-C / "q" at an approval = decline this call AND stop the
 		// turn. Nothing more runs; Hermes is told at the start of the
 		// next turn so its transcript stays coherent.
@@ -73,7 +73,7 @@ func (l *Loop) runCall(c callSpec, id string) (resultElem, *Outcome) {
 	}
 	out := l.scrub(result.Out)
 	l.emit(session.Event{Kind: session.KindResult, Ref: ref, Tool: tool, Exit: session.Int(result.Exit),
-		Ms: ran, Out: out})
+		Ms: ran, Out: out, Round: round})
 	if l.OnResult != nil { // knowsystem learner: sees raw output + exit
 		l.OnResult(tool, result.Out, result.Exit)
 	}
@@ -90,6 +90,29 @@ func (l *Loop) runCall(c callSpec, id string) (resultElem, *Outcome) {
 		e.Context = &ctx
 	}
 	return e, nil
+}
+
+// fitRound applies the round output budget to a round's results: Hermes gets
+// the fitted outputs, the session keeps every output whole (it was stored
+// when its result was recorded) — local_output reads a cut part back.
+func (l *Loop) fitRound(elems []resultElem) []resultElem {
+	outs := make([]string, len(elems))
+	refs := make([]int, len(elems))
+	for i, e := range elems {
+		outs[i], refs[i] = e.Output, e.Ref
+	}
+	var cut []string
+	for i, out := range session.FitRound(outs, refs, l.MaxRoundOutput) {
+		if out != elems[i].Output {
+			elems[i].Output = out
+			cut = append(cut, fmt.Sprintf("#%d", elems[i].Ref))
+		}
+	}
+	if len(cut) > 0 {
+		l.noteOperator(fmt.Sprintf("round output over %d bytes: %s cut for Hermes — the full output stays local (local_output)",
+			l.MaxRoundOutput, strings.Join(cut, " ")))
+	}
+	return elems
 }
 
 // newIDs hands out one correlation id per call of an envelope. Hermes may

@@ -26,6 +26,9 @@ var configDefaults = []struct{ key, val, note string }{
 	{"HERMES_HANDS_WATCHDOG_INTERVAL", "200", "seconds between server-side 'still working?' checks that push that limit back"},
 	{"HERMES_HANDS_RUN_TIMEOUT", "120", "seconds per local command"},
 	{"HERMES_HANDS_MAX_OUTPUT", "20000", "bytes kept per tool result (local_shell keeps 2x)"},
+	{"HERMES_HANDS_MAX_ROUND_OUTPUT", strconv.Itoa(config.DefaultMaxRoundOutput), "bytes of one round's results together; a bigger round is cut, the full output stays local (0 = no limit)"},
+	{"HERMES_HANDS_CONTEXT_WINDOW", strconv.Itoa(config.DefaultContextWindow), "the model's context window in tokens (0 = unknown: no automatic compaction)"},
+	{"HERMES_HANDS_COMPACT_AT", strconv.Itoa(config.DefaultCompactAt), "compact before a request past this % of the window — keep it below hermes-agent's compression.threshold (0 = only /compact)"},
 	{"HERMES_HANDS_RETENTION_DAYS", "14", "local sessions idle longer are deleted on start, debug trace included (0 = keep)"},
 	{"HERMES_HANDS_DEBUG", "0", "1 = start with /debug on: redacted connection trace per session"},
 }

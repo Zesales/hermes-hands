@@ -157,6 +157,27 @@ func BudgetLabel(round, maxRounds, calls, maxCalls int) string {
 	return "round " + of(round, maxRounds) + " · calls " + of(calls, maxCalls)
 }
 
+// ContextLabel is " · ctx 48k/131k" for the working line: the estimated
+// prompt of the request in flight against the model's window — "" while
+// nothing is known yet.
+func ContextLabel(tokens, window int) string {
+	if tokens <= 0 {
+		return ""
+	}
+	if window <= 0 {
+		return " · ctx " + kilo(tokens)
+	}
+	return " · ctx " + kilo(tokens) + "/" + kilo(window)
+}
+
+// kilo is "48k" / "950".
+func kilo(n int) string {
+	if n >= 1000 {
+		return strconv.Itoa((n+500)/1000) + "k"
+	}
+	return strconv.Itoa(n)
+}
+
 // plural is "1 round" / "3 rounds".
 func plural(n int, word string) string {
 	if n == 1 {
@@ -198,6 +219,11 @@ func Summarize(tool string, args json.RawMessage) (head string, more []string) {
 		head = fmt.Sprintf("%s   (%d lines)", str("path"), n+1)
 	case "local_edit", "edit_file":
 		head = str("path")
+	case "local_output":
+		head = "output of #" + strings.TrimPrefix(str("ref"), "#")
+		if o := str("offset"); o != "" && o != "0" {
+			head += " from byte " + o
+		}
 	default:
 		head = clipWidth(string(args), 100)
 	}

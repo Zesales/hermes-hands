@@ -27,6 +27,8 @@ const (
 	KindAnswer     = "answer"      // the turn's answer (Text, OK, Tokens)
 	KindNote       = "note"        // anything else the terminal said in a turn (Text)
 	KindTurnEnd    = "turn_end"    // the turn footer (Ms, Outcome: "" | interrupted | timeout, Limit, LocalMs, WaitMs, Rounds, Calls)
+	KindReply      = "reply"       // Hermes' reply of one round, as it arrived (Text, Round) — not shown, the transcript is built from it
+	KindCompact    = "compact"     // hermes-hands compacted the transcript (Text = the note, Upto, Collapse, Tokens = after, Before)
 )
 
 // Event is one line of <id>/events.jsonl: one thing the terminal showed. The
@@ -65,6 +67,11 @@ type Event struct {
 	WaitMs  int64           `json:"wait_ms,omitempty"`  // turn_end: time spent waiting on the operator's approvals
 	Rounds  int             `json:"rounds,omitempty"`   // turn_end: requests to Hermes this turn took
 	Calls   int             `json:"calls,omitempty"`    // turn_end: hands calls this turn ran
+
+	Round    int `json:"round,omitempty"`    // call / result / reply: the request to Hermes within the turn
+	Upto     int `json:"upto,omitempty"`     // compact: events up to this Seq are sent elided
+	Collapse int `json:"collapse,omitempty"` // compact: turns up to this one are sent as question + answer only
+	Before   int `json:"before,omitempty"`   // compact: estimated tokens before it
 
 	// Out is a result's output in flight, never serialised: the recorder
 	// stores it in out/<Ref>.txt and keeps only Lines / Bytes in the event.

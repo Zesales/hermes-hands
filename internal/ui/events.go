@@ -30,7 +30,7 @@ func (u *UI) Show(ev session.Event, out string) {
 		u.HermesTool(ev.Tool, ev.Text, ev.Action)
 	case session.KindApproval:
 		u.Approval(ev.Text, ev.Detail, ev.Action)
-	case session.KindNote:
+	case session.KindNote, session.KindCompact:
 		u.Note(ev.Text)
 	case session.KindAnswer:
 		u.Line("")

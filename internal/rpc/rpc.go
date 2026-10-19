@@ -14,6 +14,7 @@
 //	{"id":6,"type":"debug","text":"on"}       redacted wire trace on / off / toggle
 //	{"id":7,"type":"approvals","text":"auto"} hands approvals auto | never ("" = report) — a runtime
 //	                                          switch: the next new / use starts from config / env / flags
+//	{"id":8,"type":"compact"}                 compact the session's transcript now (internal/compact)
 //
 // Responses:
 //
@@ -23,6 +24,7 @@
 //	{"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 //	{"type":"hermes_tool","id":1,"tool":"terminal","preview":"...","action":"steered"}
 //	{"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  the turn's budget (max 0 = no limit)
+//	                                     (+ "context":48000,"window":131072 once the context is known)
 //	{"type":"note","id":1,"text":"budget: 10 of 25 rounds · 29 of 100 calls left — …"}  what the terminal notes
 //	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"...","rounds":12,"calls":47}
 //	{"type":"session","id":2,"session":"hh_...","hermes_session":"...","approvals":"off"}
@@ -30,6 +32,7 @@
 //	{"type":"history","id":5,"session":"hh_...","events":[...]}  (session.Event objects)
 //	{"type":"debug","id":6,"on":true,"path":".../debug.jsonl"}
 //	{"type":"approvals","id":7,"approvals":"off"}                  off (= auto) | never
+//	{"type":"compact","id":8,"ok":true,"session":"hh_...","before":98000,"after":31000,"text":"compacted: …"}
 //	{"type":"error","id":1,"message":"..."}
 //
 // Turns are recorded into the session's event log exactly like REPL turns,
@@ -319,9 +322,16 @@ func (s *server) check(_ request, id any) {
 	s.emit(msg)
 }
 
+// compact compacts the held session's transcript now (internal/compact).
 func (s *server) compact(_ request, id any) {
-	s.emit(map[string]any{"type": "compact", "id": id, "ok": false,
-		"message": "this gateway exposes no REST compaction endpoint; Hermes compacts automatically"})
+	ev, err := s.a.Keeper.Compact(false)
+	if err != nil {
+		s.emit(map[string]any{"type": "compact", "id": id, "ok": false, "session": s.rec.ID, "message": err.Error()})
+		return
+	}
+	ev = s.runner.Record(ev)
+	s.emit(map[string]any{"type": "compact", "id": id, "ok": true, "session": s.rec.ID,
+		"before": ev.Before, "after": ev.Tokens, "text": ev.Text})
 }
 
 func (s *server) applyDebug() { s.a.SetDebug(s.rec, s.debugOn) }

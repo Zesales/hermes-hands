@@ -47,9 +47,10 @@ func (f *front) Quiet() {
 	f.ui.SetBudget("")
 }
 
-// Progress keeps "round 3/25 · calls 12/100" on the working line.
+// Progress keeps "round 3/25 · calls 12/100 · ctx 48k/131k" on the working
+// line.
 func (f *front) Progress(p loop.Progress) {
-	f.ui.SetBudget(ui.BudgetLabel(p.Round, p.MaxRounds, p.Calls, p.MaxCalls))
+	f.ui.SetBudget(ui.BudgetLabel(p.Round, p.MaxRounds, p.Calls, p.MaxCalls) + ui.ContextLabel(p.Context, p.Window))
 }
 
 func (f *front) quiet() {

@@ -17,9 +17,11 @@ import (
 
 // Progress is where a turn stands against its budget: Round is the request to
 // Hermes in flight or just answered, Calls the hands calls run so far. A Max
-// of 0 means no limit.
+// of 0 means no limit. Context is the estimated prompt of the request in
+// flight (0 = unknown), Window the model's (0 = unknown).
 type Progress struct {
 	Round, MaxRounds, Calls, MaxCalls int
+	Context, Window                   int
 }
 
 // Countdown tiers, in rising urgency.
@@ -191,6 +193,7 @@ func (l *Loop) noteOperator(text string) {
 
 func (l *Loop) progress() {
 	if l.OnProgress != nil {
-		l.OnProgress(Progress{Round: l.rounds, MaxRounds: l.MaxRounds, Calls: l.calls, MaxCalls: l.MaxCalls})
+		l.OnProgress(Progress{Round: l.rounds, MaxRounds: l.MaxRounds, Calls: l.calls, MaxCalls: l.MaxCalls,
+			Context: l.ctxNow, Window: l.Ctx.Meter().Window})
 	}
 }

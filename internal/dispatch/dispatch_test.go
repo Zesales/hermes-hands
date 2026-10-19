@@ -140,8 +140,46 @@ func TestUnknownTool(t *testing.T) {
 	d, _ := newDisp(t, prompt.AutoApprover{})
 	res, err := d.Dispatch("frobnicate", raw(map[string]any{}))
 	if err != nil || res.Exit != 2 ||
-		res.Out != "unknown tool 'frobnicate' (the hands have: local_shell, local_read, local_write, local_edit)" {
+		res.Out != "unknown tool 'frobnicate' (the hands have: local_shell, local_read, local_write, local_edit, local_output)" {
 		t.Errorf("unknown tool = %+v, %v", res, err)
+	}
+}
+
+// local_output reads a stored output back in slices, asks nothing and runs
+// nothing.
+type noAsk struct{ t *testing.T }
+
+func (a noAsk) Confirm(summary, _ string) prompt.Decision {
+	a.t.Errorf("asked for approval: %s", summary)
+	return prompt.Approve
+}
+
+func TestOutputReadsTheStoredOutput(t *testing.T) {
+	d, _ := newDisp(t, noAsk{t})
+	if res, _ := d.Dispatch("local_output", raw(map[string]any{"ref": 3})); res.Exit != 2 {
+		t.Errorf("without a store = %+v", res)
+	}
+	stored := strings.Repeat("0123456789", 10)
+	d.Recall = func(ref int) (string, error) {
+		if ref != 3 {
+			return "", os.ErrNotExist
+		}
+		return stored, nil
+	}
+	d.MaxOutput = 30
+	res, err := d.Dispatch("local_output", raw(map[string]any{"ref": "#3", "offset": 25}))
+	if err != nil || res.Exit != 0 || !strings.HasPrefix(res.Out, "[#3: bytes 25–55 of 100]\n56789") ||
+		!strings.HasSuffix(res.Out, "[… 45 more bytes — offset 55 reads on]") {
+		t.Errorf("slice = %+v, %v", res, err)
+	}
+	if res, _ := d.Dispatch("recall", raw(map[string]any{"ref": 3, "offset": 90})); res.Out != "[#3: bytes 90–100 of 100]\n0123456789" {
+		t.Errorf("tail = %q", res.Out)
+	}
+	if res, _ := d.Dispatch("local_output", raw(map[string]any{"ref": 9})); res.Exit != 1 {
+		t.Errorf("unknown ref = %+v", res)
+	}
+	if res, _ := d.Dispatch("local_output", raw(map[string]any{})); res.Exit != 2 {
+		t.Errorf("no ref = %+v", res)
 	}
 }
 

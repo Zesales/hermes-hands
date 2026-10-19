@@ -30,16 +30,21 @@ func (f *front) Show(ev session.Event) {
 		f.emit(map[string]any{"type": "tool", "id": f.id, "ref": ev.Ref, "tool": ev.Tool, "preview": f.heads[ev.Ref], "exit": exit, "lines": ev.Lines})
 	case session.KindHermesTool:
 		f.emit(map[string]any{"type": "hermes_tool", "id": f.id, "tool": ev.Tool, "preview": ev.Text, "action": ev.Action})
-	case session.KindNote:
+	case session.KindNote, session.KindCompact:
 		f.emit(map[string]any{"type": "note", "id": f.id, "text": ev.Text})
 	}
 }
 
 // Progress: where the turn stands against the operator's budget (a max of
-// 0 = no limit) — at every request to Hermes and after every call.
+// 0 = no limit) — at every request to Hermes and after every call — and, once
+// known, the estimated context of the request in flight against the window.
 func (f *front) Progress(p loop.Progress) {
-	f.emit(map[string]any{"type": "progress", "id": f.id, "round": p.Round, "max_rounds": p.MaxRounds,
-		"calls": p.Calls, "max_calls": p.MaxCalls})
+	m := map[string]any{"type": "progress", "id": f.id, "round": p.Round, "max_rounds": p.MaxRounds,
+		"calls": p.Calls, "max_calls": p.MaxCalls}
+	if p.Context > 0 {
+		m["context"], m["window"] = p.Context, p.Window
+	}
+	f.emit(m)
 }
 
 func (f *front) Preview(s string) {

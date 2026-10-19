@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"hermes-hands/internal/api"
+	"hermes-hands/internal/compact"
 	"hermes-hands/internal/dispatch"
 	"hermes-hands/internal/session"
 )
@@ -23,6 +24,12 @@ import (
 // without a live server.
 type Asker interface {
 	Ask(ctx context.Context, msg, sess, skey string) (api.AskResult, error)
+}
+
+// HistoryAsker is an Asker that can send the transcript along
+// (api.Runs.AskWith) — what a compacted session needs.
+type HistoryAsker interface {
+	AskWith(ctx context.Context, msg, sess, skey string, history []api.Message) (api.AskResult, error)
 }
 
 // Loop drives the delegation rounds for one turn.
@@ -38,6 +45,16 @@ type Loop struct {
 	// The operator's budget per turn (0 = no limit), see budget.go: rounds =
 	// requests to Hermes, calls = hands calls run, and calls per envelope.
 	MaxRounds, MaxCalls, MaxCallsPerRound int
+	// MaxRoundOutput caps the bytes of one round's results together (0 = no
+	// limit): what Hermes keeps of a round, it keeps until a compaction, so
+	// no single round may crowd the context (session.FitRound).
+	MaxRoundOutput int
+
+	// Ctx is the open session's context keeper (nil: no meter, hermes-agent
+	// holds the transcript): it predicts every request, compacts first when
+	// one would come too close to the window, and supplies the transcript
+	// once hermes-hands holds it.
+	Ctx *compact.Keeper
 
 	// OnProgress, when set, sees where the turn stands against the budget —
 	// at every request to Hermes and after every call (the spinner, rpc).
@@ -78,6 +95,7 @@ type Loop struct {
 
 	rounds, calls int // this turn so far — reset by Run
 	noted         int // the highest budget tier the operator was told about this turn
+	ctxNow        int // the context of the request in flight (estimated tokens), for Progress
 }
 
 func (l *Loop) paused() time.Duration {
@@ -115,7 +133,7 @@ func (l *Loop) frame(userMsg string) string {
 		"PROBLEM — operator's working directory: " + loc + "\n\n" +
 		userMsg + "\n\n" +
 		"Your reply: reason it through, then ONE instruction and nothing else —\n" +
-		"{\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit\",\"args\":{...}}],\"final\":null}\n" +
+		"{\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +
 		"output to call) — or {\"calls\":[],\"final\":\"...\"} once it is solved. Not a\n" +
 		"chat reply, not a description of yourself or your tools. If you do not know\n" +
@@ -148,17 +166,6 @@ const (
 
 var botchedRe = regexp.MustCompile(`(?i)"(calls|tool)"[[:space:]]*:`)
 
-type callSpec struct {
-	ID        string          `json:"id"`
-	CallID    string          `json:"call_id"` // OpenAI-ish alias; tool_call_id handled separately
-	Tool      string          `json:"tool"`
-	Name      string          `json:"name"`
-	Args      json.RawMessage `json:"args"`
-	Arguments json.RawMessage `json:"arguments"`
-}
-
-func (c callSpec) id() string { return firstNonEmpty(c.ID, c.CallID) }
-
 // Run executes the turn. persist mirrors _hh_session_write: it is called after
 // every completed api.Ask with (runID, serverSessionID) so the caller can bump
 // the local index and adopt a re-issued session id (mutating rec, which Run
@@ -166,7 +173,37 @@ func (c callSpec) id() string { return firstNonEmpty(c.ID, c.CallID) }
 func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string, tokens int)) (out Outcome) {
 	l.rounds, l.calls, l.noted = 0, 0, tierNone
 	defer func() { out.Rounds, out.Calls = l.rounds, l.calls }()
-	round := 1
+	t := &turnState{userMsg: userMsg, send: l.opening(userMsg), turnlog: "[operator] " + userMsg + "\n"}
+	for round := 1; ; round++ {
+		l.vlogf("round %d -> Hermes", round)
+		l.rounds = round
+		res, err := l.request(ctx, round, t, rec)
+		if err != nil {
+			return l.blocked(err)
+		}
+		persist(res.RunID, res.SessionID, res.Tokens)
+		if round > 1 && !res.Threaded {
+			t.recap = true
+		}
+		if o, done := l.handle(res.Text, round, t); done {
+			return o
+		}
+	}
+}
+
+// turnState is what one turn carries from round to round.
+type turnState struct {
+	userMsg string
+	send    string // the next message to Hermes
+	turnlog string // the turn so far, for a gateway that does not thread it (recap)
+	recap   bool
+
+	fixups, rejects int // recovery nudges spent: a botched / empty envelope, one over the budget
+}
+
+// opening is round 1's message: the framed problem, behind the one-off notes
+// a resumed or a cancelled turn left.
+func (l *Loop) opening(userMsg string) string {
 	send := l.frame(userMsg)
 	if l.ResumeNote != "" { // resumed session, server history gone — replay local copy
 		send = l.ResumeNote + "\n\n" + send
@@ -176,181 +213,85 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 		send = l.PendingNote + "\n\n" + send
 		l.PendingNote = ""
 	}
-	turnlog := "[operator] " + userMsg + "\n"
-	recap := false
-	fixups, rejects := 0, 0
-
-	for {
-		l.vlogf("round %d -> Hermes", round)
-		l.rounds = round
-		l.progress()
-
-		msg := send
-		if recap {
-			msg = "[conversation so far this turn]\n" + turnlog + "\n[latest tool results]\n" + send
-		}
-
-		res, err := l.API.Ask(ctx, msg, rec.HermesSessionID, rec.HermesSessionKey)
-		if err != nil {
-			reason := err.Error()
-			if reason == "" {
-				reason = "Hermes API turn failed"
-			}
-			return Outcome{Answer: "BLOCKED: " + reason, OK: false}
-		}
-		persist(res.RunID, res.SessionID, res.Tokens)
-		if round > 1 && !res.Threaded {
-			recap = true
-		}
-
-		reply := res.Text
-		obj, haveObj := extractObj(reply)
-
-		callsN := 0
-		final := ""
-		parsed := false
-		var calls []callSpec
-		if haveObj && json.Valid([]byte(obj)) {
-			parsed = true
-			var top map[string]json.RawMessage
-			_ = json.Unmarshal([]byte(obj), &top)
-			if raw, ok := top["calls"]; ok && !isJSONNull(raw) {
-				_ = json.Unmarshal(raw, &calls)
-			}
-			callsN = len(calls)
-			if raw, ok := top["final"]; ok {
-				var s string
-				if json.Unmarshal(raw, &s) == nil {
-					final = s
-				}
-			}
-		}
-
-		if !parsed {
-			if botchedRe.MatchString(reply) && fixups < maxFixups {
-				fixups++
-				l.warnf("reply was not a valid envelope - asking Hermes to resend just the JSON")
-				// fixupMsg alone is a bare format complaint with no task in
-				// it — a model that only sees this has no way to know it was
-				// ever asked to do anything, and (correctly, given what it
-				// was shown) just apologizes for the formatting and asks what
-				// to do. Restate the question so fixing the envelope doesn't
-				// also mean abandoning the task.
-				send = fixupMsg + "\n" + questionNote(userMsg)
-				turnlog += fmt.Sprintf("[round %d] (invalid envelope, requested resend)\n", round)
-				round++
-				continue
-			}
-			// prose answer
-			ans := strings.TrimPrefix(reply, "[INPUT_REQUIRED]")
-			ans = ltrimFirstLine(ans)
-			return Outcome{Answer: ans, OK: true}
-		}
-
-		if callsN == 0 {
-			if final != "" {
-				return Outcome{Answer: final, OK: true}
-			}
-			if fixups < maxFixups {
-				fixups++
-				send = emptyMsg + "\n" + questionNote(userMsg) // same reasoning as the fixupMsg case above
-				round++
-				continue
-			}
-			return Outcome{Answer: "BLOCKED: Hermes returned an empty envelope repeatedly.", OK: false}
-		}
-
-		if o, stop := l.capped(round); stop {
-			return o
-		}
-		if why, note := l.oversize(callsN); why != "" {
-			// All or nothing: an envelope over the budget runs not at all, so
-			// no half-run batch (file A edited, the dependent B not) remains.
-			if rejects >= maxFixups {
-				return Outcome{Answer: "BLOCKED: Hermes kept sending envelopes over the call budget.", OK: false}
-			}
-			rejects++
-			l.noteOperator(note)
-			send = why + "\n" + questionNote(userMsg) + l.roundBudgetNote(round+1)
-			turnlog += fmt.Sprintf("[round %d] (envelope of %d calls over the budget, nothing run)\n", round, callsN)
-			round++
-			continue
-		}
-
-		l.vlogf("round %d: %d call(s)", round, callsN)
-		elems, stopped := l.runCalls(calls, round, &turnlog)
-		if stopped != nil {
-			return *stopped
-		}
-
-		payload, _ := marshalNoHTML(resultsPayload{Results: elems})
-		// The operator's question is restated on every round, not just round 1.
-		// A gateway can accept our session_id (Threaded=true) without actually
-		// replaying the transcript to the model - in that case this is the ONLY
-		// place downstream of round 1 where the model still sees what was asked.
-		// Cheap even when the server does thread it correctly: one restated
-		// sentence, no meaningful token cost.
-		send = "[hands results] Your hands ran the instruction you just gave, in the operator's" +
-			" working directory" + l.locNote() + ". This is real output from the operator's" +
-			" machine — the operator did NOT paste it, and it is NOT from your sandbox. Each" +
-			" result's output is the actual file contents / command output; exit_code 0 means" +
-			" it worked (empty or non-zero: try another instruction, never \"I can't read it\")." +
-			questionNote(userMsg) +
-			" Now give the operator your answer in final — or another instruction if you need" +
-			" more.\n" + string(payload) + l.roundBudgetNote(round+1)
-		l.announce(round + 1)
-		round++
-	}
+	return send
 }
 
-// extractObj ports _hh_extract_obj: strip ```json / ``` fences, then either the
-// whole thing (if it is a JSON object) or the first '{' .. last '}' slice of
-// the ORIGINAL reply.
-func extractObj(reply string) (string, bool) {
-	s := reply
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```")
-	s = strings.TrimSuffix(s, "```")
-
-	trimmed := strings.TrimSpace(s)
-	if json.Valid([]byte(trimmed)) {
-		var v any
-		if json.Unmarshal([]byte(trimmed), &v) == nil {
-			if _, isObj := v.(map[string]any); isObj {
-				return s, true
-			}
+// handle acts on Hermes' reply of round: a final or prose ends the turn
+// (done); an envelope's calls run and their results become the next message;
+// a botched, empty or over-budget envelope gets a nudge instead.
+func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
+	env := parseEnvelope(reply)
+	switch {
+	case !env.parsed:
+		if botchedRe.MatchString(reply) && t.fixups < maxFixups {
+			t.fixups++
+			l.warnf("reply was not a valid envelope - asking Hermes to resend just the JSON")
+			// fixupMsg alone is a bare format complaint with no task in
+			// it — a model that only sees this has no way to know it was
+			// ever asked to do anything, and (correctly, given what it
+			// was shown) just apologizes for the formatting and asks what
+			// to do. Restate the question so fixing the envelope doesn't
+			// also mean abandoning the task.
+			t.send = fixupMsg + "\n" + questionNote(t.userMsg)
+			t.turnlog += fmt.Sprintf("[round %d] (invalid envelope, requested resend)\n", round)
+			return Outcome{}, false
 		}
+		// prose answer
+		return Outcome{Answer: ltrimFirstLine(strings.TrimPrefix(reply, "[INPUT_REQUIRED]")), OK: true}, true
+	case len(env.calls) == 0:
+		if env.final != "" {
+			return Outcome{Answer: env.final, OK: true}, true
+		}
+		if t.fixups < maxFixups {
+			t.fixups++
+			t.send = emptyMsg + "\n" + questionNote(t.userMsg) // same reasoning as the fixupMsg case above
+			return Outcome{}, false
+		}
+		return Outcome{Answer: "BLOCKED: Hermes returned an empty envelope repeatedly.", OK: false}, true
+	}
+	if o, stop := l.capped(round); stop {
+		return o, true
+	}
+	if why, note := l.oversize(len(env.calls)); why != "" {
+		// All or nothing: an envelope over the budget runs not at all, so
+		// no half-run batch (file A edited, the dependent B not) remains.
+		if t.rejects >= maxFixups {
+			return Outcome{Answer: "BLOCKED: Hermes kept sending envelopes over the call budget.", OK: false}, true
+		}
+		t.rejects++
+		l.noteOperator(note)
+		t.send = why + "\n" + questionNote(t.userMsg) + l.roundBudgetNote(round+1)
+		t.turnlog += fmt.Sprintf("[round %d] (envelope of %d calls over the budget, nothing run)\n", round, len(env.calls))
+		return Outcome{}, false
 	}
 
-	start := strings.IndexByte(reply, '{')
-	if start < 0 {
-		return "", false
+	l.vlogf("round %d: %d call(s)", round, len(env.calls))
+	elems, stopped := l.runCalls(env.calls, round, &t.turnlog)
+	if stopped != nil {
+		return *stopped, true
 	}
-	end := strings.LastIndexByte(reply, '}')
-	if end <= start {
-		return "", false
-	}
-	return reply[start : end+1], true
+	t.send = l.resultsMsg(l.fitRound(elems), t.userMsg, round)
+	l.announce(round + 1)
+	return Outcome{}, false
 }
 
-// callArgs ports `.args // .arguments // {}` plus the one-shot unwrap when the
-// value arrived as a JSON string.
-func callArgs(c callSpec) json.RawMessage {
-	raw := c.Args
-	if len(raw) == 0 || isJSONNull(raw) {
-		raw = c.Arguments
-	}
-	if len(raw) == 0 || isJSONNull(raw) {
-		return json.RawMessage("{}")
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		if json.Valid([]byte(s)) {
-			return compact(json.RawMessage(s))
-		}
-		return json.RawMessage("{}")
-	}
-	return compact(raw)
+// resultsMsg is the message that hands a round's results back.
+func (l *Loop) resultsMsg(elems []resultElem, userMsg string, round int) string {
+	payload, _ := marshalNoHTML(resultsPayload{Results: elems})
+	// The operator's question is restated on every round, not just round 1.
+	// A gateway can accept our session_id (Threaded=true) without actually
+	// replaying the transcript to the model - in that case this is the ONLY
+	// place downstream of round 1 where the model still sees what was asked.
+	// Cheap even when the server does thread it correctly: one restated
+	// sentence, no meaningful token cost.
+	return "[hands results] Your hands ran the instruction you just gave, in the operator's" +
+		" working directory" + l.locNote() + ". This is real output from the operator's" +
+		" machine — the operator did NOT paste it, and it is NOT from your sandbox. Each" +
+		" result's output is the actual file contents / command output; exit_code 0 means" +
+		" it worked (empty or non-zero: try another instruction, never \"I can't read it\")." +
+		questionNote(userMsg) +
+		" Now give the operator your answer in final — or another instruction if you need" +
+		" more.\n" + string(payload) + l.roundBudgetNote(round+1)
 }
 
 func (l *Loop) emit(ev session.Event) {
@@ -421,7 +362,7 @@ func questionNote(userMsg string) string {
 	return " The operator's question this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\"."
 }
 
-func compact(raw json.RawMessage) json.RawMessage {
+func compactJSON(raw json.RawMessage) json.RawMessage {
 	var buf bytes.Buffer
 	if json.Compact(&buf, raw) != nil {
 		return json.RawMessage("{}")

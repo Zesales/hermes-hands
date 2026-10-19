@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"hermes-hands/internal/api"
+	"hermes-hands/internal/compact"
 	"hermes-hands/internal/config"
 	"hermes-hands/internal/debuglog"
 	"hermes-hands/internal/dispatch"
@@ -32,6 +33,7 @@ type App struct {
 	Shell    *shell.Shell
 	Disp     *dispatch.Dispatcher
 	Loop     *loop.Loop
+	Keeper   *compact.Keeper // the open session's context (OpenSession)
 
 	start *startup // what the runtime switches reset to (runtime.go)
 }
@@ -85,8 +87,9 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 	lp := &loop.Loop{
 		API: client.Runs(), Dispatch: disp,
 		MaxRounds: cfg.MaxRounds, MaxCalls: cfg.MaxCalls, MaxCallsPerRound: cfg.MaxCallsPerRound,
-		Scrub:    redact.Scrub,
-		RepoRoot: repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
+		MaxRoundOutput: cfg.MaxRoundOutput,
+		Scrub:          redact.Scrub,
+		RepoRoot:       repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
 		Vlogf: vlogf, Warnf: Warnf,
 		OnResult: func(tool, out string, exit int) {
 			if known.ObserveShell(out, exit) { // learned 127: persist immediately

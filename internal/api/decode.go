@@ -10,13 +10,35 @@ import (
 // (NousResearch/hermes-agent#15618); this is the cumulative billing count:
 // total_tokens if present, else input+output / prompt+completion.
 func usageTokens(body []byte) int {
+	num := usageNum(body)
+	if num == nil {
+		return 0
+	}
+	if t := num("total_tokens", "total", "context_tokens"); t > 0 {
+		return t
+	}
+	return num("input_tokens", "prompt_tokens") + num("output_tokens", "completion_tokens")
+}
+
+// usagePrompt is the run's prompt tokens (input_tokens / prompt_tokens) —
+// see AskResult.Prompt. 0 when absent.
+func usagePrompt(body []byte) int {
+	if num := usageNum(body); num != nil {
+		return num("input_tokens", "prompt_tokens")
+	}
+	return 0
+}
+
+// usageNum reads numbers out of a body's `usage` object: the first of keys
+// present, 0 when none is. nil when the body has no usage.
+func usageNum(body []byte) func(keys ...string) int {
 	var top struct {
 		Usage map[string]json.RawMessage `json:"usage"`
 	}
 	if json.Unmarshal(body, &top) != nil || top.Usage == nil {
-		return 0
+		return nil
 	}
-	num := func(keys ...string) int {
+	return func(keys ...string) int {
 		for _, k := range keys {
 			if raw, ok := top.Usage[k]; ok {
 				var n float64
@@ -27,10 +49,6 @@ func usageTokens(body []byte) int {
 		}
 		return 0
 	}
-	if t := num("total_tokens", "total", "context_tokens"); t > 0 {
-		return t
-	}
-	return num("input_tokens", "prompt_tokens") + num("output_tokens", "completion_tokens")
 }
 
 // usageTokensRaw is usageTokens for a bare `usage` object (from an SSE frame).
@@ -39,6 +57,14 @@ func usageTokensRaw(usage json.RawMessage) int {
 		return 0
 	}
 	return usageTokens([]byte(`{"usage":` + string(usage) + `}`))
+}
+
+// usagePromptRaw is usagePrompt for a bare `usage` object.
+func usagePromptRaw(usage json.RawMessage) int {
+	if len(usage) == 0 {
+		return 0
+	}
+	return usagePrompt([]byte(`{"usage":` + string(usage) + `}`))
 }
 
 // looksJSON mirrors `jq -e .`: valid JSON whose top value is not null / false.

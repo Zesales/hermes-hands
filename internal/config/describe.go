@@ -72,6 +72,9 @@ func Describe(cfg *Config) string {
 		{"HERMES_HANDS_RUN_TIMEOUT", strconv.Itoa(cfg.RunTimeout) + "s"},
 		{"HERMES_API_RUN_TIMEOUT", secs(cfg.APIRunTimeout)},
 		{"HERMES_HANDS_MAX_OUTPUT", strconv.Itoa(cfg.MaxOutput)},
+		{"HERMES_HANDS_MAX_ROUND_OUTPUT", limit(cfg.MaxRoundOutput)},
+		{"HERMES_HANDS_CONTEXT_WINDOW", window(cfg.ContextWindow)},
+		{"HERMES_HANDS_COMPACT_AT", compactAt(cfg.CompactAt, cfg.ContextWindow)},
 		{"HERMES_HANDS_DENY", none(strings.Join(cfg.Deny, " | "))},
 	} {
 		fmt.Fprintf(&b, "    %-33s %-24s %s\n", r[0], r[1], source(cfg, r[0]))
@@ -92,6 +95,20 @@ func limit(n int) string {
 		return "no limit"
 	}
 	return strconv.Itoa(n)
+}
+
+func window(tokens int) string {
+	if tokens <= 0 {
+		return "unknown"
+	}
+	return strconv.Itoa(tokens) + " tokens"
+}
+
+func compactAt(pct, window int) string {
+	if pct <= 0 || window <= 0 {
+		return "off (only /compact)"
+	}
+	return strconv.Itoa(pct) + "%"
 }
 
 func retention(days int) string {

@@ -575,7 +575,7 @@ func TestRunFramesFirstMessage(t *testing.T) {
 		"PROBLEM — operator's working directory: cwd /home/me/proj (git branch: main)",
 		"was hälst du von der readme ?", // the message, verbatim, as the problem body
 		"reason it through, then ONE instruction",
-		`{"id":"c1","tool":"local_shell|local_read|local_write|local_edit"`,
+		`{"id":"c1","tool":"local_shell|local_read|local_write|local_edit|local_output"`,
 		`"final":null}`,
 		"not a description of yourself or your tools",
 	} {
@@ -608,7 +608,11 @@ func TestRunEmitsCallBeforeResultWithSessionRefs(t *testing.T) {
 	}}
 	var evs []session.Event
 	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 5, Ref: 41,
-		Emit: func(ev session.Event) { evs = append(evs, ev) }}
+		Emit: func(ev session.Event) {
+			if ev.Kind != session.KindReply { // every reply is recorded too; this test is about the calls
+				evs = append(evs, ev)
+			}
+		}}
 	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
 	if !out.OK || out.Answer != "done" {
 		t.Fatalf("out = %+v", out)

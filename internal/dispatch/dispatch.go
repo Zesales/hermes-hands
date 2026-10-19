@@ -45,6 +45,9 @@ type Dispatcher struct {
 	// Rules hands out the rules files of a subdirectory with the first call
 	// into it (nil: none). The loop calls NextRound before each batch.
 	Rules *knowsystem.ScopedRules
+	// Recall reads the stored output of an earlier call #ref of the open
+	// session — what local_output serves (nil: the tool is unavailable).
+	Recall func(ref int) (string, error)
 }
 
 // NextRound tells the rules hand-out that a new batch of calls begins.
@@ -60,10 +63,11 @@ var timeoutRe = regexp.MustCompile(`^[0-9]+$`)
 // OWN server-side read_file / write_file / terminal; the old names stay as
 // aliases.
 const (
-	Shell = "local_shell"
-	Read  = "local_read"
-	Write = "local_write"
-	Edit  = "local_edit"
+	Shell  = "local_shell"
+	Read   = "local_read"
+	Write  = "local_write"
+	Edit   = "local_edit"
+	Output = "local_output"
 )
 
 // Canonical maps a tool name or any alias to its local_* name ("" when it is
@@ -78,6 +82,8 @@ func Canonical(tool string) string {
 		return Write
 	case Edit, "edit_file", "edit":
 		return Edit
+	case Output, "output", "recall":
+		return Output
 	}
 	return ""
 }
@@ -96,9 +102,46 @@ func (d *Dispatcher) Dispatch(tool string, rawArgs json.RawMessage) (Result, err
 		return d.doWrite(args)
 	case Edit:
 		return d.doEdit(args)
+	case Output:
+		return d.doOutput(args), nil
 	default:
-		return Result{Exit: 2, Out: "unknown tool '" + tool + "' (the hands have: local_shell, local_read, local_write, local_edit)"}, nil
+		return Result{Exit: 2, Out: "unknown tool '" + tool + "' (the hands have: local_shell, local_read, local_write, local_edit, local_output)"}, nil
 	}
+}
+
+// doOutput serves local_output: a slice of the stored output of an earlier
+// call — the full copy hermes-hands keeps when it cut a round's results or
+// elided an old one in a compacted transcript. It reads the hands' own
+// record, which already passed the scrubber, so it asks no approval and runs
+// nothing. offset / limit are bytes; limit defaults to (and is capped at)
+// the per-result cap.
+func (d *Dispatcher) doOutput(args map[string]json.RawMessage) Result {
+	if d.Recall == nil {
+		return Result{Exit: 2, Out: "local_output: no session output store here"}
+	}
+	ref, err := strconv.Atoi(strings.TrimPrefix(argStr(args, "ref", "id"), "#"))
+	if err != nil || ref <= 0 {
+		return Result{Exit: 2, Out: `local_output: missing 'ref' — the #ref of the call whose output to read, e.g. {"ref":14}`}
+	}
+	out, err := d.Recall(ref)
+	if err != nil {
+		return Result{Exit: 1, Out: fmt.Sprintf("local_output: no stored output for #%d", ref)}
+	}
+	offset, _ := strconv.Atoi(argStr(args, "offset"))
+	offset = min(max(offset, 0), len(out))
+	limit, _ := strconv.Atoi(argStr(args, "limit"))
+	if limit <= 0 || (d.MaxOutput > 0 && limit > d.MaxOutput) {
+		limit = d.MaxOutput
+	}
+	end := len(out)
+	if limit > 0 {
+		end = min(offset+limit, len(out))
+	}
+	head := fmt.Sprintf("[#%d: bytes %d–%d of %d]\n", ref, offset, end, len(out))
+	if end < len(out) {
+		return Result{Out: head + out[offset:end] + fmt.Sprintf("\n[… %d more bytes — offset %d reads on]", len(out)-end, end)}
+	}
+	return Result{Out: head + out[offset:end]}
 }
 
 func (d *Dispatcher) doShell(args map[string]json.RawMessage) (Result, error) {
