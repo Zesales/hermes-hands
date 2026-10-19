@@ -4,7 +4,50 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.13.0 — (unreleased, `bump:minor`) the operator's turn budget; config layers
+## 0.13.0 — (unreleased, `bump:minor`) the operator's turn budget; config layers; hermes-hands' own compaction
+
+### Context: the meter and hermes-hands' own compaction
+
+A hands session could outgrow the model's window for good: hermes-agent's
+compaction keeps the latest messages whole (`compression.protect_last_n`),
+and in a hands session those are the last rounds' results. Once they alone
+were bigger than the window every request was refused — a "continue"
+included, again and again.
+
+- **The meter**: a run's `usage.input_tokens` is the prompt of its model
+  calls — with no server tool of Hermes' own in the run, exactly the prompt
+  the model saw. Between measurements hermes-hands estimates from bytes and
+  calibrates the fixed part (system prompt, tool schemas, instructions) from
+  measured runs. Shown on the working line (`· ctx 48k/131k`), in rpc
+  `progress` (`context` / `window`) and in `/session`.
+- **Compaction before the request**: past `HERMES_HANDS_COMPACT_AT` % (45)
+  of `HERMES_HANDS_CONTEXT_WINDOW` (131072) hermes-hands compacts first, only
+  as far as needed — the outputs of all but the latest two rounds, then of
+  every round, then the oldest turns as question + answer. Nothing is
+  summarised by a model and nothing is lost: an elided output goes as a stub
+  naming its `#ref`, the new hands tool **`local_output`** reads it back
+  (also the cut part of a round over its budget). The log is never rewritten
+  — a compaction is a new event (`compact`), Hermes' replies are recorded
+  (`reply`) so the transcript can be built from the log.
+- **Same session, no switch**: from the first compaction on, hermes-hands
+  sends its transcript with every run as `conversation_history` (hermes-agent
+  uses it instead of its stored one and persists only the run's new
+  messages). A resumed compacted session needs no recap.
+- **`/compact`** and rpc **`compact`** compact now (every output so far);
+  they say so when there is nothing to elide yet.
+- **`HERMES_HANDS_MAX_ROUND_OUTPUT`** (60000 bytes): one round's results
+  together. A bigger round keeps its small outputs whole and the big ones'
+  head and tail around a marker naming the cut bytes; the operator gets a
+  note, the session keeps the full output.
+- **A run refused for its size** ends BLOCKED with a note and is not
+  retried; the meter goes to full, so the next request — the operator's
+  "continue" — is compacted first.
+- Splitting the loop and the SSE stream for this took both off the size
+  budget's exception list: `Loop.Run` is the round loop, `request.go` the
+  request (meter, compaction, transcript), `envelope.go` the reply parsing;
+  `streamRun` reads frames, `runStream.frame` handles one.
+- The golden transcripts had not been regenerated after the budget and
+  config-layer changes; the PR gate is green again.
 
 ### Budget per turn
 

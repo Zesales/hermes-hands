@@ -168,7 +168,9 @@ numbers) `/session <id>` (switch; replays its last turns) `/sessions`
 (`/sessions -v`: with their hermes-agent sessions)
 `/history` (replay every turn of this session; `/history <n>` the last n,
 `/history <id>` another session's — read-only) `/out <n>` (the full output of
-call `#n`) `/fork` (branch on the server) `/debug` (toggle the redacted
+call `#n`) `/compact` (compact this session's transcript now — see
+[Context and compaction](#context-and-compaction)) `/fork` (branch on the
+server) `/debug` (toggle the redacted
 connection trace, see below) `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also
 exits; `Ctrl-C` at the prompt just hints, during a turn it cancels the turn
 locally *and* stops the run on Hermes). An unknown `/command` is answered
@@ -219,6 +221,7 @@ Hermes drives these tools, all in the directory you launched from:
 | `local_read` | `{path}` | — (confined to the repo root) |
 | `local_write` | `{path, content}` | **with a diff** |
 | `local_edit` | `{path, old, new}` | **with a diff** (`old` must match once) |
+| `local_output` | `{ref, offset?, limit?}` | — (reads the hands' own copy of call `#ref`'s output; nothing runs) |
 
 The `local_*` names keep them apart from Hermes' own server-side `read_file` /
 `write_file` / `terminal`; the old names (`shell`, `read_file`, `write_file`,
@@ -295,7 +298,7 @@ The local session store lives in `~/hermes-hands/sessions/`
 | file | what |
 |---|---|
 | `<id>/session.json` | the index record — `--session <id>` and `sessions` work offline |
-| `<id>/events.jsonl` | everything the terminal showed, as an append-only, versioned event log: your messages, every hands call (before it runs) and result, the approval prompts you answered, Hermes' own tool attempts, answers, turn footers |
+| `<id>/events.jsonl` | everything the terminal showed, as an append-only, versioned event log: your messages, every hands call (before it runs) and result, the approval prompts you answered, Hermes' own tool attempts, answers, turn footers — plus Hermes' replies and the compactions, which the transcript of a compacted session is built from |
 | `<id>/out/<n>.txt` | the full (scrubbed) output of call `#n` |
 | `<id>/debug.jsonl` | the `/debug` trace, only while it is on |
 
@@ -331,7 +334,50 @@ still holds without a local one (retention removed them, another machine ran
 them). The server's other sessions — cron jobs, other clients — are only
 counted. Real context-window usage and a true compaction count are not exposed
 by the Hermes API yet
-([hermes-agent#15618](https://github.com/NousResearch/hermes-agent/issues/15618)).
+([hermes-agent#15618](https://github.com/NousResearch/hermes-agent/issues/15618)),
+so hermes-hands meters the context itself: `/session` shows it after the last
+run (measured or estimated) and how often hermes-hands compacted the session.
+
+## Context and compaction
+
+A hands session fills the model's context fast: every round's results — file
+contents, diffs, build and test output — stay in the conversation.
+hermes-agent compacts by summarising the middle of a conversation and keeps
+its latest messages whole (`compression.protect_last_n`); once those alone
+outgrow the window, no summary helps and every request is refused — a
+"continue" included. hermes-hands holds a full local record of the session,
+every call's output among it, so it compacts on its own, without losing
+anything:
+
+- **The meter.** A run's `usage.input_tokens` is the prompt of its model
+  calls; when Hermes ran none of its own server tools that is exactly the
+  prompt the model saw. Between measurements hermes-hands estimates from
+  bytes. The working line shows it: `round 3/25 · calls 12/100 · ctx 48k/131k`
+  (rpc: `context` / `window` on `progress`).
+- **Compaction before the request, never after it failed.** Before every
+  request hermes-hands predicts its prompt; past `HERMES_HANDS_COMPACT_AT` %
+  of `HERMES_HANDS_CONTEXT_WINDOW` it compacts first, only as far as needed:
+  the outputs of all but the latest two rounds, then of every round, then the
+  oldest turns as question + answer (never the latest turn). `/compact` (rpc
+  `compact`) does it now and elides every output so far.
+- **Nothing is thrown away.** An elided output goes as a stub naming its
+  `#ref`; Hermes reads any of them back with `local_output` — the log and
+  `out/<n>.txt` stay untouched. No model writes a summary.
+- **Same session.** From the first compaction on, hermes-hands sends its
+  transcript with every run as `conversation_history`; hermes-agent uses it
+  instead of its stored one and keeps only each run's new messages under the
+  same session id. No session switch.
+- **One round can't flood it.** `HERMES_HANDS_MAX_ROUND_OUTPUT` caps the
+  bytes of one round's results together: the small outputs stay whole, the
+  big ones keep head and tail around a marker that names the cut bytes (and
+  how to read them back). The full output stays local.
+- **A refused request is not retried.** If the model server refuses a
+  request for its size anyway, the turn ends BLOCKED with a note, the meter
+  goes to full — and the next request (your "continue") is compacted first.
+
+Keep `HERMES_HANDS_COMPACT_AT` below hermes-agent's `compression.threshold`
+(default 0.5): then hermes-hands compacts first and hermes-agent's own
+compression rarely has to run in a hands session.
 
 The turn footer splits the turn's time: `— worked for 1m06s · hermes 58s ·
 local 8s · waited on you 1m48s —` — Hermes' share (model, server tools,
@@ -360,19 +406,19 @@ One request object per line on **stdin**; one response object per line on
 {"id":2,"type":"new"}                                   // start a fresh session, becomes current
 {"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
 {"id":4,"type":"check"}
-{"id":5,"type":"compact","text":"auth flow"}              // no-op on this gateway (no REST compaction endpoint)
+{"id":5,"type":"compact"}                                 // compact this session's transcript now
 {"id":6,"type":"approvals","text":"auto"}                 // auto | never ("" = report) — this session only
 
 // responses
 {"type":"ready","session":"hh_…","cwd":"/repo","version":"X.Y.Z","approvals":"off","hermes_agent":"0.22.2"}
 {"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}
 {"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
-{"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  // the turn's budget (max 0 = no limit)
+{"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  // the turn's budget (max 0 = no limit); + "context","window" once known
 {"type":"note","id":1,"text":"budget: 10 of 25 rounds · 29 of 100 calls left — …"}
 {"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…","rounds":12,"calls":47}
 {"type":"session","id":2,"session":"hh_…","hermes_session":"…","approvals":"off"}
 {"type":"check","id":4,"ok":true,"model":"…","base":"…","version":"0.22.2"}
-{"type":"compact","id":5,"ok":true,"session":"hh_…"}
+{"type":"compact","id":5,"ok":true,"session":"hh_…","before":98000,"after":31000,"text":"compacted: …"}
 {"type":"approvals","id":6,"approvals":"off"}             // off (= auto) | never
 {"type":"error","id":1,"message":"…"}
 ```
@@ -451,6 +497,9 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_HANDS_MAX_CALLS_PER_ROUND` | `20` | calls per envelope; a bigger envelope is not run (`0` = no limit) |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
 | `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`local_shell` keeps 2×) |
+| `HERMES_HANDS_MAX_ROUND_OUTPUT` | `60000` | bytes of one round's results together; a bigger round is cut, the full output stays local (`0` = no limit) |
+| `HERMES_HANDS_CONTEXT_WINDOW` | `131072` | the model's context window in tokens (`0` = unknown: the meter counts, nothing compacts on its own) |
+| `HERMES_HANDS_COMPACT_AT` | `45` | compact before a request past this % of the window — keep it below hermes-agent's `compression.threshold` (`0` = only `/compact`) |
 | `HERMES_HANDS_RESPONSE_TIMEOUT` | `600` | seconds hermes-agent may go silent in a turn before it is cancelled; pushed back by any token / tool round / a live server-run probe (`0` = no limit) |
 | `HERMES_HANDS_WATCHDOG_INTERVAL` | `200` | seconds between those out-of-band "still working?" probes (floored at 15) |
 | `HERMES_API_*` | — | `CONNECT_TIMEOUT` 5, `MAX_TIME` 30, `POLL_INTERVAL` 2, `RETRIES` 3, `RUN_TIMEOUT` 600 |
@@ -480,15 +529,15 @@ for them. Around them:
   calls. Set it in the order of `HERMES_HANDS_MAX_CALLS` (e.g. `100`), so
   the budget hermes-hands announces is the one that binds, not a silent cut
   inside a round.
-- **Compaction on** (`compression.enabled`). The budget is built around
-  it: every stop asks for a final that says what is done, what is open and
-  what the next turn must do — the note a compacted context keeps. A single
-  round has to fit well below the window, though: its worst case is
-  `HERMES_HANDS_MAX_CALLS_PER_ROUND` × `HERMES_HANDS_MAX_OUTPUT`
-  (`local_shell` keeps 2×) — at the defaults several hundred KB, more than a
-  128k window — and hermes-agent keeps the latest messages uncompressed
-  (`compression.protect_last_n`). Real outputs are far smaller; with a
-  smaller window, lower `HERMES_HANDS_MAX_OUTPUT` or `_MAX_CALLS_PER_ROUND`.
+- **`HERMES_HANDS_CONTEXT_WINDOW` = the model's window**, and
+  `HERMES_HANDS_COMPACT_AT` below hermes-agent's `compression.threshold`
+  ([Context and compaction](#context-and-compaction)). hermes-agent's own
+  compaction (`compression.enabled`) stays on for every other client of the
+  gateway. The budget is built around compaction: every stop asks for a
+  final that says what is done, what is open and what the next turn must do.
+  A single round stays within `HERMES_HANDS_MAX_ROUND_OUTPUT` whatever
+  `HERMES_HANDS_MAX_CALLS_PER_ROUND` × `HERMES_HANDS_MAX_OUTPUT` allows; with
+  a smaller window, lower it.
 - **Prompt caching for the fixed prefix.** Every round re-sends the same
   prefix: hermes-agent's system prompt plus the hermes-hands instructions
   (unchanged for a session). Caching does not shrink it or free context, but
@@ -533,8 +582,9 @@ for them. Around them:
   behind your Hermes API emitting the JSON envelope cleanly; the CLI recovers
   from fenced/prosey/botched JSON but a weak model will still be flaky. Tune
   `instructions.md`.
-- The delegation transcript accumulates in the Hermes session. Long sessions lean
-  on Hermes' compaction; start a `/new` session for a new task.
+- The delegation transcript accumulates in the session. Long sessions lean on
+  hermes-hands' compaction (and the meter's estimate between measurements);
+  start a `/new` session for a new task.
 - Linux and macOS only; on Windows use WSL.
 
 ## Development
