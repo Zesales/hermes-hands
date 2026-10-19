@@ -4,6 +4,66 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
+## 0.13.0 — (unreleased, `bump:minor`) the operator's turn budget; config layers
+
+### Budget per turn
+
+- **Two budgets instead of one**: `HERMES_HANDS_MAX_ROUNDS` (default 25)
+  counts requests to Hermes, the new `HERMES_HANDS_MAX_CALLS` (default 100)
+  the hands calls a turn runs, the new `HERMES_HANDS_MAX_CALLS_PER_ROUND`
+  (default 20) the calls in one envelope. `0` = no limit (a 0 round budget
+  used to block every turn).
+- **Hermes knows it is the operator's limit**: the task frame states all
+  three; the results count down once the end gets close (rounds: a heads-up
+  over the last 40 %, "finish now" over the last 20 %, then the last round;
+  calls: from 75 % and 90 % used), and every stop asks for a final that says
+  what is done, what is open and what a continuation must do — the note a
+  "continue", and a compacted context, builds on. `share/instructions.md`
+  explains the budget once.
+- **All or nothing**: an envelope over the budget (too many calls for the
+  envelope or for what is left) is not run at all and Hermes is asked to
+  resend a smaller one — never a half-run batch. A turn out of calls ends
+  like one out of rounds: BLOCKED, with a resume note for the next turn.
+- **Visible in the terminal**: `round 3/25 · calls 12/100` on the working
+  line, a dim note (kept in the session log) when a countdown starts or an
+  envelope is refused, `· 12 rounds · 47 calls` in the turn footer, and a
+  note when hermes-agent continues in a new session (a compaction). The `#N`
+  next to a call is the session-wide call number, not a budget counter.
+- **`--rpc`**: new `progress` and `note` messages; `answer` carries
+  `rounds` / `calls`.
+- The delegation loop is split by job (`loop.go` / `calls.go` /
+  `budget.go`); `loop.go` left the size-budget exception list.
+
+### Config layers
+
+- **Environment and flags now win over the config file**: default < config
+  < environment (a non-empty value) < flag (`--yolo`) < runtime switch
+  (`/yolo`, `/debug`, rpc). The config file is the operator's defaults for
+  every session. Before, the config file won — a config that set
+  `HERMES_HANDS_APPROVE` silently disabled `--yolo`, and `--rpc --yolo`
+  refused to start. Every setting, the API tuning knobs included, can now be
+  set in the config file.
+- **Runtime switches are never saved**, and every session opened — a resumed
+  one, `/session`, rpc `use` / `new` — starts from config / env / flags
+  again. **rpc `approvals`** switches the hands' approvals (`auto` |
+  `never`) while the process runs; the `session` reply names the mode.
+- **`/config` shows each value's layer** (default / config / env / flag /
+  runtime / secrets store) and the three budgets.
+- **`HERMES_HANDS_DEBUG=0` (`off`, `false`, `no`) is off**; before, any
+  non-empty value was on. Same for `HERMES_HANDS_VERBOSE`.
+- **`setup` keeps your config**: a fresh config sets every setting at its
+  default; an existing one only gets the settings it lacks appended — a
+  value you set is never changed; a config that sets nothing (only comments,
+  an old template) is replaced, the old one kept as `config.bak`.
+  **`hermes-hands setup --config`** does only that step, without prompts.
+
+### Docs
+
+- **README: "Recommended setup"** — a context window of at least 128k
+  tokens (tested: clearly better than 64k), hermes-agent's `agent.max_turns`
+  no lower than the call budget, compaction on with a round's worst-case
+  size in mind, and prompt caching for the prefix every round re-sends.
+
 ## 0.12.2 — (unreleased, `bump:patch`) a license badge that always renders
 
 - The README's license badge is static (`license: MIT`). The dynamic one

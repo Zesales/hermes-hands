@@ -108,7 +108,11 @@ platform.)
 
 `setup` writes into one self-contained directory, `~/hermes-hands/`
 (`$HERMES_HANDS_HOME` overrides): `config` + the machine-bound secrets store
-(`secrets.enc` + `keyseed`, `0600`). The key is your gateway's `API_SERVER_KEY`;
+(`secrets.enc` + `keyseed`, `0600`). A fresh `config` sets every setting at
+its default; re-running `setup` (a new key, a new machine) never changes a
+value you set — it only appends settings a newer version brings.
+`hermes-hands setup --config` does just that config step, without prompts.
+The key is your gateway's `API_SERVER_KEY`;
 the URL must be `https://…`. `hermes-hands --version` prints the version.
 
 ## Use
@@ -357,22 +361,29 @@ One request object per line on **stdin**; one response object per line on
 {"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
 {"id":4,"type":"check"}
 {"id":5,"type":"compact","text":"auth flow"}              // no-op on this gateway (no REST compaction endpoint)
+{"id":6,"type":"approvals","text":"auto"}                 // auto | never ("" = report) — this session only
 
 // responses
 {"type":"ready","session":"hh_…","cwd":"/repo","version":"X.Y.Z","approvals":"off","hermes_agent":"0.22.2"}
 {"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}
 {"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
-{"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…"}
-{"type":"session","id":2,"session":"hh_…","hermes_session":"…"}
+{"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  // the turn's budget (max 0 = no limit)
+{"type":"note","id":1,"text":"budget: 10 of 25 rounds · 29 of 100 calls left — …"}
+{"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…","rounds":12,"calls":47}
+{"type":"session","id":2,"session":"hh_…","hermes_session":"…","approvals":"off"}
 {"type":"check","id":4,"ok":true,"model":"…","base":"…","version":"0.22.2"}
 {"type":"compact","id":5,"ok":true,"session":"hh_…"}
+{"type":"approvals","id":6,"approvals":"off"}             // off (= auto) | never
 {"type":"error","id":1,"message":"…"}
 ```
 
 Approvals can't be prompted over the pipe, so `--rpc` requires `--yolo`
 (`HERMES_HANDS_APPROVE=auto`) or `HERMES_HANDS_APPROVE=never` — the editor is
-expected to run its own approval UI before sending a `turn`. Close stdin to shut
-it down; `SIGINT` cancels the in-flight turn.
+expected to run its own approval UI before sending a `turn`. An `approvals`
+request switches between `auto` and `never` while the process runs — a runtime
+switch: the next `new` / `use` starts from config / env / flags again, and its
+`session` reply says which mode is in effect. Close stdin to shut it down;
+`SIGINT` cancels the in-flight turn.
 
 Persist a session across editor restarts with `hermes-hands sessions new` (mint
 + print an id) and pass it back via `--session <id>` or an rpc `use` message.
@@ -387,6 +398,26 @@ optional `instructions.md`. Each path also has its own override
 `~/hermes-hands/config` — `KEY=value` / `export KEY=value`, values optionally
 `"…"`, `'…'` or `$'…'`-quoted. Anything else on a line is ignored (the old bash
 version `source`d the file; the Go port deliberately parses only assignments).
+
+**Layers.** Every setting resolves weakest first: the built-in default <
+`config` (your defaults for every session) < the environment (a non-empty
+value) < a flag (`--yolo`) < a runtime switch (`/yolo`, `/debug`, an rpc
+`approvals` / `debug`). Runtime switches are never saved: every session you
+open or resume — also with `/session` or rpc `use` in a running process —
+starts from config / env / flags again. `/config` shows each value with the
+layer it came from.
+
+**Budget.** Each turn has the operator's budget: `HERMES_HANDS_MAX_ROUNDS`
+requests to Hermes, `HERMES_HANDS_MAX_CALLS` hands calls, at most
+`HERMES_HANDS_MAX_CALLS_PER_ROUND` calls per envelope (`0` = no limit).
+Hermes is told the budget in the task frame and gets a countdown in its
+results once the end gets close (rounds: the last 40 %, then "finish" over the
+last 20 %; calls: from 75 % and 90 % used). An envelope over the budget is not
+run at all — no half-run batch — and Hermes is asked to resend a smaller one.
+The terminal shows `round 3/25 · calls 12/100` on the working line, a dim note
+when a countdown starts, and `· 12 rounds · 47 calls` in the turn footer. A
+turn stopped at its budget is unfinished work: the next turn is told where it
+stopped, so a "continue" resumes with a fresh budget.
 
 **Secrets.** The URL + key are resolved in this order: the `HERMES_API_URL` /
 `HERMES_API_KEY` environment variables always win; then, only while one is still
@@ -411,11 +442,13 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_API_PROFILE` | — | route to `/p/<profile>/` (needs that profile's own key) |
 | `HERMES_HANDS_APPROVE` | `ask` | `ask` \| `auto` \| `never` |
 | `HERMES_HANDS_STREAM` | `auto` | SSE answer streaming: `auto` (when advertised) \| `on` \| `off` |
-| `HERMES_HANDS_DEBUG` | — | set in the config file: start with `/debug` on (redacted connection trace) |
+| `HERMES_HANDS_DEBUG` | `0` | `1` = start with `/debug` on (redacted connection trace); `0` / `off` = off |
 | `HERMES_HANDS_RETENTION_DAYS` | `14` | delete local sessions idle longer than this on start (`0` keeps all) |
 | `HERMES_HANDS_SANDBOX` | `smart` | Hermes' own server-side terminal / file tools in a hands run: `smart` (steer only calls aimed at your machine) \| `steer` (all) \| `show` (never) |
 | `HERMES_HANDS_DENY` | — | extra denied `local_shell` commands, `\|`-separated shell globs |
-| `HERMES_HANDS_MAX_ROUNDS` | `25` | delegation rounds per turn |
+| `HERMES_HANDS_MAX_ROUNDS` | `25` | requests to Hermes per turn (`0` = no limit) |
+| `HERMES_HANDS_MAX_CALLS` | `100` | hands calls per turn (`0` = no limit) |
+| `HERMES_HANDS_MAX_CALLS_PER_ROUND` | `20` | calls per envelope; a bigger envelope is not run (`0` = no limit) |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
 | `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`local_shell` keeps 2×) |
 | `HERMES_HANDS_RESPONSE_TIMEOUT` | `600` | seconds hermes-agent may go silent in a turn before it is cancelled; pushed back by any token / tool round / a live server-run probe (`0` = no limit) |
@@ -423,12 +456,48 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_API_*` | — | `CONNECT_TIMEOUT` 5, `MAX_TIME` 30, `POLL_INTERVAL` 2, `RETRIES` 3, `RUN_TIMEOUT` 600 |
 
 `/config` (alias `/hh-settings`) in-session prints these paths and effective
-values; it never writes anything — edit `~/hermes-hands/config` by hand.
+values with their layer; it never writes anything — edit
+`~/hermes-hands/config` by hand.
 
 The per-run `instructions` block sent to Hermes is baked into the binary (source:
 `share/instructions.md`). Drop a `~/hermes-hands/instructions.md` to override it
 with repo-specific rules. Either way it's scoped to `hermes-hands` runs only —
 your phone and web UI never see it.
+
+### Recommended setup
+
+The defaults above are the recommended starting point; the budget is sized
+for them. Around them:
+
+- **A context window of at least 128k tokens (131,072).** hermes-agent
+  takes a large share of the window itself — its system prompt, tool schemas
+  and memory — before the hermes-hands instructions and the first results
+  arrive. Tested: clearly better results at 128k than at 64k, where
+  compaction sets in after a few rounds and the model loses the thread.
+- **hermes-agent's own limit no lower than the budget.** `agent.max_turns`
+  caps hermes-agent's iterations within one run, and one hands round is one
+  run — what iterates there are Hermes' own server-side tools, not the hands
+  calls. Set it in the order of `HERMES_HANDS_MAX_CALLS` (e.g. `100`), so
+  the budget hermes-hands announces is the one that binds, not a silent cut
+  inside a round.
+- **Compaction on** (`compression.enabled`). The budget is built around
+  it: every stop asks for a final that says what is done, what is open and
+  what the next turn must do — the note a compacted context keeps. A single
+  round has to fit well below the window, though: its worst case is
+  `HERMES_HANDS_MAX_CALLS_PER_ROUND` × `HERMES_HANDS_MAX_OUTPUT`
+  (`local_shell` keeps 2×) — at the defaults several hundred KB, more than a
+  128k window — and hermes-agent keeps the latest messages uncompressed
+  (`compression.protect_last_n`). Real outputs are far smaller; with a
+  smaller window, lower `HERMES_HANDS_MAX_OUTPUT` or `_MAX_CALLS_PER_ROUND`.
+- **Prompt caching for the fixed prefix.** Every round re-sends the same
+  prefix: hermes-agent's system prompt plus the hermes-hands instructions
+  (unchanged for a session). Caching does not shrink it or free context, but
+  makes re-reading it cheap and fast — use prefix caching in the model
+  server, or prompt caching through a caching model gateway
+  or hermes-agent's `prompt_caching` with a provider that supports
+  it. Keep a
+  `~/hermes-hands/instructions.md` override short: it is part of that prefix
+  on every round.
 
 ## Security model
 
