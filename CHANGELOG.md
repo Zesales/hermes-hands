@@ -8,6 +8,9 @@ gateway runs.
 
 hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
+The change below reached `main` as a direct commit, which cuts no release;
+this entry's PR releases it as 0.14.2.
+
 Seen in real code sessions: when a tool was missing on the operator's
 machine, Hermes rebuilt the project in its own server sandbox — installed
 the toolchain there, tried to get the code there, looked around the
@@ -34,6 +37,11 @@ paths or files.
   `git clone`, exploring the server's containers or network (`docker ps`,
   `docker network`, `ss -`, `ip a`, `host.docker.internal`, the docker
   socket).
+
+## 0.14.1 — 2026-10-19 — CI: actions/setup-go 7.0.0
+
+- CI only: `actions/setup-go` 6.5.0 → 7.0.0 (Dependabot). Nothing changes
+  for the operator; the binaries are built the same way.
 
 ## 0.14.0 — 2026-10-19 — `/compact-aggressive`; compaction keeps more of a code session
 
