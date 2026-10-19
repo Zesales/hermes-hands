@@ -247,6 +247,25 @@ func TestAsk_PollFailed(t *testing.T) {
 	}
 }
 
+// hermes-agent marks a run the gateway restart cut off "interrupted" — a
+// terminal status, not one to poll on until the watchdog
+func TestAsk_PollInterrupted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			writeTestJSON(w, 200, `{"run_id":"run_1","status":"started"}`)
+			return
+		}
+		writeTestJSON(w, 200, `{"status":"interrupted","error":"The gateway restarted before this run settled."}`)
+	}))
+	defer srv.Close()
+
+	c := testClient(srv.URL)
+	_, err := c.Runs().Ask(context.Background(), "hi", "", "")
+	if err == nil || !strings.HasPrefix(err.Error(), "run run_1 interrupted: ") {
+		t.Fatalf("err = %v, want the interrupted run reported", err)
+	}
+}
+
 func TestSetTitle_SwallowsError(t *testing.T) {
 	var got struct {
 		mu     sync.Mutex

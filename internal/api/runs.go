@@ -192,7 +192,7 @@ func (c *Client) pollRun(ctx context.Context, base, runID string, threaded bool)
 
 					HermesTools: -1,
 				}, nil
-			case "failed", "cancelled":
+			case "failed", "cancelled", "interrupted": // interrupted: the gateway restarted mid-run
 				return AskResult{}, fmt.Errorf("run %s %s: %s", runID, status,
 					trunc(stripNL(failDetail(respBody)), 400))
 			case "started", "running", "queued", "stopping", "":

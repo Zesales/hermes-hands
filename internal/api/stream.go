@@ -207,7 +207,7 @@ func (rs *runStream) frame(raw string) (AskResult, bool, error) {
 			Tokens: usageTokensRaw(e.Usage), Prompt: usagePromptRaw(e.Usage),
 			HermesTools: rs.tools,
 		}, true, nil
-	case "run.failed", "run.cancelled", "error":
+	case "run.failed", "run.cancelled", "run.interrupted", "error":
 		if rs.stopping != "" {
 			return rs.stopped(), true, nil
 		}
