@@ -12,6 +12,8 @@
 //	{"id":4,"type":"check"}
 //	{"id":5,"type":"history"}                 the open session's event log
 //	{"id":6,"type":"debug","text":"on"}       redacted wire trace on / off / toggle
+//	{"id":7,"type":"approvals","text":"auto"} hands approvals auto | never ("" = report) — a runtime
+//	                                          switch: the next new / use starts from config / env / flags
 //
 // Responses:
 //
@@ -21,10 +23,11 @@
 //	{"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 //	{"type":"hermes_tool","id":1,"tool":"terminal","preview":"...","action":"steered"}
 //	{"type":"answer","id":1,"ok":true,"text":"...","session":"hh_...","hermes_session":"..."}
-//	{"type":"session","id":2,"session":"hh_...","hermes_session":"..."}
+//	{"type":"session","id":2,"session":"hh_...","hermes_session":"...","approvals":"off"}
 //	{"type":"check","id":4,"ok":true,"model":"...","base":"...","version":"0.22.2"}   (+ "compat" as above)
 //	{"type":"history","id":5,"session":"hh_...","events":[...]}  (session.Event objects)
 //	{"type":"debug","id":6,"on":true,"path":".../debug.jsonl"}
+//	{"type":"approvals","id":7,"approvals":"off"}                  off (= auto) | never
 //	{"type":"error","id":1,"message":"..."}
 //
 // Turns are recorded into the session's event log exactly like REPL turns,
@@ -42,10 +45,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"hermes-hands/internal/app"
 	"hermes-hands/internal/compat"
-	"hermes-hands/internal/prompt"
 	"hermes-hands/internal/session"
 	"hermes-hands/internal/turn"
 )
@@ -115,16 +118,9 @@ func start(a *app.App, smode, version string, emit func(map[string]any)) (*serve
 	if err != nil {
 		return fail(err.Error())
 	}
-	approvals := "never"
-	if ta, ok := a.Disp.Approver.(*prompt.TTYApprover); ok {
-		switch ta.Mode {
-		case "auto":
-			approvals = "off"
-		case "never":
-			approvals = "never"
-		default:
-			return fail("--rpc needs --yolo (HERMES_HANDS_APPROVE=auto) or HERMES_HANDS_APPROVE=never - interactive approval over the pipe is not supported")
-		}
+	approvals, ok := pipeApprovals(a.Approvals())
+	if !ok {
+		return fail("--rpc needs --yolo (HERMES_HANDS_APPROVE=auto) or HERMES_HANDS_APPROVE=never - interactive approval over the pipe is not supported")
 	}
 	a.UI = nil // no terminal frames in rpc mode: the event log only records
 
@@ -178,14 +174,15 @@ func (s *server) serve(in io.Reader) {
 
 // handlers answers each request type; id is the request's id, echoed back.
 var handlers = map[string]func(s *server, req request, id any){
-	"turn":     (*server).turn,
-	"history":  (*server).history,
-	"new":      (*server).newSession,
-	"use":      (*server).use,
-	"debug":    (*server).debug,
-	"check":    (*server).check,
-	"compact":  (*server).compact,
-	"compress": (*server).compact,
+	"turn":      (*server).turn,
+	"history":   (*server).history,
+	"new":       (*server).newSession,
+	"use":       (*server).use,
+	"debug":     (*server).debug,
+	"approvals": (*server).approvals,
+	"check":     (*server).check,
+	"compact":   (*server).compact,
+	"compress":  (*server).compact,
 }
 
 func (s *server) fail(id any, msg string) {
@@ -253,9 +250,42 @@ func (s *server) use(req request, id any) {
 // switchTo makes rec the open session and says which one it is.
 func (s *server) switchTo(rec *session.Record, id any) {
 	s.rec = rec
-	s.runner.Use(s.a.OpenSession(rec, false))
+	s.runner.Use(s.a.OpenSession(rec, false)) // drops the approvals / debug switches of the session before
+	s.debugOn = s.a.Cfg.Debug
 	s.applyDebug()
-	s.emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID})
+	approvals, _ := pipeApprovals(s.a.Approvals())
+	s.emit(map[string]any{"type": "session", "id": id, "session": rec.ID, "hermes_session": rec.HermesSessionID,
+		"approvals": approvals})
+}
+
+// approvals switches the hands' approvals for this process: auto (also off /
+// yolo) | never; "" only reports. Interactive "ask" cannot work over the pipe
+// — the editor runs its own approval UI before sending a turn.
+func (s *server) approvals(req request, id any) {
+	switch strings.ToLower(strings.TrimSpace(req.Text)) {
+	case "":
+	case "auto", "off", "yolo":
+		s.a.SetApprovals("auto")
+	case "never":
+		s.a.SetApprovals("never")
+	default:
+		s.fail(id, "approvals takes auto | never - interactive approval over the pipe is not supported")
+		return
+	}
+	approvals, _ := pipeApprovals(s.a.Approvals())
+	s.emit(map[string]any{"type": "approvals", "id": id, "approvals": approvals})
+}
+
+// pipeApprovals names an approvals mode the way the protocol does: auto is
+// "off", never is "never"; ask (anything else) has no pipe form.
+func pipeApprovals(mode string) (string, bool) {
+	switch mode {
+	case "auto":
+		return "off", true
+	case "never":
+		return "never", true
+	}
+	return "", false
 }
 
 // debug switches the redacted wire trace: on | off | anything else = toggle.
@@ -268,6 +298,7 @@ func (s *server) debug(req request, id any) {
 	default:
 		s.debugOn = !s.debugOn
 	}
+	s.a.NoteDebug(s.debugOn)
 	s.applyDebug()
 	s.emit(map[string]any{"type": "debug", "id": id, "on": s.debugOn, "path": s.a.Store.DebugPath(s.rec)})
 }

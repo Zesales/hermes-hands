@@ -158,7 +158,8 @@ func (r *repl) wireApp() {
 // use makes rec the open session; show replays its last turns.
 func (r *repl) use(rec *session.Record, show bool) {
 	r.rec = rec
-	r.runner.Use(r.a.OpenSession(rec, show))
+	r.runner.Use(r.a.OpenSession(rec, show)) // drops /yolo, /debug of the session before
+	r.debugOn = r.a.Cfg.Debug
 	r.applyDebug()
 }
 

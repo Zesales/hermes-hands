@@ -32,6 +32,8 @@ type App struct {
 	Shell    *shell.Shell
 	Disp     *dispatch.Dispatcher
 	Loop     *loop.Loop
+
+	start *startup // what the runtime switches reset to (runtime.go)
 }
 
 // New builds the app for cfg in the current directory. builtin is the
@@ -93,7 +95,9 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 			}
 		},
 	}
-	return &App{Cfg: cfg, RepoRoot: repoRoot, UI: u, Client: client, Store: store, Shell: sh, Disp: disp, Loop: lp}, nil
+	a := &App{Cfg: cfg, RepoRoot: repoRoot, UI: u, Client: client, Store: store, Shell: sh, Disp: disp, Loop: lp}
+	a.rememberStartup()
+	return a, nil
 }
 
 // probeKnown probes the machine once per session, so the brain is told what

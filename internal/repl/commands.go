@@ -8,7 +8,6 @@ import (
 
 	"hermes-hands/internal/app"
 	"hermes-hands/internal/config"
-	"hermes-hands/internal/prompt"
 )
 
 // command is one slash command: its names and what it does with the rest of
@@ -75,16 +74,15 @@ func (r *repl) setup(string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// yolo toggles approvals for the hands' shell / write / edit.
+// yolo toggles approvals for the hands' shell / write / edit — a runtime
+// switch: this session only, the next one opened starts from the config.
 func (r *repl) yolo(string) {
-	if ta, ok := r.a.Disp.Approver.(*prompt.TTYApprover); ok {
-		if ta.Mode == "auto" {
-			ta.Mode = "ask"
-			fmt.Fprintln(os.Stderr, "  approvals: ON — shell / write ask first")
-		} else {
-			ta.Mode = "auto"
-			fmt.Fprintln(os.Stderr, "  approvals: OFF (yolo) — shell / write run unattended")
-		}
+	if r.a.Approvals() == "auto" {
+		r.a.SetApprovals("ask")
+		fmt.Fprintln(os.Stderr, "  approvals: ON — shell / write ask first")
+	} else {
+		r.a.SetApprovals("auto")
+		fmt.Fprintln(os.Stderr, "  approvals: OFF (yolo) — shell / write run unattended (this session only)")
 	}
 	fmt.Fprintln(os.Stderr)
 }
@@ -99,6 +97,7 @@ func (r *repl) debug(arg string) {
 	default:
 		r.debugOn = !r.debugOn
 	}
+	r.a.NoteDebug(r.debugOn)
 	r.applyDebug()
 	if r.debugOn {
 		fmt.Fprintf(os.Stderr, "  debug: ON — redacted connection trace → %s\n", r.a.Store.DebugPath(r.rec))

@@ -11,6 +11,7 @@ import (
 // call numbering, replays the last turns into the terminal when show is set,
 // and prepares the first turn when the server lost the conversation.
 func (a *App) OpenSession(rec *session.Record, show bool) *session.Log {
+	a.ResetRuntime() // a session starts from the configured settings, never the last one's switches
 	log, evs := a.Store.OpenLog(rec)
 	a.Loop.Ref = session.LastRef(evs)
 	if show && len(evs) > 0 {
