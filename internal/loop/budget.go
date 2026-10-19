@@ -80,7 +80,7 @@ func (l *Loop) frameBudget() string {
 		lim = append(lim, fmt.Sprintf("%d rounds (envelopes with calls)", l.MaxRounds))
 	}
 	if l.MaxCalls > 0 {
-		lim = append(lim, fmt.Sprintf("%d tool calls", l.MaxCalls))
+		lim = append(lim, fmt.Sprintf("%d hands calls", l.MaxCalls))
 	}
 	if l.MaxCallsPerRound > 0 {
 		lim = append(lim, fmt.Sprintf("at most %d calls per envelope", l.MaxCallsPerRound))
@@ -103,9 +103,9 @@ func (l *Loop) roundBudgetNote(next int) string {
 	status := l.budgetStatus(next, b)
 	switch b.tier {
 	case tierOut:
-		gone := "tool rounds"
+		gone := "rounds"
 		if b.roundsLeft != 0 && b.callsLeft == 0 {
-			gone = "tool calls"
+			gone = "hands calls"
 		}
 		return "\n[budget: no " + gone + " remain — your reply must be " + final + ".]"
 	case tierLast:
@@ -118,7 +118,7 @@ func (l *Loop) roundBudgetNote(next int) string {
 	return ""
 }
 
-// budgetStatus is the "5/25 rounds used, 20 left · 31/100 tool calls used,
+// budgetStatus is the "5/25 rounds used, 20 left · 31/100 hands calls used,
 // 69 left" part of a countdown, for the limits that are set.
 func (l *Loop) budgetStatus(next int, b budget) string {
 	var parts []string
@@ -126,7 +126,7 @@ func (l *Loop) budgetStatus(next int, b budget) string {
 		parts = append(parts, fmt.Sprintf("%d/%d rounds used, %d left", next-1, l.MaxRounds, max(b.roundsLeft, 0)))
 	}
 	if l.MaxCalls > 0 {
-		parts = append(parts, fmt.Sprintf("%d/%d tool calls used, %d left", l.calls, l.MaxCalls, b.callsLeft))
+		parts = append(parts, fmt.Sprintf("%d/%d hands calls used, %d left", l.calls, l.MaxCalls, b.callsLeft))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -136,13 +136,13 @@ func (l *Loop) budgetStatus(next int, b budget) string {
 // the NEXT turn where this one stopped, so a "continue" resumes instead of
 // redoing completed steps.
 func (l *Loop) capped(round int) (Outcome, bool) {
-	const resume = " while still requesting tool calls — the work is unfinished. If the operator asks to continue, resume from where it stopped instead of re-doing completed steps.]"
+	const resume = " while still requesting hands calls — the work is unfinished. If the operator asks to continue, resume from where it stopped instead of re-doing completed steps.]"
 	switch {
 	case l.MaxRounds > 0 && round > l.MaxRounds:
 		l.PendingNote = fmt.Sprintf("[the previous turn was stopped at its round budget (%d rounds)", l.MaxRounds) + resume
 		return Outcome{Answer: fmt.Sprintf("BLOCKED: Hermes still requesting data after %d rounds.", l.MaxRounds)}, true
 	case l.MaxCalls > 0 && l.calls >= l.MaxCalls:
-		l.PendingNote = fmt.Sprintf("[the previous turn was stopped at its call budget (%d tool calls)", l.MaxCalls) + resume
+		l.PendingNote = fmt.Sprintf("[the previous turn was stopped at its call budget (%d hands calls)", l.MaxCalls) + resume
 		return Outcome{Answer: fmt.Sprintf("BLOCKED: Hermes still requesting tool calls after %d calls.", l.MaxCalls)}, true
 	}
 	return Outcome{}, false
@@ -156,7 +156,7 @@ func (l *Loop) oversize(n int) (why, note string) {
 			fmt.Sprintf("budget: envelope of %d calls not run — at most %d per envelope; Hermes was asked to split it", n, l.MaxCallsPerRound)
 	}
 	if left := l.MaxCalls - l.calls; l.MaxCalls > 0 && n > left {
-		return fmt.Sprintf(`{"error":"call budget: this envelope has %d calls, but the operator limited this turn to %d tool calls and only %d remain. NOTHING was run. Resend at most %d calls — the ones that matter most — or a final that says what is done, what is open and what a continuation must do."}`, n, l.MaxCalls, left, left),
+		return fmt.Sprintf(`{"error":"call budget: this envelope has %d calls, but the operator limited this turn to %d hands calls and only %d remain. NOTHING was run. Resend at most %d calls — the ones that matter most — or a final that says what is done, what is open and what a continuation must do."}`, n, l.MaxCalls, left, left),
 			fmt.Sprintf("budget: envelope of %d calls not run — only %d of %d calls left; Hermes was asked to resend at most %d", n, left, l.MaxCalls, left)
 	}
 	return "", ""
