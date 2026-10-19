@@ -189,7 +189,7 @@ func TestGoldenREPLCommands(t *testing.T) {
 		"/help", "/yolo", "/yolo", "/bogus",
 		"show me the readme", "o", "y",
 		"/out 2", "/out x", "/history 1", "/sessions", "/session",
-		"/debug on", "/debug off", "/check", "/config", "/compact", "/context", "/fork",
+		"/debug on", "/debug off", "/check", "/config", "/compact", "/compact agressive", "/compact-aggressive", "/context", "/fork",
 		"/new", "/history", "/exit",
 	}, "\n")+"\n"))
 }
@@ -214,7 +214,9 @@ func TestGoldenRPC(t *testing.T) {
 		`{"id":9,"type":"use","session":"hh_19990101T000000_000000"}`,
 		`{"id":10,"type":"new"}`,
 		`{"id":11,"type":"context"}`,
-		`{"id":12,"type":"bogus"}`,
+		`{"id":12,"type":"compact","text":"aggressive"}`,
+		`{"id":13,"type":"compact","text":"bogus"}`,
+		`{"id":14,"type":"bogus"}`,
 		`not json`,
 	}, "\n")+"\n"))
 }

@@ -41,5 +41,7 @@ hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
 {"id":9,"message":"no such session: <SESSION>","type":"error"}
 {"approvals":"off","hermes_session":"<HERMES-SESSION>","id":10,"session":"<SESSION>","type":"session"}
 {"checkpoint":"","context":0,"id":11,"measured":false,"messages":null,"n":0,"owned":false,"session":"<SESSION>","since":null,"type":"context","window":131072}
-{"id":12,"message":"unknown request type \"bogus\"","type":"error"}
+{"id":12,"message":"nothing to compact yet — no call output or turn to elide","ok":false,"session":"<SESSION>","type":"compact"}
+{"id":13,"message":"compact: text is \"\" or \"aggressive\"","type":"error"}
+{"id":14,"message":"unknown request type \"bogus\"","type":"error"}
 {"message":"invalid JSON request","type":"error"}

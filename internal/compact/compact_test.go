@@ -105,7 +105,7 @@ func TestOverflowSetsTheMeter(t *testing.T) {
 		t.Fatal(err)
 	}
 	log.Add(ev)
-	if !strings.HasPrefix(ev.Text, "compacted #1 · ~150k → ") {
+	if !strings.HasPrefix(ev.Text, "compacted #1 · ~150k → ") { // measured: the refused size
 		t.Errorf("note = %q", ev.Text)
 	}
 	k.Overflow(reason)
@@ -161,14 +161,68 @@ func TestCompactAutoKeepsTheLatestRounds(t *testing.T) {
 	if !strings.Contains(ev.Text, "outputs #1–#3 as lines") {
 		t.Errorf("note = %q", ev.Text)
 	}
-	// a tight window: everything elided, the oldest turns collapsed
-	k.Window = 60000
+	// a window too tight for the lines: everything elided, the older turns
+	// collapsed — never the latest
+	k.Window = 40000
 	ev, err = k.Compact(Auto)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ev.Collapse == 0 || ev.Collapse >= 4 {
-		t.Errorf("tight: collapse = %d (never the latest turn)", ev.Collapse)
+	if ev.Collapse != 3 {
+		t.Errorf("tight: collapse = %d, want 3 (never the latest turn)", ev.Collapse)
+	}
+}
+
+// /compact elides every output but collapses no turn while the lines leave
+// the prompt clearly below the trigger; /compact-aggressive collapses every
+// turn but the latest — and says so.
+func TestCompactNowCollapsesOnlyWhenNeeded(t *testing.T) {
+	k, log := newKeeper(t, 4)
+	ev, err := k.Compact(Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev = log.Add(ev)
+	if ev.Collapse != 0 || !strings.Contains(ev.Text, "outputs #1–#4 as lines") {
+		t.Errorf("now = collapse %d, %q", ev.Collapse, ev.Text)
+	}
+	ev, err = k.Compact(Aggressive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Collapse != 3 || !strings.HasPrefix(ev.Text, "compacted #2 (aggressive) · ") || !strings.Contains(ev.Text, "turns 1–3 as question + answer") {
+		t.Errorf("aggressive = collapse %d, %q", ev.Collapse, ev.Text)
+	}
+	cp, _ := k.Store.LoadChatCheckpoint(k.Rec, ev.Checkpoint)
+	if cp.Depth != "aggressive" {
+		t.Errorf("depth = %q", cp.Depth)
+	}
+	log.Add(ev)
+	if _, err := k.Compact(Aggressive); !errors.Is(err, ErrNothing) {
+		t.Errorf("nothing left to compact: err = %v", err)
+	}
+}
+
+// Without a meter reading the "before" is the whole log in full — said so,
+// it is more than hermes-agent ever held.
+func TestCompactSaysWhereBeforeComesFrom(t *testing.T) {
+	k, _ := newKeeper(t, 2)
+	ev, err := k.Compact(Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ev.Text, " · log ~") {
+		t.Errorf("no meter: %q", ev.Text)
+	}
+	k2, _ := newKeeper(t, 2)
+	k2.Rec.Context, k2.Rec.Measured = 50000, true
+	ev, _ = k2.Compact(Now)
+	if !strings.Contains(ev.Text, " · ~50k → ") {
+		t.Errorf("measured: %q", ev.Text)
+	}
+	cp, _ := k2.Store.LoadChatCheckpoint(k2.Rec, ev.Checkpoint)
+	if cp.BeforeFrom != "measured" {
+		t.Errorf("before_from = %q", cp.BeforeFrom)
 	}
 }
 

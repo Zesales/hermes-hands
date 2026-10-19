@@ -14,7 +14,8 @@
 //	{"id":6,"type":"debug","text":"on"}       redacted wire trace on / off / toggle
 //	{"id":7,"type":"approvals","text":"auto"} hands approvals auto | never ("" = report) — a runtime
 //	                                          switch: the next new / use starts from config / env / flags
-//	{"id":8,"type":"compact"}                 compact the session's chat now (a chat checkpoint, internal/compact)
+//	{"id":8,"type":"compact"}                 compact the session's chat now (a chat checkpoint, internal/compact);
+//	                                          "text":"aggressive" also turns every earlier turn into question + answer
 //	{"id":9,"type":"context"}                 what Hermes reads now
 //
 // Responses:
@@ -327,9 +328,19 @@ func (s *server) check(_ request, id any) {
 	s.emit(msg)
 }
 
-// compact compacts the held session's transcript now (internal/compact).
-func (s *server) compact(_ request, id any) {
-	ev, err := s.a.Keeper.Compact(compact.Now)
+// compact compacts the held session's chat now (internal/compact); text
+// "aggressive" also turns every earlier turn into question + answer.
+func (s *server) compact(req request, id any) {
+	d := compact.Now
+	switch req.Text {
+	case "":
+	case "aggressive":
+		d = compact.Aggressive
+	default:
+		s.emit(map[string]any{"type": "error", "id": id, "message": `compact: text is "" or "aggressive"`})
+		return
+	}
+	ev, err := s.a.Keeper.Compact(d)
 	if err != nil {
 		s.emit(map[string]any{"type": "compact", "id": id, "ok": false, "session": s.rec.ID, "message": err.Error()})
 		return
