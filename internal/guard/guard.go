@@ -6,9 +6,9 @@
 // (install the toolchain, clone the code, look around the server's
 // containers), which is work on the wrong machine.
 //
-// The default (steer, Strict) steers every server-side exec / file call back
-// to the hands. smart (Check) steers only what is clearly meant for the
-// operator's project. Deterministic, no model:
+// The default (steer, Strict) steers every server-side exec / file /
+// delegation call back to the hands. smart (Check) steers only what is
+// clearly meant for the operator's project. Deterministic, no model:
 //
 //   - it echoes a hands envelope through a tool ({"calls": …})
 //   - it names the operator's workspace or home path
@@ -20,8 +20,11 @@
 //
 // Separately, a hands tool (local_shell, …) that Hermes tries to call as one
 // of its own — via its tool_call / tool_search deferral mechanism, say — is
-// steered in every mode but show. Hermes' other tools (web, memory, cron,
-// delegation) are never steered.
+// steered in every mode but show. So is a placeholder call of any tool
+// (Placeholder: "noop", "Mcp Placeholder", a delegate_task of "noop check"),
+// made only to have called something — right after a steer, or to "check the
+// connection". Hermes' other tools (web, memory, skills, cron) are never
+// steered for real work.
 package guard
 
 import (
@@ -30,11 +33,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Modes for HERMES_HANDS_SANDBOX.
 const (
-	Steer = "steer" // steer every server-side exec / file call (default)
+	Steer = "steer" // steer every server-side exec / file / delegation call (default)
 	Smart = "smart" // steer only calls meant for the operator's project
 	Show  = "show"  // never steer — only show them
 )
@@ -42,17 +46,19 @@ const (
 // SandboxTools are Hermes' OWN tools that act on the API server's sandbox — a
 // shell and filesystem that are NOT the operator's machine. They stay usable
 // for server-side work; Check decides per call. `process` is the pre-v0.22
-// name of process_manage, still accepted by hermes-agent.
+// name of process_manage, still accepted by hermes-agent. delegate_task
+// counts: its sub-agents work in that sandbox too and never reach the hands.
 var SandboxTools = map[string]bool{
 	"terminal": true, "process_manage": true, "process": true,
 	"execute_code": true, "read_file": true, "write_file": true, "patch": true, "search_files": true,
+	"delegate_task": true,
 }
 
 // Verdict is the guard's answer for one of Hermes' tool.started events. Kind
-// groups steers so a run is steered at most once per kind of mistake.
+// groups steers so a run is steered only a few times per kind of mistake.
 type Verdict struct {
 	Steer   bool
-	Kind    string // "sandbox" | "hands-tool"
+	Kind    string // "sandbox" | "setup" | "hands-tool" | "placeholder"
 	Message string // the steer text sent to the run
 }
 
@@ -60,21 +66,24 @@ type Verdict struct {
 // Hermes' tool_call preview "Local Shell").
 var handsToolRe = regexp.MustCompile(`(?i)\blocal[ _-]?(shell|read|write|edit)\b`)
 
-const handsToolMsg = "[hermes-hands] `local_shell` / `local_read` / `local_write` / `local_edit` are not tools of yours — not even via tool_call or tool_search. They are names you put in your reply envelope, and the hands run them on the operator's machine: reply with {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell\",\"args\":{\"cmd\":\"…\"}}],\"final\":null}."
+const handsToolMsg = "[hermes-hands] `local_shell` / `local_read` / `local_write` / `local_edit` are not tools of yours — not via tool_call, not via tool_search, under no spelling: their \"not a known tool name\" error is final, a retry only burns the run. They are names you put in your reply envelope, and the hands run them on the operator's machine. No tool call answers this note: end this run with your reply {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell\",\"args\":{\"cmd\":\"…\"}}],\"final\":null}."
 
 // localWork is what every steer tells Hermes: where the work belongs, and
 // what to do when a tool is missing there.
-const localWork = "Everything for the operator's project — code, files, git, build, tests, its toolchain, its dependencies, its services — is on THEIR machine, reachable only through the hands: put it in a hands envelope {\"calls\":[...],\"final\":null}. A tool missing there: use the project's own way (make targets, docker, scripts), or end with a final that tells the operator what is missing and the exact command to install it (e.g. `sudo apt install …`) — never set it up in your sandbox."
+const localWork = "Everything for the operator's project — code, files, git, build, tests, its toolchain, its dependencies, its services — is on THEIR machine, reachable only through the hands: put it in a hands envelope {\"calls\":[...],\"final\":null}. A tool missing there: use the project's own way (make targets, docker, scripts), or end with a final that tells the operator what is missing and the exact command to install it (e.g. `sudo apt install …`) — never set it up in your sandbox. No tool call answers this note: your next reply is the envelope."
 
 const sandboxMsg = "[hermes-hands] your `%s` call ran in YOUR server sandbox, but %s. " + localWork
 
-const strictMsg = "[hermes-hands] your `%s` call ran in YOUR server sandbox — in a hands session your own exec and file tools are not for the work. " + localWork
+const strictMsg = "[hermes-hands] your `%s` call ran in YOUR server sandbox — in a hands session your own exec, file and delegation tools are not for the work. " + localWork
 
 // Check is the smart policy (HERMES_HANDS_SANDBOX=smart) for one of Hermes'
 // tool.started events: a hands tool called as if it were Hermes' own, or a
 // server-side exec / file call aimed at the operator's workspace (Targets).
 func Check(tool, preview, workspace, home string) Verdict {
 	if v := handsTool(tool, preview); v.Steer {
+		return v
+	}
+	if v := placeholder(tool, preview); v.Steer {
 		return v
 	}
 	if !SandboxTools[tool] {
@@ -118,10 +127,14 @@ func Setup(preview string) string {
 	return ""
 }
 
-// Strict is HERMES_HANDS_SANDBOX=steer: every server-side exec / file call is
-// steered, and so is a hands tool called as Hermes' own.
+// Strict is HERMES_HANDS_SANDBOX=steer: every server-side exec / file /
+// delegation call is steered, and so is a hands tool called as Hermes' own or
+// a placeholder call.
 func Strict(tool, preview string) Verdict {
 	if v := handsTool(tool, preview); v.Steer {
+		return v
+	}
+	if v := placeholder(tool, preview); v.Steer {
 		return v
 	}
 	if SandboxTools[tool] {
@@ -135,6 +148,43 @@ func handsTool(tool, preview string) Verdict {
 		return Verdict{Steer: true, Kind: "hands-tool", Message: handsToolMsg}
 	}
 	return Verdict{}
+}
+
+const placeholderMsg = "[hermes-hands] your `%s` call is a placeholder — no tool call is needed: not to check the connection (the hands are connected whenever you run; this run exists because they asked), not to answer a note. Your reply text is the envelope {\"calls\":[...],\"final\":null}: to check anything, make your first real call in it — its result is the check."
+
+func placeholder(tool, preview string) Verdict {
+	if Placeholder(preview) {
+		return Verdict{Steer: true, Kind: "placeholder", Message: fmt.Sprintf(placeholderMsg, tool)}
+	}
+	return Verdict{}
+}
+
+// What a do-nothing call is made of, as seen live: tool_call "Noop
+// Placeholder" / "Mcp Placeholder", terminal "echo placeholder",
+// delegate_task "1 tasks: noop check".
+var (
+	placeholderMarks = map[string]bool{"noop": true, "nop": true, "placeholder": true, "dummy": true}
+	placeholderFill  = map[string]bool{"check": true, "test": true, "ping": true, "mcp": true, "echo": true,
+		"true": true, "task": true, "tasks": true, "call": true, "tool": true}
+)
+
+// Placeholder reports whether a tool.started preview is nothing but a
+// placeholder: a mark (noop, placeholder, dummy) among filler words and
+// numbers only. A real task that merely mentions one ("research no-op
+// patterns") is not.
+func Placeholder(preview string) bool {
+	p := strings.NewReplacer("no-op", "noop", "no_op", "noop").Replace(strings.ToLower(preview))
+	mark := false
+	for _, w := range strings.FieldsFunc(p, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		switch {
+		case placeholderMarks[w]:
+			mark = true
+		case placeholderFill[w], strings.Trim(w, "0123456789") == "":
+		default:
+			return false
+		}
+	}
+	return mark
 }
 
 // repoGit are git subcommands that only make sense on an existing work tree —
