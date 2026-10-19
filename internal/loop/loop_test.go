@@ -264,7 +264,7 @@ func TestRoundBudgetNotes(t *testing.T) {
 	if out.OK {
 		t.Fatalf("want the capped BLOCKED outcome, got %+v", out)
 	}
-	// Ask 6 (5 rounds ran): inside the last-5 window — soft countdown.
+	// Ask 6 (5 rounds ran): inside the finish window — finish countdown.
 	if !strings.Contains(sa.msgs[5], "5/7 rounds used, 2 left") {
 		t.Errorf("ask 6 should carry the countdown, got: %q", trunc(sa.msgs[5], 300))
 	}
@@ -278,6 +278,71 @@ func TestRoundBudgetNotes(t *testing.T) {
 		t.Errorf("ask 8 should allow only a final, got: %q", trunc(sa.msgs[7], 300))
 	}
 	if !strings.Contains(l.PendingNote, "round budget (7 rounds)") {
+		t.Errorf("a capped turn should leave a resume note, got: %q", l.PendingNote)
+	}
+}
+
+func TestBudgetTiers(t *testing.T) {
+	l := &Loop{MaxRounds: 25, MaxCalls: 100}
+	for _, tc := range []struct {
+		next, calls int
+		want        string
+	}{
+		{next: 10, calls: 10, want: ""},                                      // far from both limits
+		{next: 16, calls: 10, want: "15/25 rounds used, 10 left"},            // last 40% of the rounds
+		{next: 16, calls: 10, want: "the operator's limit is getting close"}, // … a heads-up
+		{next: 5, calls: 75, want: "75/100 tool calls used, 25 left"},        // 75% of the calls
+		{next: 21, calls: 10, want: "Finish now"},                            // last 20% of the rounds
+		{next: 5, calls: 90, want: "Finish now"},                             // 90% of the calls
+		{next: 25, calls: 10, want: "LAST round (25/25)"},
+		{next: 26, calls: 10, want: "no tool rounds remain"},
+		{next: 5, calls: 100, want: "no tool calls remain"},
+	} {
+		l.calls = tc.calls
+		got := l.roundBudgetNote(tc.next)
+		if tc.want == "" && got != "" || !strings.Contains(got, tc.want) {
+			t.Errorf("roundBudgetNote(next=%d, calls=%d) = %q, want it to contain %q", tc.next, tc.calls, got, tc.want)
+		}
+	}
+	if f := l.frameBudget(); !strings.Contains(f, "the operator limited this turn to 25 rounds") || !strings.Contains(f, "100 tool calls") {
+		t.Errorf("frameBudget = %q", f)
+	}
+	if (&Loop{}).frameBudget() != "" || (&Loop{}).roundBudgetNote(99) != "" {
+		t.Errorf("no limits set must mean no budget text")
+	}
+}
+
+func TestOversizeEnvelopeRunsNothing(t *testing.T) {
+	big := `{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}},{"tool":"read_file","args":{"path":"foo.txt"}},{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`
+	sa := &scriptAsker{replies: []api.AskResult{reply(big, true), reply(`{"calls":[],"final":"done"}`, true)}}
+	var ran int
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 8, MaxCallsPerRound: 2,
+		Emit: func(ev session.Event) {
+			if ev.Kind == session.KindCall {
+				ran++
+			}
+		}}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "done" {
+		t.Fatalf("out = %+v", out)
+	}
+	if ran != 0 || out.Calls != 0 || out.Rounds != 2 {
+		t.Errorf("an envelope over the per-envelope cap must run nothing: ran=%d calls=%d rounds=%d", ran, out.Calls, out.Rounds)
+	}
+	if !strings.Contains(sa.msgs[1], "NOTHING was run") || !strings.Contains(sa.msgs[1], "at most 2 per envelope") {
+		t.Errorf("Hermes should be told why, got: %q", trunc(sa.msgs[1], 300))
+	}
+}
+
+func TestRunCallsCap(t *testing.T) {
+	callEnv := reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true)
+	sa := &scriptAsker{replies: []api.AskResult{callEnv}} // repeats forever
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxCalls: 3}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if out.OK || out.Answer != "BLOCKED: Hermes still requesting tool calls after 3 calls." || out.Calls != 3 {
+		t.Fatalf("out = %+v", out)
+	}
+	if !strings.Contains(l.PendingNote, "call budget (3 tool calls)") {
 		t.Errorf("a capped turn should leave a resume note, got: %q", l.PendingNote)
 	}
 }

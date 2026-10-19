@@ -84,7 +84,8 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 	}
 	lp := &loop.Loop{
 		API: client.Runs(), Dispatch: disp,
-		MaxRounds: cfg.MaxRounds, Scrub: redact.Scrub,
+		MaxRounds: cfg.MaxRounds, MaxCalls: cfg.MaxCalls, MaxCallsPerRound: cfg.MaxCallsPerRound,
+		Scrub:    redact.Scrub,
 		RepoRoot: repoRoot, GitBranch: func() string { return gitBranch(repoRoot) },
 		Vlogf: vlogf, Warnf: Warnf,
 		OnResult: func(tool, out string, exit int) {

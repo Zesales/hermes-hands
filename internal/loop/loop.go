@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -33,9 +32,16 @@ type Loop struct {
 
 	// OnResult sees each dispatched tool result (tool, raw output, exit code).
 	// The knowsystem learner uses it to catch 127 "command not found" facts.
-	OnResult  func(tool, output string, exit int)
-	MaxRounds int
-	Scrub     func(string) string
+	OnResult func(tool, output string, exit int)
+	Scrub    func(string) string
+
+	// The operator's budget per turn (0 = no limit), see budget.go: rounds =
+	// requests to Hermes, calls = hands calls run, and calls per envelope.
+	MaxRounds, MaxCalls, MaxCallsPerRound int
+
+	// OnProgress, when set, sees where the turn stands against the budget —
+	// at every request to Hermes and after every call (the spinner, rpc).
+	OnProgress func(Progress)
 
 	// Emit, when set, receives every hands call as two events: KindCall right
 	// BEFORE it runs (so the operator sees what is running, not only what
@@ -69,6 +75,9 @@ type Loop struct {
 
 	Vlogf func(string, ...any)
 	Warnf func(string, ...any)
+
+	rounds, calls int // this turn so far — reset by Run
+	noted         int // the highest budget tier the operator was told about this turn
 }
 
 func (l *Loop) paused() time.Duration {
@@ -111,17 +120,7 @@ func (l *Loop) frame(userMsg string) string {
 		"output to call) — or {\"calls\":[],\"final\":\"...\"} once it is solved. Not a\n" +
 		"chat reply, not a description of yourself or your tools. If you do not know\n" +
 		"the directory yet, your instruction is a look — `local_shell` (ls / git / rg)\n" +
-		"or `local_read`." + l.budgetNote()
-}
-
-// budgetNote is the round-budget line of the task frame: the model plans
-// against a known ceiling instead of discovering it as a BLOCKED wall. One
-// sentence — it must not crowd out the task it wraps.
-func (l *Loop) budgetNote() string {
-	if l.MaxRounds <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("\n\nThis turn has a tool-round budget of %d envelopes with calls; batch several calls per envelope and plan before large writes — a final that says what is unfinished beats being stopped at the limit.", l.MaxRounds)
+		"or `local_read`." + l.frameBudget()
 }
 
 // Outcome is the turn result. OK == false means Answer is a "BLOCKED: ..."
@@ -129,6 +128,8 @@ func (l *Loop) budgetNote() string {
 type Outcome struct {
 	Answer string
 	OK     bool
+
+	Rounds, Calls int // requests to Hermes and hands calls this turn took
 }
 
 const (
@@ -162,7 +163,9 @@ func (c callSpec) id() string { return firstNonEmpty(c.ID, c.CallID) }
 // every completed api.Ask with (runID, serverSessionID) so the caller can bump
 // the local index and adopt a re-issued session id (mutating rec, which Run
 // re-reads next round).
-func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string, tokens int)) Outcome {
+func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string, tokens int)) (out Outcome) {
+	l.rounds, l.calls, l.noted = 0, 0, tierNone
+	defer func() { out.Rounds, out.Calls = l.rounds, l.calls }()
 	round := 1
 	send := l.frame(userMsg)
 	if l.ResumeNote != "" { // resumed session, server history gone — replay local copy
@@ -175,10 +178,12 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 	}
 	turnlog := "[operator] " + userMsg + "\n"
 	recap := false
-	fixups := 0
+	fixups, rejects := 0, 0
 
 	for {
 		l.vlogf("round %d -> Hermes", round)
+		l.rounds = round
+		l.progress()
 
 		msg := send
 		if recap {
@@ -255,82 +260,27 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			return Outcome{Answer: "BLOCKED: Hermes returned an empty envelope repeatedly.", OK: false}
 		}
 
-		if round > l.MaxRounds {
-			// Tell the NEXT turn where this one stopped: a capped turn is
-			// unfinished work, not a failed one — a "continue" should resume,
-			// not redo completed steps.
-			l.PendingNote = fmt.Sprintf("[the previous turn was stopped at its round budget (%d rounds) while still requesting tool calls — the work is unfinished. If the operator asks to continue, resume from where it stopped instead of re-doing completed steps.]", l.MaxRounds)
-			return Outcome{Answer: fmt.Sprintf("BLOCKED: Hermes still requesting data after %d rounds.", l.MaxRounds), OK: false}
+		if o, stop := l.capped(round); stop {
+			return o
+		}
+		if why, note := l.oversize(callsN); why != "" {
+			// All or nothing: an envelope over the budget runs not at all, so
+			// no half-run batch (file A edited, the dependent B not) remains.
+			if rejects >= maxFixups {
+				return Outcome{Answer: "BLOCKED: Hermes kept sending envelopes over the call budget.", OK: false}
+			}
+			rejects++
+			l.noteOperator(note)
+			send = why + "\n" + questionNote(userMsg) + l.roundBudgetNote(round+1)
+			turnlog += fmt.Sprintf("[round %d] (envelope of %d calls over the budget, nothing run)\n", round, callsN)
+			round++
+			continue
 		}
 
 		l.vlogf("round %d: %d call(s)", round, callsN)
-
-		// Correlation id per call. Hermes may send its own `id`; we keep it when
-		// present and unique, otherwise assign a positional `c<N>`. results[]
-		// always carries the (possibly synthesized) id so Hermes can map each
-		// output back to the call it asked for — same role as OpenAI's
-		// tool_call_id / split-runtime's tool_call.request id.
-		usedIDs := make(map[string]bool, callsN)
-		mkID := func(i int, sent string) string {
-			id := strings.TrimSpace(sent)
-			if id == "" || usedIDs[id] {
-				id = fmt.Sprintf("c%d", i+1)
-			}
-			for usedIDs[id] {
-				id += "'"
-			}
-			usedIDs[id] = true
-			return id
-		}
-
-		elems := make([]resultElem, 0, callsN)
-		l.Dispatch.NextRound() // rules handed out before now were seen when this batch was written
-		for i := 0; i < callsN; i++ {
-			id := mkID(i, calls[i].id())
-			tool := firstNonEmpty(calls[i].Tool, calls[i].Name)
-			if c := dispatch.Canonical(tool); c != "" {
-				tool = c // events, results and the terminal speak local_*
-			}
-			args := callArgs(calls[i])
-			l.Ref++
-			ref := l.Ref
-			l.emit(session.Event{Kind: session.KindCall, Ref: ref, ID: id, Tool: tool, Args: args})
-
-			start, held := time.Now(), l.paused()
-			result, derr := l.Dispatch.Dispatch(tool, args)
-			ran := max(time.Since(start)-(l.paused()-held), 0).Milliseconds()
-			if errors.Is(derr, dispatch.ErrAbortTurn) {
-				l.emit(session.Event{Kind: session.KindResult, Ref: ref, Tool: tool, Exit: session.Int(125),
-					Ms: ran, Out: "(declined by the operator — turn stopped)"})
-				// Ctrl-C / "q" at an approval = decline this call AND stop the
-				// turn. Nothing more runs; Hermes is told at the start of the
-				// next turn so its transcript stays coherent.
-				l.PendingNote = "[the previous turn was cancelled by the operator at the \"" + tool +
-					"\" approval — that call was declined and nothing further was run. Treat it as not done.]"
-				return Outcome{Answer: "(cancelled — declined " + tool + " and stopped the turn)", OK: true}
-			}
-			out := l.scrub(result.Out)
-			l.emit(session.Event{Kind: session.KindResult, Ref: ref, Tool: tool, Exit: session.Int(result.Exit),
-				Ms: ran, Out: out})
-			if l.OnResult != nil { // knowsystem learner: sees raw output + exit
-				l.OnResult(tool, result.Out, result.Exit)
-			}
-
-			e := resultElem{
-				ID:       id,
-				Ref:      ref,
-				Tool:     tool,
-				Args:     args,
-				ExitCode: result.Exit,
-				Output:   out,
-			}
-			if c := l.scrub(result.Ctx); c != "" {
-				e.Context = &c
-			}
-			elems = append(elems, e)
-
-			turnlog += fmt.Sprintf("[round %d]   %s [%s](%s) -> exit %d: %s\n",
-				round, tool, id, trunc(string(args), 120), result.Exit, trunc(oneLine(e.Output), 160))
+		elems, stopped := l.runCalls(calls, round, &turnlog)
+		if stopped != nil {
+			return *stopped
 		}
 
 		payload, _ := marshalNoHTML(resultsPayload{Results: elems})
@@ -348,22 +298,9 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 			questionNote(userMsg) +
 			" Now give the operator your answer in final — or another instruction if you need" +
 			" more.\n" + string(payload) + l.roundBudgetNote(round+1)
+		l.announce(round + 1)
 		round++
 	}
-}
-
-type resultElem struct {
-	ID       string          `json:"id"`
-	Ref      int             `json:"ref"` // the session-wide #ref the operator sees
-	Tool     string          `json:"tool"`
-	Args     json.RawMessage `json:"args"`
-	ExitCode int             `json:"exit_code"`
-	Output   string          `json:"output"`
-	Context  *string         `json:"context,omitempty"`
-}
-
-type resultsPayload struct {
-	Results []resultElem `json:"results"`
 }
 
 // extractObj ports _hh_extract_obj: strip ```json / ``` fences, then either the
@@ -473,30 +410,6 @@ func oneLine(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	return strings.TrimSpace(s)
-}
-
-// roundBudgetNote is the countdown to the round cap, appended to the results
-// payload when the ceiling gets close: a soft nudge for the last 5 rounds
-// (finish, or plan the continuation), a heads-up before the last round whose
-// calls still run, and once none is left a hard instruction that the reply must
-// be a final. Making the ceiling visible
-// while rounds are still left is what turns the cap from a punishment into a
-// planning input — the model batches calls or lands a clean final instead of
-// burning a round to hit the wall.
-func (l *Loop) roundBudgetNote(nextRound int) string {
-	if l.MaxRounds <= 0 {
-		return ""
-	}
-	left := l.MaxRounds - nextRound + 1
-	switch {
-	case left <= 0:
-		return "\n[round budget: no tool rounds remain — your reply must be {\"calls\":[],\"final\":\"...\"} stating what is done and what a continuation must do.]"
-	case left == 1:
-		return fmt.Sprintf("\n[round budget: your next envelope is the LAST round (%d/%d) whose calls still run — put everything you still need into it. After its results your reply must be {\"calls\":[],\"final\":\"...\"} stating what is done and what a continuation must do.]", nextRound, l.MaxRounds)
-	case left > 1 && left <= 5:
-		return fmt.Sprintf("\n[round budget: %d/%d rounds used, %d left. Finish now, or batch the remaining calls and land a final that says what the continuation must do.]", nextRound-1, l.MaxRounds, left)
-	}
-	return ""
 }
 
 // questionNote restates the operator's original question. Appended to every

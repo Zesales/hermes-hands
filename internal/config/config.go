@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+// The operator's budget per turn (internal/loop): requests to Hermes, hands
+// calls, and calls per envelope. Hermes sees it from the start and a countdown
+// once it gets close; 0 = no limit.
+const (
+	DefaultMaxRounds        = 25
+	DefaultMaxCalls         = 100
+	DefaultMaxCallsPerRound = 20
+)
+
 // flags holds command-line overrides (SetFlag) — the strongest layer Load
 // resolves.
 var flags = map[string]string{}
@@ -47,6 +56,7 @@ type Config struct {
 	Stream                                string // HERMES_HANDS_STREAM: "" / auto | on | off
 	Deny                                  []string
 	MaxRounds, RunTimeout, MaxOutput      int
+	MaxCalls, MaxCallsPerRound            int // the turn's call budget (MaxRounds: its requests)
 
 	// ResponseTimeout is how long hermes-agent may go silent within one turn
 	// before the REPL's watchdog cancels it (HERMES_HANDS_RESPONSE_TIMEOUT,
@@ -136,15 +146,17 @@ func Load() (*Config, error) {
 		RetentionDays:    intOr(merged["HERMES_HANDS_RETENTION_DAYS"], 14),
 		InstrPath:        firstNonEmpty(merged["HERMES_HANDS_INSTRUCTIONS"], home+"/instructions.md"),
 
-		ConnectTimeout: secondsOr(merged["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
-		MaxTime:        secondsOr(merged["HERMES_API_MAX_TIME"], 30*time.Second),
-		PollInterval:   secondsOr(merged["HERMES_API_POLL_INTERVAL"], 2*time.Second),
-		APIRunTimeout:  secondsOr(merged["HERMES_API_RUN_TIMEOUT"], 600*time.Second),
-		APIRetries:     intOr(merged["HERMES_API_RETRIES"], 3),
-		MaxRounds:      intOr(merged["HERMES_HANDS_MAX_ROUNDS"], 25),
-		RunTimeout:     intOr(merged["HERMES_HANDS_RUN_TIMEOUT"], 120),
-		MaxOutput:      intOr(merged["HERMES_HANDS_MAX_OUTPUT"], 20000),
-		StateDir:       firstNonEmpty(merged["HERMES_HANDS_STATE"], home),
+		ConnectTimeout:   secondsOr(merged["HERMES_API_CONNECT_TIMEOUT"], 5*time.Second),
+		MaxTime:          secondsOr(merged["HERMES_API_MAX_TIME"], 30*time.Second),
+		PollInterval:     secondsOr(merged["HERMES_API_POLL_INTERVAL"], 2*time.Second),
+		APIRunTimeout:    secondsOr(merged["HERMES_API_RUN_TIMEOUT"], 600*time.Second),
+		APIRetries:       intOr(merged["HERMES_API_RETRIES"], 3),
+		MaxRounds:        intOr(merged["HERMES_HANDS_MAX_ROUNDS"], DefaultMaxRounds),
+		MaxCalls:         intOr(merged["HERMES_HANDS_MAX_CALLS"], DefaultMaxCalls),
+		MaxCallsPerRound: intOr(merged["HERMES_HANDS_MAX_CALLS_PER_ROUND"], DefaultMaxCallsPerRound),
+		RunTimeout:       intOr(merged["HERMES_HANDS_RUN_TIMEOUT"], 120),
+		MaxOutput:        intOr(merged["HERMES_HANDS_MAX_OUTPUT"], 20000),
+		StateDir:         firstNonEmpty(merged["HERMES_HANDS_STATE"], home),
 
 		Home:          home,
 		ConfigPath:    cfgPath,

@@ -66,7 +66,9 @@ func Describe(cfg *Config) string {
 		{"HERMES_HANDS_RETENTION_DAYS", retention(cfg.RetentionDays)},
 		{"HERMES_HANDS_DEBUG", onOff(cfg.Debug)},
 		{"HERMES_HANDS_SANDBOX", cfg.Sandbox},
-		{"HERMES_HANDS_MAX_ROUNDS", strconv.Itoa(cfg.MaxRounds)},
+		{"HERMES_HANDS_MAX_ROUNDS", limit(cfg.MaxRounds)},
+		{"HERMES_HANDS_MAX_CALLS", limit(cfg.MaxCalls)},
+		{"HERMES_HANDS_MAX_CALLS_PER_ROUND", limit(cfg.MaxCallsPerRound)},
 		{"HERMES_HANDS_RUN_TIMEOUT", strconv.Itoa(cfg.RunTimeout) + "s"},
 		{"HERMES_API_RUN_TIMEOUT", secs(cfg.APIRunTimeout)},
 		{"HERMES_HANDS_MAX_OUTPUT", strconv.Itoa(cfg.MaxOutput)},
@@ -83,6 +85,13 @@ func source(cfg *Config, key string) string {
 		return "(" + s + ")"
 	}
 	return "(default)"
+}
+
+func limit(n int) string {
+	if n <= 0 {
+		return "no limit"
+	}
+	return strconv.Itoa(n)
 }
 
 func retention(days int) string {

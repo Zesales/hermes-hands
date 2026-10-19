@@ -25,10 +25,9 @@ const (
 // this list. These are the delegation loop, the SSE stream and the brief —
 // split them when they are next changed for a reason of their own.
 var overBudget = map[string]int{
-	"internal/loop/loop.go:Loop.Run":            189,
+	"internal/loop/loop.go:Loop.Run":            139,
 	"internal/api/stream.go:Client.streamRun":   144,
 	"internal/knowsystem/brief.go:System.Brief": 102,
-	"internal/loop/loop.go":                     527,
 }
 
 func TestSizeBudget(t *testing.T) {

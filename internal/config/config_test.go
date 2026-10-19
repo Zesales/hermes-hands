@@ -21,7 +21,7 @@ func clearEnv(t *testing.T) {
 		"HERMES_HANDS_RUN_TIMEOUT", "HERMES_HANDS_MAX_OUTPUT", "HERMES_HANDS_STREAM",
 		"HERMES_HANDS_RESPONSE_TIMEOUT", "HERMES_HANDS_WATCHDOG_INTERVAL",
 		"HERMES_HANDS_DEBUG", "HERMES_HANDS_RETENTION_DAYS", "HERMES_HANDS_SANDBOX",
-		"HERMES_HANDS_HOME",
+		"HERMES_HANDS_HOME", "HERMES_HANDS_MAX_CALLS", "HERMES_HANDS_MAX_CALLS_PER_ROUND",
 	} {
 		t.Setenv(k, "")
 	}
@@ -37,7 +37,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.Approve != "ask" {
 		t.Errorf("Approve = %q, want ask", c.Approve)
 	}
-	if c.MaxRounds != 25 || c.RunTimeout != 120 || c.MaxOutput != 20000 || c.APIRetries != 3 {
+	if c.MaxRounds != 25 || c.MaxCalls != 100 || c.MaxCallsPerRound != 20 || c.RunTimeout != 120 || c.MaxOutput != 20000 || c.APIRetries != 3 {
 		t.Errorf("int defaults wrong: %+v", c)
 	}
 	if c.ConnectTimeout != 5*time.Second || c.MaxTime != 30*time.Second ||

@@ -98,6 +98,16 @@ docker) through `| tail` / `| head`: that keeps them silent until the end and
 the silence timeout cuts them off — give a `timeout` instead; the operator
 already gets a short excerpt of every output, you get it in full (capped).
 
+**Budget.** The operator limits every turn: a number of rounds, of tool
+calls, and of calls per envelope — the task frame states them, and the
+results count down once the end gets close. An envelope over the budget is
+not run at all (none of its calls), so it only costs you a round. Plan
+against the limit: the important steps first, independent calls batched, and
+before the end a `final` that says what is done, what is open and what the
+next turn must do — that note is what a continuation (and a compacted
+context) builds on. A turn stopped at its limit is unfinished work, not a
+failure; the operator's "continue" opens a fresh budget.
+
 ## Which machine
 
 Two machines are in play — pick by **where the work belongs**, not by which

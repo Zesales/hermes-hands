@@ -26,7 +26,7 @@ func TestFormatConfig(t *testing.T) {
 		"sessions     : /app/hh/sessions",
 		"(built-in default)",
 		"default < config < env < flag < runtime",
-		"(default)", "(env)",
+		"HERMES_HANDS_MAX_CALLS", "(default)", "(env)",
 		"HERMES_HANDS_RESPONSE_TIMEOUT", "600s",
 		"HERMES_HANDS_WATCHDOG_INTERVAL", "200s",
 		"https://hermes-api.example.net",
