@@ -15,7 +15,8 @@ func (c *Config) Configured() bool { return !LooksUnset(c.APIURL) && !LooksUnset
 
 // Describe renders the read-only `/config` view: the files hermes-hands
 // reads, and the effective value of every hand-tunable knob with its env-var
-// name. It never offers to write anything — the operator edits the config file
+// name and the layer it came from (default / config / env / flag / runtime).
+// It never offers to write anything — the operator edits the config file
 // directly, so a fat-fingered `/config KEY=value` can't wedge the install.
 func Describe(cfg *Config) string {
 	none := func(s string) string {
@@ -54,7 +55,7 @@ func Describe(cfg *Config) string {
 	fmt.Fprintf(&b, "  secrets      : %s\n", secrets)
 	fmt.Fprintf(&b, "  instructions : %s\n", instr)
 	fmt.Fprintf(&b, "  sessions     : %s\n", filepath.Join(cfg.StateDir, "sessions"))
-	b.WriteString("\n  effective settings — edit the config file by hand; hermes-hands never writes these:\n")
+	b.WriteString("\n  effective settings — default < config < env < flag < runtime (runtime switches are never saved):\n")
 	for _, r := range [][2]string{
 		{"HERMES_API_URL", none(cfg.APIURL)},
 		{"HERMES_API_PROFILE", none(cfg.APIProfile)},
@@ -71,9 +72,17 @@ func Describe(cfg *Config) string {
 		{"HERMES_HANDS_MAX_OUTPUT", strconv.Itoa(cfg.MaxOutput)},
 		{"HERMES_HANDS_DENY", none(strings.Join(cfg.Deny, " | "))},
 	} {
-		fmt.Fprintf(&b, "    %-30s %s\n", r[0], r[1])
+		fmt.Fprintf(&b, "    %-33s %-24s %s\n", r[0], r[1], source(cfg, r[0]))
 	}
 	return b.String()
+}
+
+// source names the layer a key came from; no entry is the built-in default.
+func source(cfg *Config, key string) string {
+	if s := cfg.Sources[key]; s != "" {
+		return "(" + s + ")"
+	}
+	return "(default)"
 }
 
 func retention(days int) string {

@@ -89,22 +89,44 @@ func TestWatchdogKnobsFromConfigFile(t *testing.T) {
 	}
 }
 
-func TestConfigFileOverridesEnvForLiveKeys(t *testing.T) {
+func TestLayersDefaultConfigEnvFlag(t *testing.T) {
 	clearEnv(t)
+	t.Cleanup(func() { flags = map[string]string{} })
 	home := t.TempDir()
 	t.Setenv("HERMES_HANDS_HOME", home)
 	mustWrite(t, filepath.Join(home, "config"),
-		"HERMES_API_PROFILE=fromfile\nHERMES_HANDS_APPROVE=never\n")
+		"HERMES_API_PROFILE=fromfile\nHERMES_HANDS_APPROVE=never\nHERMES_HANDS_MAX_ROUNDS=40\nHERMES_HANDS_DEBUG=1\n")
 	t.Setenv("HERMES_API_PROFILE", "fromenv")
+	t.Setenv("HERMES_HANDS_MAX_ROUNDS", "3")
+	t.Setenv("HERMES_HANDS_DEBUG", "")      // empty = unset: never blanks the config value
 	t.Setenv("HERMES_API_URL", "https://x") // non-empty so secrets file is not consulted
 	t.Setenv("HERMES_API_KEY", "k")
 
 	c, _ := Load()
-	if c.APIProfile != "fromfile" {
-		t.Errorf("APIProfile = %q, want fromfile (config file wins)", c.APIProfile)
+	if c.APIProfile != "fromenv" || c.MaxRounds != 3 {
+		t.Errorf("APIProfile = %q, MaxRounds = %d — want fromenv / 3 (env wins over the config file)", c.APIProfile, c.MaxRounds)
 	}
-	if c.Approve != "never" {
-		t.Errorf("Approve = %q, want never", c.Approve)
+	if c.Approve != "never" || !c.Debug {
+		t.Errorf("Approve = %q, Debug = %v — want never / on (from the config file)", c.Approve, c.Debug)
+	}
+	if c.Sources["HERMES_API_PROFILE"] != "env" || c.Sources["HERMES_HANDS_APPROVE"] != "config" || c.Sources["HERMES_HANDS_SANDBOX"] != "" {
+		t.Errorf("Sources = %v", c.Sources)
+	}
+
+	// --yolo: a flag wins over env and config.
+	t.Setenv("HERMES_HANDS_APPROVE", "ask")
+	SetFlag("HERMES_HANDS_APPROVE", "auto")
+	c, _ = Load()
+	if c.Approve != "auto" || c.Sources["HERMES_HANDS_APPROVE"] != "flag" {
+		t.Errorf("Approve = %q from %q, want auto from flag", c.Approve, c.Sources["HERMES_HANDS_APPROVE"])
+	}
+}
+
+func TestSwitchOn(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "0": false, "off": false, "False": false, "no": false, "1": true, "on": true, "yes": true} {
+		if switchOn(v) != want {
+			t.Errorf("switchOn(%q) = %v, want %v", v, !want, want)
+		}
 	}
 }
 

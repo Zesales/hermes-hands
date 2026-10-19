@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	"hermes-hands/internal/config"
 	"hermes-hands/internal/repl"
 	"hermes-hands/internal/rpc"
 	"hermes-hands/internal/setup"
@@ -24,7 +25,9 @@ type Build struct {
 func Main(args []string, b Build) int {
 	p := parseArgs(args)
 	if p.yolo {
-		// Exported before config.Load so nested config parsing sees it too.
+		// A flag: wins over the environment and the config file. Also
+		// exported, so a hermes-hands started from the hands' shell sees it.
+		config.SetFlag("HERMES_HANDS_APPROVE", "auto")
 		_ = os.Setenv("HERMES_HANDS_APPROVE", "auto")
 	}
 
