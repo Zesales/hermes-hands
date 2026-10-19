@@ -410,6 +410,48 @@ func TestRunOperatorQuestionSurvivesFalseThreading(t *testing.T) {
 	}
 }
 
+func stoppedRun() api.AskResult {
+	return api.AskResult{State: "stopped", RunID: "run_s", Threaded: true, Stopped: "`tool_call` Local Shell"}
+}
+
+// a run hermes-hands stopped (Hermes kept calling its own tool for the
+// hands' work past its steers) is asked again: the same message, a
+// correction in front — not the end of the turn
+func TestRunStoppedRunIsAskedAgain(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{stoppedRun(), reply(`{"calls":[],"final":"done"}`, true)}}
+	var notes []string
+	l := &Loop{API: sa, MaxRounds: 8, Emit: func(ev session.Event) {
+		if ev.Kind == session.KindNote {
+			notes = append(notes, ev.Text)
+		}
+	}}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "done" || out.Rounds != 2 {
+		t.Fatalf("out = %+v", out)
+	}
+	want := fmt.Sprintf(stoppedNote, "`tool_call` Local Shell") + "hello"
+	if sa.msgs[1] != want {
+		t.Errorf("round 2 msg = %q, want %q", sa.msgs[1], want)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "run stopped") || !strings.Contains(notes[0], "(1/2)") {
+		t.Errorf("notes = %q", notes)
+	}
+}
+
+// past maxStops the turn ends — and a run stopped twice is asked again with
+// one correction, not two stacked
+func TestRunStoppedTooOftenBlocks(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{stoppedRun()}} // repeats
+	out, _, _ := run(t, sa, nil, 8)
+	if out.OK || !strings.Contains(out.Answer, "BLOCKED: Hermes kept calling its own tools") ||
+		!strings.Contains(out.Answer, "stopped 3 runs") || len(sa.msgs) != maxStops+1 {
+		t.Fatalf("out = %+v after %d requests", out, len(sa.msgs))
+	}
+	if n := strings.Count(sa.msgs[2], stoppedMark); n != 1 || !strings.HasSuffix(sa.msgs[2], "hello") {
+		t.Errorf("round 3 msg carries %d corrections: %q", n, sa.msgs[2])
+	}
+}
+
 func TestRunResultsShape(t *testing.T) {
 	sa := &scriptAsker{replies: []api.AskResult{
 		reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),

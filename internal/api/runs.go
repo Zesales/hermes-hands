@@ -33,6 +33,10 @@ type AskResult struct {
 	// tools, each one more model call in the run. -1 when the run was
 	// polled: nothing says how many model calls it took.
 	HermesTools int
+	// Stopped is set when hermes-hands stopped the run itself (State
+	// "stopped", no Text): Hermes kept making a mistake past its steers —
+	// the call that did it, e.g. "`tool_call` Local Shell".
+	Stopped string
 }
 
 // Message is one entry of a run's conversation_history.

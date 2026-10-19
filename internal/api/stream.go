@@ -84,7 +84,7 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	rs := &runStream{c: c, ctx: ctx, base: base, runID: runID, threaded: threaded, steered: map[string]bool{}}
+	rs := &runStream{c: c, ctx: ctx, base: base, runID: runID, threaded: threaded, steered: map[string]int{}}
 	var data strings.Builder
 	for sc.Scan() {
 		line := sc.Text()
@@ -115,6 +115,9 @@ func (c *Client) streamRun(ctx context.Context, base, runID string, threaded boo
 		return AskResult{}, err
 	}
 	// stream ended without a terminal event
+	if rs.stopping != "" {
+		return rs.stopped(), nil
+	}
 	if rs.sawDelta {
 		return AskResult{}, fmt.Errorf("stream ended before run.completed")
 	}
@@ -129,8 +132,24 @@ type runStream struct {
 	threaded    bool
 	answer      strings.Builder
 	sawDelta    bool
-	tools       int             // Hermes' own server tools this run: one more model call each
-	steered     map[string]bool // the guard steers a run once per kind of mistake; repeats are only reported
+	tools       int            // Hermes' own server tools this run: one more model call each
+	steered     map[string]int // steers sent this run, per kind of mistake (steersPerKind)
+	stopping    string         // set once hermes-hands stopped the run: the call that made it
+}
+
+// steersPerKind caps the steers a run gets for one kind of mistake. One was
+// not enough: seen live, a model steered once kept calling tool_call "Local
+// Shell" seven more times — after each, hermes-agent's own error invites a
+// retry under the exact name — until hermes-agent's retry guard ended the
+// turn. Five, because a model often does catch itself after a few; past the
+// cap the run is stopped, and the loop asks again with a
+// correction (loop.stopped); a repeat is only reported when the server
+// refuses the stop.
+const steersPerKind = 5
+
+// stopped is the result of a run hermes-hands stopped itself.
+func (rs *runStream) stopped() AskResult {
+	return AskResult{State: "stopped", RunID: rs.runID, Threaded: rs.threaded, HermesTools: rs.tools, Stopped: rs.stopping}
 }
 
 // frame handles one SSE frame's data: done when the run ended (a result or
@@ -163,7 +182,11 @@ func (rs *runStream) frame(raw string) (AskResult, bool, error) {
 		}
 	case "tool.started":
 		rs.tools++
-		c.hermesTool(rs.ctx, rs.base, rs.runID, e, rs.steered)
+		if rs.stopping == "" && c.hermesTool(rs.ctx, rs.base, rs.runID, e, rs.steered) {
+			preview := []rune(strings.Join(strings.Fields(e.Preview), " "))
+			rs.stopping = "`" + e.Tool + "` " + string(preview[:min(len(preview), 60)])
+		}
+		// once stopped, the rest of the run is only waited out
 	case "approval.request":
 		c.serverApproval(rs.ctx, rs.base, rs.runID, e)
 	case "run.completed", "response.completed", "done":
@@ -172,8 +195,12 @@ func (rs *runStream) frame(raw string) (AskResult, bool, error) {
 			out = rs.answer.String()
 		}
 		if strings.TrimSpace(out) == "" {
+			if rs.stopping != "" {
+				return rs.stopped(), true, nil
+			}
 			return AskResult{}, true, fmt.Errorf("stream completed with empty output")
 		}
+		// a reply that made it before the stop took effect is used as is
 		return AskResult{
 			State: "completed", Text: out, RunID: rs.runID,
 			SessionID: e.SessionID, Threaded: rs.threaded,
@@ -181,6 +208,9 @@ func (rs *runStream) frame(raw string) (AskResult, bool, error) {
 			HermesTools: rs.tools,
 		}, true, nil
 	case "run.failed", "run.cancelled", "error":
+		if rs.stopping != "" {
+			return rs.stopped(), true, nil
+		}
 		m := firstNonEmptyStr(e.Error, e.Message, "run failed")
 		return AskResult{}, true, fmt.Errorf("run %s: %s", rs.runID, m)
 	}
@@ -208,9 +238,11 @@ func (c *Client) serverApproval(ctx context.Context, base, runID string, e sseEv
 }
 
 // hermesTool handles one of Hermes' OWN server tool calls: the sandbox guard
-// steers a call aimed at the operator's machine back to the hands (once per
-// kind of mistake a run; steered remembers), and the turn is told.
-func (c *Client) hermesTool(ctx context.Context, base, runID string, e sseEvent, steered map[string]bool) {
+// steers a call aimed at the operator's machine back to the hands (up to
+// steersPerKind times per kind of mistake a run; steered counts) and stops
+// the run past that (true), and the turn is told — "steered" when a steer
+// went out, "stopped", or "repeat" when the server refused the stop.
+func (c *Client) hermesTool(ctx context.Context, base, runID string, e sseEvent, steered map[string]int) (stop bool) {
 	action := ""
 	if guard.SandboxTools[e.Tool] {
 		action = "server" // server-side work, unless the guard says otherwise
@@ -220,15 +252,35 @@ func (c *Client) hermesTool(ctx context.Context, base, runID string, e sseEvent,
 		check = guard.Strict
 	}
 	if v := check(e.Tool, e.Preview); v.Steer {
-		action = "steered"
-		if !steered[v.Kind] {
-			steered[v.Kind] = true
+		switch {
+		case steered[v.Kind] < steersPerKind:
+			steered[v.Kind]++
+			action = "steered"
 			c.steer(ctx, base, runID, v.Message)
+		case c.stopRun(ctx, base, runID):
+			action, stop = "stopped", true
+		default:
+			action = "repeat"
 		}
 	}
 	if c.OnHermesTool != nil {
 		c.OnHermesTool(e.Tool, e.Preview, action)
 	}
+	return stop
+}
+
+// stopRun stops a run that kept making a mistake past its steers (POST
+// /v1/runs/{id}/stop). false: the server refused — the run goes on.
+func (c *Client) stopRun(ctx context.Context, base, runID string) bool {
+	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	code, _, err := c.do(tctx, http.MethodPost, base+"/v1/runs/"+runID+"/stop", nil, nil)
+	c.trace("guard.stop", map[string]any{"run_id": runID, "status": code})
+	if err != nil || !is2xx(code) {
+		c.warnf("sandbox guard: stop refused (%s, HTTP %s)", errText(err), httpCode(code))
+		return false
+	}
+	return true
 }
 
 // steer redirects a running run (POST /v1/runs/{id}/steer). Best-effort: the
