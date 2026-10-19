@@ -4,6 +4,86 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
+## 0.14.3 — (unreleased, `bump:patch`) an exchange, not a tool: a misdirected call is steered, then its run stopped
+
+Seen in real code sessions and in the measurements of 2026-10-14: Hermes
+treats the hands as tools of its own. Steered once, a model kept calling
+`tool_call` "Local Shell" / "Local Edit" — eight times in one run; after
+each, hermes-agent's own error invites a retry under the exact name — until
+hermes-agent's retry guard ended the turn with a prose answer: 19 minutes,
+18 of them Hermes, one the hands. The terminal showed every attempt as
+steered; only the first was. Right after a steer, or to "check the
+connection", Hermes also calls a tool only to have called something —
+`tool_call` "Noop Placeholder" / "Mcp Placeholder", `echo placeholder`, and
+since `steer` took its `terminal` away, `delegate_task` "1 tasks: noop" —
+up to ten in a row, each one a model call and, for `delegate_task`, a
+sub-agent. Delegation is never steered, so nothing stopped it.
+
+- **Each misdirected call is steered, up to five a run per kind of
+  mistake** (was: once a run) — a model often catches itself after a few.
+- **Past that hermes-hands stops the run** (`POST /v1/runs/{id}/stop`),
+  waits it out and sends the same message again with a correction in front
+  ("your last run was stopped: after its steers you still called …") — at
+  most twice a turn; a third ends the turn `BLOCKED`. The terminal shows
+  `↳ again after its steers — run stopped; hermes-hands asks once more`
+  (action `stopped` in `events.jsonl` and `--rpc`). A reply that made it
+  before the stop took effect is used as is. When the server refuses the
+  stop, the run goes on and a repeat is only reported (`repeat`: `↳ again —
+  this run was steered for it already; not again`) — never a steer claimed
+  that did not go out, as the terminal did before.
+- **The guard steers a placeholder call** of any tool in `steer` and `smart`
+  (`guard.Placeholder`: a mark — `noop`, `placeholder`, `dummy` — among
+  filler words only; a real task that mentions one is left alone), as a
+  kind of its own (`placeholder`). The steer says why: the hands are
+  connected whenever Hermes runs, and its first real call in the envelope
+  is the check.
+- **`delegate_task` counts as server-side work** (`guard.SandboxTools`): its
+  sub-agents work in the server sandbox and never reach the hands. `steer`
+  steers every delegation, `smart` one aimed at the project; a placeholder
+  delegation is steered as such in both.
+- **Sharper steers**: a hands tool called as Hermes' own is told its "not a
+  known tool name" error is final under any spelling, and to end the run
+  with the envelope; every sandbox steer ends with "No tool call answers
+  this note: your next reply is the envelope."
+- **Instructions: an exchange, not a tool** — a new section up front: work on
+  the operator's machine as if it were one of Hermes' own, one round at a
+  time: the reply is the envelope and ends the run, the hands run it as
+  long as it takes, the results are the next message. Nothing to wait for,
+  check or keep alive — no connection test, no health check, no
+  placeholder; a dead shell or a timeout comes back in the results. Turn,
+  round and run are named once. The per-turn frame says the same in one
+  sentence, and so does **every results message** — rounds 2 and on had no
+  such reminder, and most of a long turn's runs are those.
+- **Instructions: two machines, and Hermes' own tools** — "Which machine"
+  and the rules on Hermes' own tools are one section now: what belongs to
+  which machine (web, memory, skills, cron stay Hermes' own; delegation no
+  longer), the exec / file / delegation tools not to call for the project,
+  and a table from each to the hands operation that does it instead, so the
+  reflex has a target. A new example shows the envelope as the way to act on
+  the operator's machine, also right after a steer, and what is wrong every
+  time.
+- **Instructions: one rule, said once** — the rule against Hermes' own tools
+  stood in seven places in slightly different words; now in the section
+  above, the example, the frame, the results and the steers. The word
+  "terminal" names only Hermes' own tool (the instructions and the frame
+  called the operator's machine a terminal, too); the instructions name no
+  number for the stop (five steers read as four free tries); "think it
+  through, not in the reply" in frame and instructions alike (the frame
+  said "reason it through" before the JSON); "every reply", not "every
+  turn". What the hands run are "hands calls" in every text Hermes reads —
+  the budget in the frame, the countdown, the over-budget error, the note a
+  capped turn leaves — not "tool calls", Hermes' word for its own. The rule
+  against Hermes' own exec / file tools holds for the whole session, not
+  only "for the project".
+- **Instructions: web search is Hermes' own** — "Sources of truth" and the
+  GitHub example said "no web access" and "I can't browse GitHub", while web
+  research is one of the tools left to Hermes. Now: the remote's own facts
+  (tags, branches) through git and the hands, anything else on the web
+  through Hermes' web search — the hands have no browser.
+- **An interrupted run ends the request** (hermes-agent's `run.interrupted`
+  / status `interrupted`, a gateway restart mid-run): the poll knew only
+  `failed` and `cancelled` and went on polling it until the watchdog.
+
 ## 0.14.2 — 2026-10-19 — Hermes works on the operator's machine: `steer` by default
 
 hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).

@@ -197,12 +197,13 @@ in its results, so both of you can point at a call:
 ```
 
 **Your machine does the work.** Hermes keeps its own thinking-side tools —
-cron, memory, web, browser, delegation. Its server-side `terminal` /
-`read_file` / `execute_code` are another matter: a model that meets a
+cron, memory, web, skills, browser. Its server-side `terminal` /
+`read_file` / `execute_code` — and `delegate_task`, whose sub-agents work
+there too — are another matter: a model that meets a
 missing tool on your machine tends to rebuild your project in its own
 sandbox — install the toolchain there, clone your code there, look around
 the server's containers. hermes-hands watches the run's tool events and, by
-default, steers **every** server-side exec / file call back to the hands
+default, steers **every** server-side exec / file / delegation call back to the hands
 (`POST /v1/runs/{id}/steer`); a `⚠ hermes-sandbox` line says so. The steer
 tells Hermes where the work belongs and what to do about a missing tool:
 the project's own way (`make`, docker, scripts) — or a final that names
@@ -214,6 +215,18 @@ repo-local `git`, a hands envelope — or environment work: installing a
 toolchain or dependencies, `curl … | sh`, `git clone`, exploring the
 server's containers or network; other server work shows as a dim
 `· hermes server-sandbox …` line and runs) | `show` (never steer).
+`steer` and `smart` also steer a **placeholder** call of any of Hermes'
+tools — `tool_call` "Noop Placeholder", a `delegate_task` of "noop check",
+`echo placeholder` — a call made only to have called something, typically
+right after a steer or to "check the connection". The hands are connected
+whenever Hermes runs; its first real call in the envelope is the check.
+Web, memory, skills and cron for real work are never steered. A run is
+steered up to five times per kind of mistake. Past that hermes-hands
+**stops the run** (`↳ again after its steers — run stopped; hermes-hands
+asks once more`) and sends the same message again with a correction in
+front — at most twice a turn, then the turn ends `BLOCKED` and `continue`
+starts over. Without that a model can loop on its mistake for many minutes
+until hermes-agent's own retry guard gives up.
 
 When one of Hermes' server-side tools asks for **approval**, you decide —
 in its own prompt, separate from the hands' approvals (their `[a]ll` never
