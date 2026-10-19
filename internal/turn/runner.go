@@ -79,7 +79,16 @@ func (r *Runner) Run(input string, fe Frontend) Result {
 
 	stop := make(chan struct{})
 	go wd.guard(stop)
-	out := r.Loop.Run(ctx, input, rec, func(runID, sid string, tok int) { _ = r.Store.BumpTurn(rec, runID, sid, tok) })
+	out := r.Loop.Run(ctx, input, rec, func(runID, sid string, tok int) {
+		prev, ran := rec.HermesSessionID, rec.Turns
+		_ = r.Store.BumpTurn(rec, runID, sid, tok)
+		if ran > 0 && prev != "" && rec.HermesSessionID != prev {
+			// a new hermes-agent session id mid-conversation: it compacted
+			// (or split) the context — worth one line, the work goes on
+			fe.Show(log.Add(session.Event{Kind: session.KindNote,
+				Text: "hermes-agent continued in a new session — it compacted (or split) the conversation"}))
+		}
+	})
 	close(stop)
 	timedOut := wd.disarm() // barrier: authoritative "did the watchdog fire?"
 	fe.Quiet()
