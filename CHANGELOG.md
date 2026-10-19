@@ -4,7 +4,9 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.14.0 — (unreleased, `bump:minor`) `/compact-aggressive`; compaction keeps more of a code session
+## 0.14.0 — 2026-10-19 — `/compact-aggressive`; compaction keeps more of a code session
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
 Tuned on a real code session of ~300 tool calls, compacted on 0.13.0.
 
@@ -30,7 +32,9 @@ Tuned on a real code session of ~300 tool calls, compacted on 0.13.0.
   Hermes had held it. It now says `log ~359k → ~29k`; the checkpoint records
   `before_from` (`measured` | `estimated` | `log`).
 
-## 0.13.0 — (unreleased, `bump:minor`) the operator's turn budget; config layers; hermes-hands' own compaction
+## 0.13.0 — 2026-10-19 — the operator's turn budget; config layers; hermes-hands' own compaction
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
 ### Context: the meter and hermes-hands' own compaction
 
@@ -148,7 +152,7 @@ included, again and again.
   no lower than the call budget, compaction on with a round's worst-case
   size in mind, and prompt caching for the prefix every round re-sends.
 
-## 0.12.2 — (unreleased, `bump:patch`) a license badge that always renders
+## 0.12.2 — 2026-10-16 — a license badge that always renders
 
 - The README's license badge is static (`license: MIT`). The dynamic one
   asked the GitHub API through shields.io's token pool on every view and
