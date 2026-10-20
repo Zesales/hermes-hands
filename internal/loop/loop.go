@@ -32,6 +32,12 @@ type HistoryAsker interface {
 	AskWith(ctx context.Context, msg, sess, skey string, history []api.Message) (api.AskResult, error)
 }
 
+// ImageAsker is an Asker that can send images with the message
+// (api.Runs.AskImages) — the operator's @path attachments.
+type ImageAsker interface {
+	AskImages(ctx context.Context, msg, sess, skey string, history []api.Message, images []api.Image) (api.AskResult, error)
+}
+
 // Loop drives the delegation rounds for one turn.
 type Loop struct {
 	API      Asker
@@ -190,7 +196,8 @@ var botchedRe = regexp.MustCompile(`(?i)"(calls|tool)"[[:space:]]*:`)
 func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string, tokens int)) (out Outcome) {
 	l.rounds, l.calls, l.noted = 0, 0, tierNone
 	defer func() { out.Rounds, out.Calls = l.rounds, l.calls }()
-	t := &turnState{userMsg: userMsg, send: l.opening(userMsg), turnlog: "[operator] " + userMsg + "\n"}
+	withFiles, images := l.attach(userMsg) // the files go along once; the rounds restate userMsg
+	t := &turnState{userMsg: userMsg, send: l.opening(withFiles), images: images, turnlog: "[operator] " + userMsg + "\n"}
 	for round := 1; ; round++ {
 		l.vlogf("round %d -> Hermes", round)
 		l.rounds = round
@@ -222,6 +229,8 @@ type turnState struct {
 	recap   bool
 
 	fixups, rejects int // recovery nudges spent: a botched / empty envelope, one over the budget
+
+	images []api.Image // the operator's @path images: sent with the turn's first run only
 
 	stops   int    // runs hermes-hands stopped this turn (maxStops)
 	stopped string // the message a stopped run answered, asked again behind stoppedNote

@@ -46,11 +46,12 @@ type Message struct {
 }
 
 // runReq is the POST /v1/runs body, in the same key order jq builds it:
-// input, then instructions (only when non-empty), then session_id (only when
-// present and not dropped), then conversation_history (only when hermes-hands
-// holds the transcript — see AskWith).
+// input (the message, or with images a message of parts — runInput), then
+// instructions (only when non-empty), then session_id (only when present and
+// not dropped), then conversation_history (only when hermes-hands holds the
+// transcript — see AskWith).
 type runReq struct {
-	Input        string    `json:"input"`
+	Input        any       `json:"input"`
 	Instructions string    `json:"instructions,omitempty"`
 	SessionID    string    `json:"session_id,omitempty"`
 	History      []Message `json:"conversation_history,omitempty"`
@@ -72,25 +73,47 @@ func (r Runs) Ask(ctx context.Context, msg, sess, skey string) (AskResult, error
 // session_persistence, hermes-agent 0.22). hermes-hands sends it once it has
 // compacted a session itself (internal/compact).
 func (r Runs) AskWith(ctx context.Context, msg, sess, skey string, history []Message) (AskResult, error) {
+	return r.askRun(ctx, msg, sess, skey, history, nil)
+}
+
+// askRun is one run of AskWith / AskImages: images go along with msg.
+func (r Runs) askRun(ctx context.Context, msg, sess, skey string, history []Message, images []Image) (AskResult, error) {
 	c := r.c
 	if err := c.preflight(); err != nil {
 		return AskResult{}, err
 	}
 	base := c.base()
+	runID, threaded, err := r.submitRun(ctx, base, msg, sess, skey, history, images)
+	if err != nil {
+		return AskResult{}, err
+	}
+	c.trace("run.start", map[string]any{"run_id": runID, "session_id": sess, "threaded": threaded,
+		"input": msg, "instructions_bytes": len(c.Instructions), "history_messages": len(history), "images": len(images)})
 
+	res, err := c.awaitRun(ctx, base, runID, threaded)
+	f := map[string]any{"run_id": runID, "tokens": res.Tokens, "prompt": res.Prompt, "output": res.Text}
+	if err != nil {
+		f["err"] = err.Error()
+	}
+	c.trace("run.end", f)
+	return res, err
+}
+
+// submitRun POSTs the run on the retry / one-shot session-id-drop ladder and
+// returns its id; threaded is false once the session id was dropped.
+func (r Runs) submitRun(ctx context.Context, base, msg, sess, skey string, history []Message, images []Image) (runID string, threaded bool, err error) {
+	c := r.c
 	// Idempotency-Key: minted once, reused across POST retries.
 	ikey := fmt.Sprintf("hh-%d-%d%d", c.nowFn().Unix(), c.rndFn(), c.rndFn())
-
-	var runID string
 	dropSess := false
 	for attempt := 1; ; {
 		sid := ""
 		if sess != "" && !dropSess {
 			sid = sess
 		}
-		body, err := marshalJSON(runReq{Input: msg, Instructions: c.Instructions, SessionID: sid, History: history})
+		body, err := marshalJSON(runReq{Input: runInput(msg, images), Instructions: c.Instructions, SessionID: sid, History: history})
 		if err != nil {
-			return AskResult{}, err
+			return "", false, err
 		}
 		hdr := map[string]string{
 			"Content-Type":    "application/json",
@@ -109,44 +132,36 @@ func (r Runs) AskWith(ctx context.Context, msg, sess, skey string, history []Mes
 				if c.OnRunStart != nil {
 					c.OnRunStart(runID)
 				}
-				break
+				return runID, !dropSess, nil
 			}
-			return AskResult{}, fmt.Errorf("POST /v1/runs 2xx but no run_id: %s",
+			return "", false, fmt.Errorf("POST /v1/runs 2xx but no run_id: %s",
 				trunc(stripNL(string(respBody)), 200))
 		}
 		switch code {
 		case 401, 403:
-			return AskResult{}, fmt.Errorf("HTTP %d at /v1/runs - HERMES_API_KEY rejected.", code)
+			return "", false, fmt.Errorf("HTTP %d at /v1/runs - HERMES_API_KEY rejected.", code)
 		case 400, 404, 422:
+			if imagesRefused(images, respBody) {
+				return "", false, fmt.Errorf("the server refused the attached image(s) - HTTP %d: %s", code,
+					trunc(stripNL(string(respBody)), 300))
+			}
 			if sess != "" && !dropSess {
 				c.warnf("server rejected session_id (HTTP %d) - retrying without it, local recap on", code)
 				dropSess = true
 				continue // no attempt increment, no pause
 			}
-			return AskResult{}, fmt.Errorf("POST /v1/runs -> HTTP %d: %s", code,
+			return "", false, fmt.Errorf("POST /v1/runs -> HTTP %d: %s", code,
 				trunc(stripNL(string(respBody)), 200))
 		}
 		if attempt > c.Retries {
-			return AskResult{}, fmt.Errorf("POST /v1/runs unreachable - %s, HTTP %s",
+			return "", false, fmt.Errorf("POST /v1/runs unreachable - %s, HTTP %s",
 				errText(err), httpCode(code))
 		}
 		attempt++
 		if serr := sleep(ctx, c.pause()); serr != nil {
-			return AskResult{}, serr
+			return "", false, serr
 		}
 	}
-
-	threaded := !dropSess
-	c.trace("run.start", map[string]any{"run_id": runID, "session_id": sess, "threaded": threaded,
-		"input": msg, "instructions_bytes": len(c.Instructions), "history_messages": len(history)})
-
-	res, err := c.awaitRun(ctx, base, runID, threaded)
-	f := map[string]any{"run_id": runID, "tokens": res.Tokens, "prompt": res.Prompt, "output": res.Text}
-	if err != nil {
-		f["err"] = err.Error()
-	}
-	c.trace("run.end", f)
-	return res, err
 }
 
 // awaitRun waits for a submitted run: the SSE stream when wanted, else (or

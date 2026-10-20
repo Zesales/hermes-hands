@@ -33,7 +33,7 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 	l.ctxNow = predicted
 	l.progress()
 
-	res, err := l.ask(ctx, msg, rec, history)
+	res, err := l.ask(ctx, msg, rec, history, t.images)
 	for try := 0; err != nil && l.Ctx != nil && compact.IsOverflow(err.Error()); try++ {
 		// refused for its size: handled here, locally — the same request
 		// again, smaller — before the turn gives up
@@ -44,7 +44,10 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 		history, msg = l.Ctx.History(), t.send
 		l.ctxNow = l.Ctx.Predict(msg, history)
 		l.progress()
-		res, err = l.ask(ctx, msg, rec, history)
+		res, err = l.ask(ctx, msg, rec, history, t.images)
+	}
+	if err == nil {
+		t.images = nil // sent with this run; hermes-agent keeps only "[screenshot]" of them
 	}
 	if err != nil || res.Stopped != "" { // a stopped run has no reply to observe or record
 		return res, err
@@ -55,8 +58,12 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 	return res, nil
 }
 
-// ask sends one request: with the transcript when hermes-hands holds it.
-func (l *Loop) ask(ctx context.Context, msg string, rec *session.Record, history []api.Message) (api.AskResult, error) {
+// ask sends one request: with the images the turn still has to send, with
+// the transcript when hermes-hands holds it.
+func (l *Loop) ask(ctx context.Context, msg string, rec *session.Record, history []api.Message, images []api.Image) (api.AskResult, error) {
+	if ia, ok := l.API.(ImageAsker); ok && len(images) > 0 {
+		return ia.AskImages(ctx, msg, rec.HermesSessionID, rec.HermesSessionKey, history, images)
+	}
 	if ha, ok := l.API.(HistoryAsker); ok && history != nil {
 		return ha.AskWith(ctx, msg, rec.HermesSessionID, rec.HermesSessionKey, history)
 	}
