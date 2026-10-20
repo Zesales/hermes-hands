@@ -25,6 +25,11 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
 - **`tool_call "Local Output"` is steered** like the other hands tools —
   seen live, a run of them went through unsteered: the guard knew only
   shell / read / write / edit.
+- **The operator's own rules come first**: what they say in the chat —
+  "save nothing to memory", "don't touch X" — holds for the whole session,
+  also after compaction, and outranks the instructions' permissions (seen
+  live: told at the start to save nothing to memory, Hermes later called
+  its memory recall anyway; the instructions had allowed "your memory").
 - **hermes-hands is Hermes' execution worker** — the instructions say so up
   front: everything that runs on the operator's machine, every command and
   every file read, write and edit, Hermes hands to the worker, which runs the
