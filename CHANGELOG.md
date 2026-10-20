@@ -25,6 +25,17 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
 - **`tool_call "Local Output"` is steered** like the other hands tools —
   seen live, a run of them went through unsteered: the guard knew only
   shell / read / write / edit.
+- **hermes-hands is Hermes' execution worker** — the instructions say so up
+  front: everything that runs on the operator's machine, every command and
+  every file read, write and edit, Hermes hands to the worker, which runs the
+  job and reports back. "No tool you call and no connector to search for or
+  install: it reads your reply" (seen live: `tool_call "Hermes Hands · local
+  shell"`, `tool_search "hermes hands local shell envelope"`). The mapping
+  table gains `process_manage` and `tool_call` / `tool_search` for the
+  worker's operations — "nothing to search for". Shorter (235 lines, was
+  263): repeats folded, the examples redone as whole exchanges — a fact with
+  its source, a task from failing test to fix, a missing tool, a cut output.
+  The frame calls hermes-hands "your execution worker (the hands)".
 - **The frame names the envelope again**: "To look, or for a task, your
   instruction is the envelope: `local_shell` (ls / git / rg) or
   `local_read` in its calls" — the cue the old frame had. `tool_call` is

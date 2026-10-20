@@ -649,7 +649,7 @@ func TestRunFramesFirstMessage(t *testing.T) {
 	}
 	got := sa.msgs[0]
 	for _, want := range []string{
-		"you are the operator's assistant", "hermes-hands is your hands",
+		"you are the operator's assistant", "hermes-hands is your execution\nworker (the hands)",
 		"persistent bash shell",
 		"MESSAGE from the operator — working directory: cwd /home/me/proj (git branch: main)",
 		"was hälst du von der readme ?", // the message, verbatim, as the body

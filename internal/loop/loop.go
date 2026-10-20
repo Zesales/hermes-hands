@@ -138,8 +138,9 @@ func (l *Loop) frame(userMsg string) string {
 			loc += " (git branch: " + b + ")"
 		}
 	}
-	return "[hermes-hands — you are the operator's assistant; hermes-hands is your hands\n" +
-		"on the operator's machine, a persistent bash shell in the working directory.]\n\n" +
+	return "[hermes-hands — you are the operator's assistant; hermes-hands is your execution\n" +
+		"worker (the hands) on the operator's machine, a persistent bash shell in the\n" +
+		"working directory.]\n\n" +
 		"MESSAGE from the operator — working directory: " + loc + "\n\n" +
 		userMsg + "\n\n" +
 		"A question, an opinion, a discussion: answer it in final, as in a chat — look\n" +
