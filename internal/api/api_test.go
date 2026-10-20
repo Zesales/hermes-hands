@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -526,6 +527,7 @@ func TestStreamRun_SteersRepeatsUpToCapThenStops(t *testing.T) {
 	}{
 		{"stopped", true, `{"event": "run.cancelled"}`, "stopped"},
 		{"stopped, ends empty", true, `{"event": "run.completed", "output": ""}`, "stopped"},
+		{"stopped, ends in prose", true, `{"event": "run.completed", "output": "I stopped retrying because I kept running tool_call 8 times"}`, "stopped"},
 		{"stop refused", false, `{"event": "run.completed", "output": "{\"calls\":[],\"final\":\"ok\"}"}`, "repeat repeat"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -576,6 +578,44 @@ func TestStreamRun_SteersRepeatsUpToCapThenStops(t *testing.T) {
 				t.Errorf("stops = %d, res = %+v, want a stop asked for each repeat and the run's own reply", stops, res)
 			}
 		})
+	}
+}
+
+// a steer the server refuses never reached the model: the run is stopped at
+// once, not after the cap — and the warning names the server's reason
+func TestStreamRun_RefusedSteerStopsAtOnce(t *testing.T) {
+	body := strings.Repeat(`data: {"event": "tool.started", "tool": "tool_call", "preview": "Local Read"}`+"\n\n", 3) +
+		`data: {"event": "run.cancelled"}` + "\n\n"
+	steers, stops := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/runs/run_s/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, body)
+		case "/v1/runs/run_s/steer":
+			steers++
+			writeTestJSON(w, 409, `{"error":{"message":"Run is not currently accepting steer input: run_s","code":"run_not_accepting_steer"}}`)
+		case "/v1/runs/run_s/stop":
+			stops++
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	c := testClient(srv.URL)
+	var warned []string
+	c.Warnf = func(f string, a ...any) { warned = append(warned, fmt.Sprintf(f, a...)) }
+	var seen []string
+	c.OnHermesTool = func(tool, preview, action string) { seen = append(seen, action) }
+	res, err := c.streamRun(context.Background(), srv.URL, "run_s", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, " ") != "stopped" || steers != 1 || stops != 1 || res.State != "stopped" || res.Stopped != "`tool_call` Local Read" {
+		t.Errorf("actions = %q, steers = %d, stops = %d, res = %+v", seen, steers, stops, res)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "HTTP 409") || !strings.Contains(warned[0], "run_not_accepting_steer") {
+		t.Errorf("warnings = %q, want the server's reason", warned)
 	}
 }
 

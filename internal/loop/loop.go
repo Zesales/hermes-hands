@@ -176,7 +176,7 @@ const (
 	maxStops = 2
 
 	stoppedMark = "[hermes-hands] your last run was stopped"
-	stoppedNote = stoppedMark + ": after its steers you still called %s. " +
+	stoppedNote = stoppedMark + ": you called %s, one of your own tools, for the hands' work. " +
 		"Your own tools never reach the operator's machine — the hands do, through the envelope. " +
 		"Answer the message below with your reply text: the envelope {\"calls\":[...],\"final\":null}, or a final — no tool call.\n\n"
 )
@@ -259,7 +259,7 @@ func (l *Loop) stopped(what string, round int, t *turnState) (Outcome, bool) {
 	if !strings.HasPrefix(t.send, stoppedMark) {
 		t.stopped = t.send
 	}
-	l.noteOperator(fmt.Sprintf("run stopped: Hermes still called %s after its steers — asking again, with a correction (%d/%d)",
+	l.noteOperator(fmt.Sprintf("run stopped: Hermes called %s for the hands' work — asking again, with a correction (%d/%d)",
 		what, t.stops, maxStops))
 	t.send = fmt.Sprintf(stoppedNote, what) + t.stopped
 	t.turnlog += fmt.Sprintf("[round %d] (run stopped: %s after its steers; asked again)\n", round, what)

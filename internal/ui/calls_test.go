@@ -89,7 +89,7 @@ func TestHermesToolLines(t *testing.T) {
 		!strings.Contains(got, "⚠ hermes-sandbox terminal  make test") ||
 		!strings.Contains(got, "steered back to the hands") ||
 		!strings.Contains(got, "⚠ hermes-sandbox tool_call  Local Shell\n     ↳ again — this run was steered for it already; not again") ||
-		!strings.Contains(got, "⚠ hermes-sandbox tool_call  Local Edit\n     ↳ again after its steers — run stopped; hermes-hands asks once more") {
+		!strings.Contains(got, "⚠ hermes-sandbox tool_call  Local Edit\n     ↳ run stopped — hermes-hands asks once more, with a correction") {
 		t.Errorf("HermesTool =\n%s", got)
 	}
 }
