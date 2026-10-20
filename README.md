@@ -184,6 +184,15 @@ and the REPL starts even when unconfigured. When the gateway supports SSE the
 answer text previews live as it generates (`HERMES_HANDS_STREAM` =
 `auto`|`on`|`off`); the final answer renders through `glow`/`bat` if installed.
 
+**Type while Hermes works**, as in Claude Code: what you type stands on the
+working line (`you› …`), Enter queues it — `queued for the next round: …` —
+and it goes out with the turn's next round, after the results, as `you
+(added)`. What the turn did not take — it ended first — becomes the next
+turn; after Ctrl-C or a timeout it waits in the prompt instead, with the line
+you were still typing, to send or change. A `/command` typed meanwhile runs
+when the turn is done. Backspace, Ctrl-W, Ctrl-U edit; an approval prompt
+takes the keys while it is up; Ctrl-C still cancels the turn.
+
 **Attach a file with `@path`**, as in Claude Code: `@shot.png`,
 `@"path with spaces"`, `@~/notes.txt` in a message — or an image dropped into
 the terminal, which pastes its path. Read-only, and also from outside the
@@ -483,6 +492,9 @@ One request object per line on **stdin**; one response object per line on
 ```jsonc
 // requests
 {"id":1,"type":"turn","text":"why is CI red?"}
+{"id":9,"type":"append","text":"also the lint job"}     // while a turn runs: with its next round ("queued");
+                                                        // what it did not take: the next turn, under this id;
+                                                        // no turn running: a turn of its own
 {"id":2,"type":"new"}                                   // start a fresh session, becomes current
 {"id":3,"type":"use","session":"hh_20260902T…_abc123"}  // switch (id from `sessions new`)
 {"id":4,"type":"check"}
@@ -496,6 +508,8 @@ One request object per line on **stdin**; one response object per line on
 {"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 {"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  // the turn's budget (max 0 = no limit); + "context","window" once known
 {"type":"note","id":1,"text":"budget: 10 of 25 rounds · 29 of 100 calls left — …"}
+{"type":"queued","id":9,"text":"also the lint job"}                         // append taken; sent with the next round as:
+{"type":"added","id":1,"text":"also the lint job"}
 {"type":"answer","id":1,"ok":true,"text":"…","session":"hh_…","hermes_session":"…","rounds":12,"calls":47}
 {"type":"session","id":2,"session":"hh_…","hermes_session":"…","approvals":"off"}
 {"type":"check","id":4,"ok":true,"model":"…","base":"…","version":"0.22.2"}

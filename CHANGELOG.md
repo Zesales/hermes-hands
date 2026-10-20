@@ -44,6 +44,21 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
   - Whatever the share, the trigger leaves 24K above the request — 20K for
     the reply, a 4K buffer — so a raised `HERMES_HANDS_COMPACT_AT` cannot run
     a request into the window's end (at 131k: at most ~107k).
+- **Type while Hermes works**, as in Claude Code. What the operator types
+  during a turn stands on the working line (`you› …`); Enter queues it
+  (`queued for the next round: …`), and the turn's next round takes it
+  along after the results — Hermes reads it with what it asked for, the log
+  shows `you (added)`, the transcript keeps it. What the turn did not take
+  becomes the next turn; after Ctrl-C or a timeout it waits in the prompt
+  with the line still being typed. A `/command` typed meanwhile runs when
+  the turn is done; an approval prompt takes the keys while it is up;
+  Ctrl-C still cancels. The terminal is in character mode during the turn
+  (no echo, signals on) and gets its mode back for every prompt.
+  - `--rpc`: `{"type":"append","text":…}` while a turn runs answers
+    `queued` and arrives as `added` in the turn's events; what the turn did
+    not take becomes the next turn, under the append's id; with no turn
+    running, append is a turn of its own. A turn runs in the background
+    now; every other request waits for it, in order, as before.
 - **Compaction: no gain, no compaction; and Hermes is told what it lost.**
   Seen live, in a test with a window smaller than the task: a compaction
   "~34k → ~34k" — what filled the prompt was the round being sent, which no
