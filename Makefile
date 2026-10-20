@@ -50,7 +50,7 @@ ARGS      ?=
 GO_MODE  ?= docker
 # GO_IMAGE version MUST equal go.mod's `go` line. Debian, not alpine: the
 # shell / dispatch / loop tests need bash and skip silently without it.
-GO_IMAGE ?= golang:1.26.9-bookworm
+GO_IMAGE ?= golang:1.26.10-bookworm
 # persistent build+module cache, host-owned, wiped by `make clean`
 GO_CACHE := $(CURDIR)/.dev/gocache
 

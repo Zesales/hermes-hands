@@ -6,6 +6,16 @@ gateway runs.
 
 ## 0.15.0 — (unreleased, `bump:minor`) an assistant that answers; `@path`; type while it works; compaction later and deeper
 
+### Security
+
+- **Built with Go 1.26.10** (was 1.26.9): govulncheck found GO-2026-6809 —
+  `crypto/x509` did not distrust compromised intermediate certificates —
+  on a code path hermes-hands calls (TLS to the Hermes API); fixed in
+  1.26.10. `GO_IMAGE` is `golang:1.26.10-bookworm`, go.mod says
+  `go 1.26.10`.
+
+### Changes
+
 Seen in real sessions: every message came to Hermes framed as a PROBLEM
 about the working directory — "you do not chat", "your instruction is a
 look" — so a question or an opinion was worked on instead of answered.
