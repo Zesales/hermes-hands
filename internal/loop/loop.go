@@ -90,6 +90,10 @@ type Loop struct {
 	// see session.Recap). Set by the caller, consumed by Run.
 	ResumeNote string
 
+	// planned: the last turn ran in plan mode — the next one outside it says
+	// once that changes apply again (planNote).
+	planned bool
+
 	Vlogf func(string, ...any)
 	Warnf func(string, ...any)
 
@@ -231,7 +235,7 @@ type turnState struct {
 // opening is round 1's message: the framed problem, behind the one-off notes
 // a resumed or a cancelled turn left.
 func (l *Loop) opening(userMsg string) string {
-	send := l.frame(userMsg)
+	send := l.frame(userMsg) + l.planNote()
 	if l.ResumeNote != "" { // resumed session, server history gone — replay local copy
 		send = l.ResumeNote + "\n\n" + send
 		l.ResumeNote = ""

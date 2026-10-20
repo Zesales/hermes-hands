@@ -39,6 +39,19 @@ func TestConfirmAutoAndNever(t *testing.T) {
 	}
 }
 
+// plan asks like ask (shell commands still need the operator); it only
+// reports Planning, which keeps dispatch from writing
+func TestConfirmPlanAsks(t *testing.T) {
+	a, out := withInput("y\n")
+	a.Mode = "plan"
+	if !a.Planning() || (&TTYApprover{Mode: "ask"}).Planning() {
+		t.Errorf("Planning: plan = %v, ask = %v", a.Planning(), (&TTYApprover{Mode: "ask"}).Planning())
+	}
+	if a.Confirm("local_shell: ls", "") != Approve || !strings.Contains(out.String(), "local_shell: ls") {
+		t.Errorf("plan must ask like ask, prompt = %q", out.String())
+	}
+}
+
 func TestConfirmAnswerMapping(t *testing.T) {
 	for _, tc := range []struct {
 		in   string
