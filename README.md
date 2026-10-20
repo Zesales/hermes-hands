@@ -173,7 +173,10 @@ call `#n`) `/compact` (compact this session's chat now — see
 (when `/compact` was not enough) `/context` (what Hermes
 reads now; `/context full` every message) `/fork` (branch on the
 server) `/debug` (toggle the redacted
-connection trace, see below) `/setup` `/yolo` `/check` `/exit` (`Ctrl-D` also
+connection trace, see below) `/setup` `/approve` (the approvals for this
+session: no argument steps `ask` → `plan` → `auto`, `/approve <mode>` sets
+one; in `plan` Hermes looks and answers with a plan — reads run, shell
+commands ask, nothing is written) `/yolo` `/check` `/exit` (`Ctrl-D` also
 exits; `Ctrl-C` at the prompt just hints, during a turn it cancels the turn
 locally *and* stops the run on Hermes). An unknown `/command` is answered
 locally, never sent to Hermes. `/setup` configures without leaving the session
@@ -500,7 +503,7 @@ version `source`d the file; the Go port deliberately parses only assignments).
 
 **Layers.** Every setting resolves weakest first: the built-in default <
 `config` (your defaults for every session) < the environment (a non-empty
-value) < a flag (`--yolo`) < a runtime switch (`/yolo`, `/debug`, an rpc
+value) < a flag (`--yolo`) < a runtime switch (`/approve`, `/yolo`, `/debug`, an rpc
 `approvals` / `debug`). Runtime switches are never saved: every session you
 open or resume — also with `/session` or rpc `use` in a running process —
 starts from config / env / flags again. `/config` shows each value with the
@@ -539,7 +542,7 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_API_URL` | — | gateway base, `https://…` |
 | `HERMES_API_KEY` | — | `API_SERVER_KEY` (goes in the machine-bound `secrets.enc`) |
 | `HERMES_API_PROFILE` | — | route to `/p/<profile>/` (needs that profile's own key) |
-| `HERMES_HANDS_APPROVE` | `ask` | `ask` \| `auto` \| `never` |
+| `HERMES_HANDS_APPROVE` | `ask` | `ask` \| `plan` \| `auto` \| `never` |
 | `HERMES_HANDS_STREAM` | `auto` | SSE answer streaming: `auto` (when advertised) \| `on` \| `off` |
 | `HERMES_HANDS_DEBUG` | `0` | `1` = start with `/debug` on (redacted connection trace); `0` / `off` = off |
 | `HERMES_HANDS_RETENTION_DAYS` | `14` | delete local sessions idle longer than this on start (`0` keeps all) |
