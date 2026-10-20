@@ -55,6 +55,9 @@ func TestCheckAndStrict(t *testing.T) {
 		{"tool_search", "local_read"},
 		{"local_shell", ""},
 		{"terminal", "local_shell ls"},
+		// the envelope passed to tool_call: its calls have no name
+		{"tool_call", "Unnamed call"},
+		{"tool_call", "Unnamed call +2"},
 	} {
 		if v := Check(tc.tool, tc.preview, repo, ""); !v.Steer || v.Kind != "hands-tool" {
 			t.Errorf("Check(%s, %q) = %+v, want a hands-tool steer", tc.tool, tc.preview, v)

@@ -20,7 +20,8 @@
 //
 // Separately, a hands tool (local_shell, …) that Hermes tries to call as one
 // of its own — via its tool_call / tool_search deferral mechanism, say — is
-// steered in every mode but show. So is a placeholder call of any tool
+// steered in every mode but show, and so is the hands envelope passed to
+// tool_call (its preview "Unnamed call"). So is a placeholder call of any tool
 // (Placeholder: "noop", "Mcp Placeholder", a delegate_task of "noop check"),
 // made only to have called something — right after a steer, or to "check the
 // connection". Hermes' other tools (web, memory, skills, cron) are never
@@ -143,9 +144,20 @@ func Strict(tool, preview string) Verdict {
 	return Verdict{}
 }
 
+// envelopeCallRe is hermes-agent's preview of a tool_call batch whose calls
+// have no `name` — seen live as "Unnamed call +2": the hands envelope passed
+// to tool_call, whose own parameter is `calls` too, its entries carrying
+// `tool` where tool_call wants `name`.
+var envelopeCallRe = regexp.MustCompile(`^Unnamed call( \+\d+)?$`)
+
+const envelopeCallMsg = "[hermes-hands] your `tool_call` carried a hands envelope — its calls have no `name`, so it fails as \"Unnamed call\" every time. The envelope's `calls` are not tool_call's `calls`: the envelope is your reply text, and the hands run it on the operator's machine. No tool call answers this note: end this run with your reply {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell\",\"args\":{\"cmd\":\"…\"}}],\"final\":null}."
+
 func handsTool(tool, preview string) Verdict {
 	if handsToolRe.MatchString(tool) || handsToolRe.MatchString(preview) {
 		return Verdict{Steer: true, Kind: "hands-tool", Message: handsToolMsg}
+	}
+	if tool == "tool_call" && envelopeCallRe.MatchString(strings.TrimSpace(preview)) {
+		return Verdict{Steer: true, Kind: "hands-tool", Message: envelopeCallMsg}
 	}
 	return Verdict{}
 }
