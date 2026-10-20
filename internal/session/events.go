@@ -60,7 +60,7 @@ type Event struct {
 	Bytes   int             `json:"bytes,omitempty"`
 	OK      *bool           `json:"ok,omitempty"`
 	Tokens  int             `json:"tokens,omitempty"`
-	Action  string          `json:"action,omitempty"`   // hermes_tool: "" | server | steered | approved | denied; approval: yes | no | all | quit | once | session | deny
+	Action  string          `json:"action,omitempty"`   // hermes_tool: "" | server | steered | stopped | repeat | approved | denied; approval: yes | no | all | quit | once | session | deny
 	Outcome string          `json:"outcome,omitempty"`  // turn_end: "" | interrupted | timeout
 	Limit   int             `json:"limit,omitempty"`    // turn_end timeout: the response timeout in seconds
 	LocalMs int64           `json:"local_ms,omitempty"` // turn_end: time the hands' calls ran

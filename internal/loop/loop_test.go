@@ -274,7 +274,7 @@ func TestRoundBudgetNotes(t *testing.T) {
 	}
 	// Ask 8 (7 rounds ran): nothing left — final only (a final here still
 	// lands, it is only a calls envelope that gets capped).
-	if !strings.Contains(sa.msgs[7], "no tool rounds remain") {
+	if !strings.Contains(sa.msgs[7], "no rounds remain") {
 		t.Errorf("ask 8 should allow only a final, got: %q", trunc(sa.msgs[7], 300))
 	}
 	if !strings.Contains(l.PendingNote, "round budget (7 rounds)") {
@@ -291,12 +291,12 @@ func TestBudgetTiers(t *testing.T) {
 		{next: 10, calls: 10, want: ""},                                      // far from both limits
 		{next: 16, calls: 10, want: "15/25 rounds used, 10 left"},            // last 40% of the rounds
 		{next: 16, calls: 10, want: "the operator's limit is getting close"}, // … a heads-up
-		{next: 5, calls: 75, want: "75/100 tool calls used, 25 left"},        // 75% of the calls
+		{next: 5, calls: 75, want: "75/100 hands calls used, 25 left"},       // 75% of the calls
 		{next: 21, calls: 10, want: "Finish now"},                            // last 20% of the rounds
 		{next: 5, calls: 90, want: "Finish now"},                             // 90% of the calls
 		{next: 25, calls: 10, want: "LAST round (25/25)"},
-		{next: 26, calls: 10, want: "no tool rounds remain"},
-		{next: 5, calls: 100, want: "no tool calls remain"},
+		{next: 26, calls: 10, want: "no rounds remain"},
+		{next: 5, calls: 100, want: "no hands calls remain"},
 	} {
 		l.calls = tc.calls
 		got := l.roundBudgetNote(tc.next)
@@ -304,7 +304,7 @@ func TestBudgetTiers(t *testing.T) {
 			t.Errorf("roundBudgetNote(next=%d, calls=%d) = %q, want it to contain %q", tc.next, tc.calls, got, tc.want)
 		}
 	}
-	if f := l.frameBudget(); !strings.Contains(f, "the operator limited this turn to 25 rounds") || !strings.Contains(f, "100 tool calls") {
+	if f := l.frameBudget(); !strings.Contains(f, "the operator limited this turn to 25 rounds") || !strings.Contains(f, "100 hands calls") {
 		t.Errorf("frameBudget = %q", f)
 	}
 	if (&Loop{}).frameBudget() != "" || (&Loop{}).roundBudgetNote(99) != "" {
@@ -342,7 +342,7 @@ func TestRunCallsCap(t *testing.T) {
 	if out.OK || out.Answer != "BLOCKED: Hermes still requesting tool calls after 3 calls." || out.Calls != 3 {
 		t.Fatalf("out = %+v", out)
 	}
-	if !strings.Contains(l.PendingNote, "call budget (3 tool calls)") {
+	if !strings.Contains(l.PendingNote, "call budget (3 hands calls)") {
 		t.Errorf("a capped turn should leave a resume note, got: %q", l.PendingNote)
 	}
 }
@@ -407,6 +407,63 @@ func TestRunOperatorQuestionSurvivesFalseThreading(t *testing.T) {
 		if strings.HasPrefix(m, "[conversation so far this turn]") {
 			t.Errorf("round %d: recap should not have latched (every round is Threaded:true), got: %q", i+2, m)
 		}
+	}
+}
+
+// every results message says how to answer it: the reply text is the
+// envelope — seen live, a model mid-turn reached for tool_call instead
+func TestRunResultsSayTheReplyIsTheEnvelope(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	if out, _, _ := run(t, sa, realDisp(t, prompt.AutoApprover{}), 8); !out.OK {
+		t.Fatalf("out = %+v", out)
+	}
+	if !strings.Contains(sa.msgs[1], "your reply text, the envelope, and it ends this run: no tool of yours reaches the hands") {
+		t.Errorf("results message = %q", trunc(sa.msgs[1], 600))
+	}
+}
+
+func stoppedRun() api.AskResult {
+	return api.AskResult{State: "stopped", RunID: "run_s", Threaded: true, Stopped: "`tool_call` Local Shell"}
+}
+
+// a run hermes-hands stopped (Hermes kept calling its own tool for the
+// hands' work past its steers) is asked again: the same message, a
+// correction in front — not the end of the turn
+func TestRunStoppedRunIsAskedAgain(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{stoppedRun(), reply(`{"calls":[],"final":"done"}`, true)}}
+	var notes []string
+	l := &Loop{API: sa, MaxRounds: 8, Emit: func(ev session.Event) {
+		if ev.Kind == session.KindNote {
+			notes = append(notes, ev.Text)
+		}
+	}}
+	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "done" || out.Rounds != 2 {
+		t.Fatalf("out = %+v", out)
+	}
+	want := fmt.Sprintf(stoppedNote, "`tool_call` Local Shell") + "hello"
+	if sa.msgs[1] != want {
+		t.Errorf("round 2 msg = %q, want %q", sa.msgs[1], want)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "run stopped") || !strings.Contains(notes[0], "(1/2)") {
+		t.Errorf("notes = %q", notes)
+	}
+}
+
+// past maxStops the turn ends — and a run stopped twice is asked again with
+// one correction, not two stacked
+func TestRunStoppedTooOftenBlocks(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{stoppedRun()}} // repeats
+	out, _, _ := run(t, sa, nil, 8)
+	if out.OK || !strings.Contains(out.Answer, "BLOCKED: Hermes kept calling its own tools") ||
+		!strings.Contains(out.Answer, "stopped 3 runs") || len(sa.msgs) != maxStops+1 {
+		t.Fatalf("out = %+v after %d requests", out, len(sa.msgs))
+	}
+	if n := strings.Count(sa.msgs[2], stoppedMark); n != 1 || !strings.HasSuffix(sa.msgs[2], "hello") {
+		t.Errorf("round 3 msg carries %d corrections: %q", n, sa.msgs[2])
 	}
 }
 
@@ -574,7 +631,7 @@ func TestRunFramesFirstMessage(t *testing.T) {
 		"persistent bash shell",
 		"PROBLEM — operator's working directory: cwd /home/me/proj (git branch: main)",
 		"was hälst du von der readme ?", // the message, verbatim, as the problem body
-		"reason it through, then ONE instruction",
+		"think it through first, not in the reply — then ONE instruction",
 		`{"id":"c1","tool":"local_shell|local_read|local_write|local_edit|local_output"`,
 		`"final":null}`,
 		"not a description of yourself or your tools",

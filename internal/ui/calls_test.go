@@ -82,10 +82,14 @@ func TestHermesToolLines(t *testing.T) {
 	u := newUI(&b, false, false)
 	u.HermesTool("web_search", "go release", "")
 	u.HermesTool("terminal", "make test", "steered")
+	u.HermesTool("tool_call", "Local Shell", "repeat")
+	u.HermesTool("tool_call", "Local Edit", "stopped")
 	got := b.String()
 	if !strings.Contains(got, "· hermes web_search  go release") ||
 		!strings.Contains(got, "⚠ hermes-sandbox terminal  make test") ||
-		!strings.Contains(got, "steered back to the hands") {
+		!strings.Contains(got, "steered back to the hands") ||
+		!strings.Contains(got, "⚠ hermes-sandbox tool_call  Local Shell\n     ↳ again — this run was steered for it already; not again") ||
+		!strings.Contains(got, "⚠ hermes-sandbox tool_call  Local Edit\n     ↳ again after its steers — run stopped; hermes-hands asks once more") {
 		t.Errorf("HermesTool =\n%s", got)
 	}
 }

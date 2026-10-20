@@ -46,7 +46,7 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 		l.progress()
 		res, err = l.ask(ctx, msg, rec, history)
 	}
-	if err != nil {
+	if err != nil || res.Stopped != "" { // a stopped run has no reply to observe or record
 		return res, err
 	}
 	l.Ctx.Observe(res, msg, history, predicted)

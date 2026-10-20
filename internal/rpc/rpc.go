@@ -25,6 +25,7 @@
 //	{"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}       before it runs
 //	{"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 //	{"type":"hermes_tool","id":1,"tool":"terminal","preview":"...","action":"steered"}
+//	                                     action: "" | server | steered | stopped (past the run's steers: run stopped, asked again) | repeat (the stop refused) | approved | denied
 //	{"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  the turn's budget (max 0 = no limit)
 //	                                     (+ "context":48000,"window":131072 once the context is known)
 //	{"type":"note","id":1,"text":"budget: 10 of 25 rounds · 29 of 100 calls left — …"}  what the terminal notes

@@ -33,6 +33,10 @@ type AskResult struct {
 	// tools, each one more model call in the run. -1 when the run was
 	// polled: nothing says how many model calls it took.
 	HermesTools int
+	// Stopped is set when hermes-hands stopped the run itself (State
+	// "stopped", no Text): Hermes kept making a mistake past its steers —
+	// the call that did it, e.g. "`tool_call` Local Shell".
+	Stopped string
 }
 
 // Message is one entry of a run's conversation_history.
@@ -188,7 +192,7 @@ func (c *Client) pollRun(ctx context.Context, base, runID string, threaded bool)
 
 					HermesTools: -1,
 				}, nil
-			case "failed", "cancelled":
+			case "failed", "cancelled", "interrupted": // interrupted: the gateway restarted mid-run
 				return AskResult{}, fmt.Errorf("run %s %s: %s", runID, status,
 					trunc(stripNL(failDetail(respBody)), 400))
 			case "started", "running", "queued", "stopping", "":

@@ -128,15 +128,18 @@ func (l *Loop) frame(userMsg string) string {
 			loc += " (git branch: " + b + ")"
 		}
 	}
-	return "[hermes-hands — you are the brain; hermes-hands is your hands at the\n" +
-		"operator's Linux terminal, a persistent bash shell in the working directory.]\n\n" +
+	return "[hermes-hands — you are the brain; hermes-hands is your hands on the\n" +
+		"operator's machine, a persistent bash shell in the working directory.]\n\n" +
 		"PROBLEM — operator's working directory: " + loc + "\n\n" +
 		userMsg + "\n\n" +
-		"Your reply: reason it through, then ONE instruction and nothing else —\n" +
+		"Your reply: think it through first, not in the reply — then ONE instruction and\n" +
+		"nothing else —\n" +
 		"{\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +
 		"output to call) — or {\"calls\":[],\"final\":\"...\"} once it is solved. Not a\n" +
-		"chat reply, not a description of yourself or your tools. If you do not know\n" +
+		"chat reply, not a description of yourself or your tools. Your reply ends this\n" +
+		"run; the hands run it and their results are your next message — nothing to\n" +
+		"wait for or check, and no tool of yours reaches them. If you do not know\n" +
 		"the directory yet, your instruction is a look — `local_shell` (ls / git / rg)\n" +
 		"or `local_read`." + l.frameBudget()
 }
@@ -152,7 +155,7 @@ type Outcome struct {
 
 const (
 	fixupMsg = `{"error":"your previous message was not a single valid JSON object of the form {\"calls\":[...],\"final\":null}. Resend ONLY that object, no prose, no code fences."}`
-	emptyMsg = `{"error":"empty envelope. Either put tool calls in .calls or your answer in .final."}`
+	emptyMsg = `{"error":"empty envelope. Either put hands calls in .calls or your answer in .final."}`
 
 	// maxFixups bounds the botched-envelope / empty-envelope recovery nudges
 	// per turn. Seen against a real gateway: a model can spend its first
@@ -162,6 +165,16 @@ const (
 	// keeps the task in view across nudges (see below), an extra attempt is
 	// usually productive rather than wasted.
 	maxFixups = 3
+
+	// maxStops bounds the runs a turn has stopped for a mistake Hermes kept
+	// making past its steers (api steersPerKind), each asked again with
+	// stoppedNote in front.
+	maxStops = 2
+
+	stoppedMark = "[hermes-hands] your last run was stopped"
+	stoppedNote = stoppedMark + ": after its steers you still called %s. " +
+		"Your own tools never reach the operator's machine — the hands do, through the envelope. " +
+		"Answer the message below with your reply text: the envelope {\"calls\":[...],\"final\":null}, or a final — no tool call.\n\n"
 )
 
 var botchedRe = regexp.MustCompile(`(?i)"(calls|tool)"[[:space:]]*:`)
@@ -185,6 +198,12 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 		if round > 1 && !res.Threaded {
 			t.recap = true
 		}
+		if res.Stopped != "" {
+			if o, done := l.stopped(res.Stopped, round, t); done {
+				return o
+			}
+			continue
+		}
 		if o, done := l.handle(res.Text, round, t); done {
 			return o
 		}
@@ -199,6 +218,9 @@ type turnState struct {
 	recap   bool
 
 	fixups, rejects int // recovery nudges spent: a botched / empty envelope, one over the budget
+
+	stops   int    // runs hermes-hands stopped this turn (maxStops)
+	stopped string // the message a stopped run answered, asked again behind stoppedNote
 
 	// pending: the results send carries, unfitted, and the round they ran
 	// in — what a request refused for its size is fitted tighter from
@@ -219,6 +241,25 @@ func (l *Loop) opening(userMsg string) string {
 		l.PendingNote = ""
 	}
 	return send
+}
+
+// stopped answers a run hermes-hands stopped because Hermes kept calling
+// what (its own tool, for the hands' work) past its steers: the same message
+// again, a correction in front — or, past maxStops, the end of the turn.
+func (l *Loop) stopped(what string, round int, t *turnState) (Outcome, bool) {
+	if t.stops >= maxStops {
+		return Outcome{Answer: fmt.Sprintf("BLOCKED: Hermes kept calling its own tools for the hands' work (%s) — "+
+			"hermes-hands stopped %d runs of this turn. Send `continue` to try again.", what, t.stops+1), OK: false}, true
+	}
+	t.stops++
+	if !strings.HasPrefix(t.send, stoppedMark) {
+		t.stopped = t.send
+	}
+	l.noteOperator(fmt.Sprintf("run stopped: Hermes still called %s after its steers — asking again, with a correction (%d/%d)",
+		what, t.stops, maxStops))
+	t.send = fmt.Sprintf(stoppedNote, what) + t.stopped
+	t.turnlog += fmt.Sprintf("[round %d] (run stopped: %s after its steers; asked again)\n", round, what)
+	return Outcome{}, false
 }
 
 // handle acts on Hermes' reply of round: a final or prose ends the turn
@@ -297,7 +338,8 @@ func (l *Loop) resultsMsg(elems []resultElem, userMsg string, round int) string 
 		" it worked (empty or non-zero: try another instruction, never \"I can't read it\")." +
 		questionNote(userMsg) +
 		" Now give the operator your answer in final — or another instruction if you need" +
-		" more.\n" + string(payload) + l.roundBudgetNote(round+1)
+		" more. Either one is your reply text, the envelope, and it ends this run: no tool" +
+		" of yours reaches the hands.\n" + string(payload) + l.roundBudgetNote(round+1)
 }
 
 func (l *Loop) emit(ev session.Event) {

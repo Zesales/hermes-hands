@@ -247,6 +247,25 @@ func TestAsk_PollFailed(t *testing.T) {
 	}
 }
 
+// hermes-agent marks a run the gateway restart cut off "interrupted" — a
+// terminal status, not one to poll on until the watchdog
+func TestAsk_PollInterrupted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			writeTestJSON(w, 200, `{"run_id":"run_1","status":"started"}`)
+			return
+		}
+		writeTestJSON(w, 200, `{"status":"interrupted","error":"The gateway restarted before this run settled."}`)
+	}))
+	defer srv.Close()
+
+	c := testClient(srv.URL)
+	_, err := c.Runs().Ask(context.Background(), "hi", "", "")
+	if err == nil || !strings.HasPrefix(err.Error(), "run run_1 interrupted: ") {
+		t.Fatalf("err = %v, want the interrupted run reported", err)
+	}
+}
+
 func TestSetTitle_SwallowsError(t *testing.T) {
 	var got struct {
 		mu     sync.Mutex
@@ -450,8 +469,8 @@ func TestStreamRun_RealShape(t *testing.T) {
 
 func TestStreamRun_SandboxGuard(t *testing.T) {
 	// Hermes reaching for its own sandbox tools is steered back to the hands
-	// (once per run), its approval requests are denied, and thinking-side
-	// tools pass untouched.
+	// (each call, up to steersPerKind a run), its approval requests are
+	// denied, and thinking-side tools pass untouched.
 	body := "" +
 		`data: {"event": "tool.started", "tool": "web_search", "preview": "go 1.26 release"}` + "\n\n" +
 		`data: {"event": "tool.started", "tool": "terminal", "preview": "make test"}` + "\n\n" +
@@ -485,11 +504,78 @@ func TestStreamRun_SandboxGuard(t *testing.T) {
 	if strings.Join(seen, " ") != "web_search/ terminal/steered read_file/steered approval/denied" {
 		t.Errorf("hermes tools = %q", seen)
 	}
-	if len(steers) != 1 || !strings.Contains(steers[0], "terminal") || !strings.Contains(steers[0], `"input"`) {
-		t.Errorf("steers = %q, want exactly one, naming the first sandbox tool", steers)
+	if len(steers) != 2 || !strings.Contains(steers[0], "`terminal`") || !strings.Contains(steers[1], "`read_file`") ||
+		!strings.Contains(steers[0], `"input"`) {
+		t.Errorf("steers = %q, want one per sandbox call, each naming its tool", steers)
 	}
 	if len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"deny"`) || !strings.Contains(approvals[0], `"request_id":"ap-1"`) {
 		t.Errorf("approvals = %q", approvals)
+	}
+}
+
+func TestStreamRun_SteersRepeatsUpToCapThenStops(t *testing.T) {
+	// seen live: steered once, a model kept calling tool_call "Local Shell"
+	// — each repeat is steered again up to the cap; the next one stops the
+	// run, the rest of it is only waited out, and the result says why.
+	// When the server refuses the stop, a repeat is only reported.
+	for _, tc := range []struct {
+		name    string
+		stopOK  bool
+		end     string
+		actions string // past the steersPerKind steers
+	}{
+		{"stopped", true, `{"event": "run.cancelled"}`, "stopped"},
+		{"stopped, ends empty", true, `{"event": "run.completed", "output": ""}`, "stopped"},
+		{"stop refused", false, `{"event": "run.completed", "output": "{\"calls\":[],\"final\":\"ok\"}"}`, "repeat repeat"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body strings.Builder
+			for range steersPerKind + 2 {
+				body.WriteString(`data: {"event": "tool.started", "tool": "tool_call", "preview": "Local Shell"}` + "\n\n")
+			}
+			body.WriteString("data: " + tc.end + "\n\n")
+			var steers []string
+			stops := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				switch r.URL.Path {
+				case "/v1/runs/run_r/events":
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, body.String())
+				case "/v1/runs/run_r/steer":
+					steers = append(steers, string(b))
+					io.WriteString(w, `{"accepted":true}`)
+				case "/v1/runs/run_r/stop":
+					stops++
+					if !tc.stopOK {
+						w.WriteHeader(500)
+					}
+				default:
+					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			c := testClient(srv.URL)
+			var seen []string
+			c.OnHermesTool = func(tool, preview, action string) { seen = append(seen, action) }
+			res, err := c.streamRun(context.Background(), srv.URL, "run_r", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := strings.Repeat("steered ", steersPerKind) + tc.actions; strings.Join(seen, " ") != want {
+				t.Errorf("actions = %q, want %q", seen, want)
+			}
+			if len(steers) != steersPerKind || !strings.Contains(steers[0], "under no spelling") {
+				t.Errorf("steers = %q, want %d hands-tool steers", steers, steersPerKind)
+			}
+			if tc.stopOK {
+				if stops != 1 || res.State != "stopped" || res.Stopped != "`tool_call` Local Shell" || res.Text != "" {
+					t.Errorf("stops = %d, res = %+v, want one stop and a stopped result naming the call", stops, res)
+				}
+			} else if res.State != "completed" || res.Stopped != "" || stops != 2 {
+				t.Errorf("stops = %d, res = %+v, want a stop asked for each repeat and the run's own reply", stops, res)
+			}
+		})
 	}
 }
 

@@ -65,8 +65,7 @@ func TestCheckAndStrict(t *testing.T) {
 		t.Errorf("sandbox verdict = %+v", v)
 	}
 	for _, tc := range []struct{ tool, preview string }{
-		{"execute_code", "print(1)"},      // server work
-		{"tool_call", "Noop Placeholder"}, // nothing of the hands'
+		{"execute_code", "print(1)"}, // server work
 		{"web_search", "go 1.26"},
 		{"cronjob_manage", "nightly report"},
 	} {
@@ -123,5 +122,62 @@ func TestSetup(t *testing.T) {
 	}
 	if v := Check("web_search", "apt install golang", t.TempDir(), ""); v.Steer {
 		t.Errorf("Hermes' non-exec tools are never steered: %+v", v)
+	}
+}
+
+// a do-nothing call — after a steer, or to "check the connection" — is
+// steered in both modes; a real task that mentions such a word is not
+func TestPlaceholder(t *testing.T) {
+	repo := t.TempDir()
+	for _, tc := range []struct{ tool, preview string }{
+		// seen live
+		{"tool_call", "Noop Placeholder"},
+		{"tool_call", "Mcp Placeholder"},
+		{"delegate_task", "1 tasks: noop"},
+		{"delegate_task", "1 tasks: noop check"},
+		{"terminal", "echo placeholder"},
+		// spellings
+		{"tool_call", "mcp__noop__placeholder"},
+		{"delegate_task", "2 tasks: no-op, no_op"},
+		{"execute_code", "dummy"},
+	} {
+		for mode, v := range map[string]Verdict{"smart": Check(tc.tool, tc.preview, repo, ""), "steer": Strict(tc.tool, tc.preview)} {
+			if !v.Steer || v.Kind != "placeholder" || !strings.Contains(v.Message, "first real call") ||
+				!strings.Contains(v.Message, "`"+tc.tool+"`") {
+				t.Errorf("%s(%s, %q) = %+v, want a placeholder steer", mode, tc.tool, tc.preview, v)
+			}
+		}
+	}
+	for _, tc := range []struct{ tool, preview string }{
+		{"delegate_task", "1 tasks: research no-op patterns in Go"}, // steer steers it — as a delegation (TestDelegation)
+		{"web_search", "placeholder text css"},
+		{"tool_call", "Check"},
+		{"cronjob_manage", "nightly report"},
+	} {
+		for mode, v := range map[string]Verdict{"smart": Check(tc.tool, tc.preview, repo, ""), "steer": Strict(tc.tool, tc.preview)} {
+			if v.Kind == "placeholder" || v.Steer && !SandboxTools[tc.tool] {
+				t.Errorf("%s(%s, %q) = %+v, want no placeholder steer", mode, tc.tool, tc.preview, v)
+			}
+		}
+	}
+	if v := Check("tool_call", "Local Shell placeholder", repo, ""); v.Kind != "hands-tool" {
+		t.Errorf("a hands tool name wins over a placeholder: %+v", v)
+	}
+}
+
+// delegate_task's sub-agents work in the server sandbox and never reach the
+// hands: steer steers every delegation, smart one aimed at the project
+func TestDelegation(t *testing.T) {
+	repo := t.TempDir()
+	os.MkdirAll(filepath.Join(repo, "internal", "ui"), 0o755)
+	if v := Strict("delegate_task", "1 tasks: summarize the release notes"); !v.Steer || v.Kind != "sandbox" ||
+		!strings.Contains(v.Message, "exec, file and delegation tools") {
+		t.Errorf("Strict must steer a delegation: %+v", v)
+	}
+	if v := Check("delegate_task", "1 tasks: summarize the release notes", repo, ""); v.Steer {
+		t.Errorf("smart leaves a delegation of server work alone: %+v", v)
+	}
+	if v := Check("delegate_task", "1 tasks: fix the tests in internal/ui", repo, ""); !v.Steer || v.Kind != "sandbox" {
+		t.Errorf("smart must steer a delegation aimed at the project: %+v", v)
 	}
 }
