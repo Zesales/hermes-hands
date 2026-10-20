@@ -781,3 +781,13 @@ func TestRunCallMsLeavesOutApprovalWait(t *testing.T) {
 		t.Errorf("call Ms = %d — the 300ms approval wait must not count as run time", res.Ms)
 	}
 }
+
+// the note on outputs of this turn a compaction just elided
+func TestElidedNote(t *testing.T) {
+	if elidedNote("") != "" {
+		t.Error("nothing elided: no note")
+	}
+	if n := elidedNote("#6–#8"); !strings.Contains(n, "outputs #6–#8 of this turn are one line each now") || !strings.Contains(n, "do not") {
+		t.Errorf("note = %q", n)
+	}
+}

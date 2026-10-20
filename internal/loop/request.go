@@ -24,7 +24,7 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 	if l.Ctx.Due(predicted) {
 		if ev, err := l.Ctx.Compact(compact.Auto); err == nil {
 			l.emit(ev)
-			history, msg = l.Ctx.History(), t.send
+			history, msg = l.Ctx.History(), t.send+elidedNote(l.Ctx.ElidedNow)
 			predicted = l.Ctx.Predict(msg, history)
 		} else if !errors.Is(err, compact.ErrNothing) {
 			l.warnf("compaction failed: %v", err)
@@ -131,3 +131,15 @@ func (e overflowError) Error() string {
 }
 
 func (e overflowError) Unwrap() error { return e.err }
+
+// elidedNote tells Hermes that outputs it read moments ago — this turn's —
+// are lines now: seen live, a task bigger than the window made it read the
+// same files again and again, each read elided by the next compaction.
+func elidedNote(refs string) string {
+	if refs == "" {
+		return ""
+	}
+	return "\n[hermes-hands: to fit the window, outputs " + refs + " of this turn are one line each now — do not" +
+		" read them again in full. Work with what you already know, read only what is still missing (narrow it, or" +
+		" local_output with an offset), or answer with what you have so far.]"
+}

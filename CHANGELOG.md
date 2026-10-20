@@ -44,6 +44,18 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
   - Whatever the share, the trigger leaves 24K above the request — 20K for
     the reply, a 4K buffer — so a raised `HERMES_HANDS_COMPACT_AT` cannot run
     a request into the window's end (at 131k: at most ~107k).
+- **Compaction: no gain, no compaction; and Hermes is told what it lost.**
+  Seen live, in a test with a window smaller than the task: a compaction
+  "~34k → ~34k" — what filled the prompt was the round being sent, which no
+  compaction elides — and Hermes reading the same files six times, each read
+  elided by the next compaction.
+  - An automatic compaction that would save less than 4K tokens is skipped
+    (like hermes-agent's `proactive_prune_min_reclaim_tokens`): it would only
+    rewrite the prompt's prefix, which the server's prompt cache then misses.
+  - When a compaction turns outputs of the running turn into lines, the
+    request says so: "outputs #6–#8 of this turn are one line each now — do
+    not read them again in full; work with what you know, read only what is
+    missing, or answer with what you have so far".
 - **The operator's own rules come first**: what they say in the chat —
   "save nothing to memory", "don't touch X" — holds for the whole session,
   also after compaction, and outranks the instructions' permissions (seen

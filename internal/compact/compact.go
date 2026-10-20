@@ -40,7 +40,18 @@ type Keeper struct {
 	// only /compact). RoundOutput is the round output budget, which a
 	// rebuilt round gets again.
 	Window, At, RoundOutput int
+
+	// ElidedNow is what the last Compact newly turned into lines of the
+	// latest turn ("#6–#8") — outputs Hermes read moments ago; the loop tells
+	// it not to read them again in full. "" when none.
+	ElidedNow string
 }
+
+// minReclaim: an automatic compaction that would save less than this many
+// tokens is skipped — it would only rewrite the prompt's prefix, which the
+// server's prompt cache then misses (seen live: "~34k → ~34k" when what
+// filled the prompt was the round being sent, which no compaction elides).
+const minReclaim = 4096
 
 // DefaultOverhead is the guess for the fixed part of every prompt —
 // hermes-agent's system prompt, its tool schemas, the hands' instructions —
@@ -136,6 +147,10 @@ func (k *Keeper) Compact(d Depth) (session.Event, error) {
 		return session.Event{}, ErrNothing
 	}
 	c.Tokens, c.Before = k.size(evs, c), before
+	if d == Auto && before > 0 && before-c.Tokens < minReclaim {
+		return session.Event{}, ErrNothing
+	}
+	k.ElidedNow = elidedInTurn(evs, last, prev, c)
 	cp := &session.ChatCheckpoint{
 		N: k.Rec.Compactions + 1, Seq: top, Turn: last, Depth: d.String(),
 		Before: c.Before, BeforeFrom: from, After: c.Tokens,
@@ -227,6 +242,27 @@ func elidedRange(evs []session.Event, c session.Event) string {
 	}
 	if hi == 0 {
 		return ""
+	}
+	return fmt.Sprintf("#%d–#%d", lo, hi)
+}
+
+// elidedInTurn is "#6–#8": the outputs of turn that compaction c newly sends
+// as lines (prev had not), or "".
+func elidedInTurn(evs []session.Event, turn int, prev, c session.Event) string {
+	lo, hi := 0, 0
+	for _, e := range evs {
+		if e.Kind == session.KindResult && e.Turn == turn && e.Bytes >= session.ElideMin && e.Seq > prev.Upto && e.Seq <= c.Upto {
+			if lo == 0 {
+				lo = e.Ref
+			}
+			hi = e.Ref
+		}
+	}
+	switch {
+	case hi == 0:
+		return ""
+	case lo == hi:
+		return fmt.Sprintf("#%d", lo)
 	}
 	return fmt.Sprintf("#%d–#%d", lo, hi)
 }

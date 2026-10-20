@@ -66,6 +66,10 @@ func TestRunCompactsBeforeARequestThatWouldNotFit(t *testing.T) {
 	}
 	log.BeginTurn()
 	log.Add(session.Event{Kind: session.KindUser, Text: "read it"})
+	// not the session's first run: the 55k measured are mostly the chat
+	// hermes-agent holds, not a fixed part no compaction could shrink (the
+	// minReclaim gate would skip that one, rightly)
+	k.Rec.Turns = 1
 	out := l.Run(context.Background(), "read it", k.Rec, func(string, string, int) {})
 	if !out.OK || out.Answer != "done" {
 		t.Fatalf("out = %+v", out)

@@ -191,6 +191,23 @@ func TestCompactAutoKeepsTheLatestRounds(t *testing.T) {
 	if ev.Collapse != 3 {
 		t.Errorf("tight: collapse = %d, want 3 (never the latest turn)", ev.Collapse)
 	}
+	if k.ElidedNow != "#4" {
+		t.Errorf("tight: the latest turn's output elided now = %q, want #4", k.ElidedNow)
+	}
+}
+
+// an automatic compaction that would save less than minReclaim is skipped:
+// it would only cost the server's prompt cache
+func TestCompactAutoSkipsWhenItSavesTooLittle(t *testing.T) {
+	k, _ := newKeeper(t, 4)
+	k.Window, k.At = 400000, 45
+	k.Rec.Context = 1 // the prompt is already as small as compaction would make it
+	if _, err := k.Compact(Auto); !errors.Is(err, ErrNothing) {
+		t.Errorf("err = %v, want ErrNothing", err)
+	}
+	if _, err := k.Compact(Now); err != nil { // asked for: no gate
+		t.Errorf("now: %v", err)
+	}
 }
 
 // /compact elides every output but collapses no turn while the lines leave
