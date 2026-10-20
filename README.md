@@ -398,10 +398,11 @@ anything:
   request hermes-hands predicts its prompt; past `HERMES_HANDS_COMPACT_AT` %
   of `HERMES_HANDS_CONTEXT_WINDOW` it compacts first. Outputs are elided as
   far as needed — those of all but the latest two rounds, then of every
-  round — which loses nothing. Turns are collapsed to question + answer only
-  as a last resort, while the prompt would otherwise stay above three
-  quarters of the trigger (never the latest turn); a collapsed turn still
-  names the files it edited and read. `/compact` (rpc `compact`) elides
+  round — which loses nothing. Turns are collapsed to question + answer when
+  the outputs alone do not bring the prompt down to half the trigger (never
+  the latest turn) — deep rather than often: every compaction rewrites the
+  prompt's prefix, which the server's prompt cache then misses. A collapsed
+  turn still names the files it edited and read. `/compact` (rpc `compact`) elides
   every output so far now; **`/compact-aggressive`** (rpc `compact` with
   `"text":"aggressive"`) also collapses every earlier turn — for when
   `/compact` was not enough. `/compact` takes no argument, so a mistyped
@@ -444,9 +445,19 @@ An editor plugin puts the two side by side from the same files: rpc
 `checkpoint`), rpc `context` what Hermes reads now — the checkpoint's
 messages and those after it.
 
-Keep `HERMES_HANDS_COMPACT_AT` below hermes-agent's `compression.threshold`
-(default 0.5): then hermes-hands compacts first and hermes-agent's own
-compression rarely has to run in a hands session.
+`HERMES_HANDS_COMPACT_AT` defaults to `auto`: a few points below where
+hermes-agent compacts on its own, so hermes-hands' lossless compaction comes
+first. hermes-agent refuses windows under 64K; under 512K it raises any
+`compression.threshold` to at least 0.75 (never below 64K tokens, at most
+85 % of the window); from 512K it uses the threshold (default 0.5). So
+`auto` is 79 % at 64K, **69 %** from ~86K to 512K, **47 %** from 512K. To use
+more of the window, raise hermes-agent's threshold above 0.75 (it allows
+that) and set `HERMES_HANDS_COMPACT_AT` a few points below it. It takes an output reservation
+(`max_tokens`) on the model off the window first, and with
+`compression.threshold_tokens` set it compacts at the lower of the two — in
+either case set `HERMES_HANDS_COMPACT_AT` below that by hand. Whatever the
+share, the trigger leaves 24K above the request: 20K for the reply, 4K
+buffer.
 
 The turn footer splits the turn's time: `— worked for 1m06s · hermes 58s ·
 local 8s · waited on you 1m48s —` — Hermes' share (model, server tools,
@@ -570,7 +581,7 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`local_shell` keeps 2×) |
 | `HERMES_HANDS_MAX_ROUND_OUTPUT` | `60000` | bytes of one round's results together; a bigger round is cut, the full output stays local (`0` = no limit) |
 | `HERMES_HANDS_CONTEXT_WINDOW` | `131072` | the model's context window in tokens (`0` = unknown: the meter counts, nothing compacts on its own) |
-| `HERMES_HANDS_COMPACT_AT` | `45` | compact before a request past this % of the window — keep it below hermes-agent's `compression.threshold` (`0` = only `/compact`) |
+| `HERMES_HANDS_COMPACT_AT` | `auto` | compact before a request past this % of the window — must stay below where hermes-agent compacts. `auto` does that for hermes-agent's defaults (69 under a 512K window, 47 from 512K); with another `compression.threshold` or a `compression.threshold_tokens`, set a number a few points below it (`0` = only `/compact`) |
 | `HERMES_HANDS_RESPONSE_TIMEOUT` | `600` | seconds hermes-agent may go silent in a turn before it is cancelled; pushed back by any token / tool round / a live server-run probe (`0` = no limit) |
 | `HERMES_HANDS_WATCHDOG_INTERVAL` | `200` | seconds between those out-of-band "still working?" probes (floored at 15) |
 | `HERMES_API_*` | — | `CONNECT_TIMEOUT` 5, `MAX_TIME` 30, `POLL_INTERVAL` 2, `RETRIES` 3, `RUN_TIMEOUT` 600 |
@@ -601,7 +612,7 @@ for them. Around them:
   the budget hermes-hands announces is the one that binds, not a silent cut
   inside a round.
 - **`HERMES_HANDS_CONTEXT_WINDOW` = the model's window**, and
-  `HERMES_HANDS_COMPACT_AT` below hermes-agent's `compression.threshold`
+  `HERMES_HANDS_COMPACT_AT` at `auto`, below where hermes-agent compacts
   ([Context and compaction](#context-and-compaction)). hermes-agent's own
   compaction (`compression.enabled`) stays on for every other client of the
   gateway. The budget is built around compaction: every stop asks for a

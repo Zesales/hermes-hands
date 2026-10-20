@@ -51,7 +51,32 @@ func (k *Keeper) Predict(msg string, history []api.Message) int {
 // Due reports whether a request of predicted tokens should be compacted
 // first.
 func (k *Keeper) Due(predicted int) bool {
-	return k != nil && k.Window > 0 && k.At > 0 && predicted*100 >= k.Window*k.At
+	t := k.trigger()
+	return t > 0 && predicted >= t
+}
+
+// Room kept above a request: Hermes' reply, and a buffer for what a run adds
+// before it — its own tool calls, the estimate's error. The round's results
+// need none: they are part of the request the trigger is checked against.
+const (
+	replyRoom   = 20 << 10
+	replyBuffer = 4 << 10
+)
+
+// trigger is the prompt, in tokens, past which a request is compacted first:
+// At percent of the Window — never so high that the reply and the buffer no
+// longer fit above it, which would cost a refused request and a hard
+// compaction (a window too small for even that keeps the share). 0: no
+// automatic compaction.
+func (k *Keeper) trigger() int {
+	if k == nil || k.Window <= 0 || k.At <= 0 {
+		return 0
+	}
+	t := k.Window * k.At / 100
+	if room := k.Window - replyRoom - replyBuffer; room >= k.Window/2 && t > room {
+		t = room
+	}
+	return t
 }
 
 // Observe updates the meter after a completed run: res is its result, msg

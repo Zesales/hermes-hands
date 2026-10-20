@@ -148,7 +148,7 @@ hermes-hands - session <SESSION> >   home         : <TMP>/hermes-hands
     HERMES_HANDS_MAX_OUTPUT           20000                    (default)
     HERMES_HANDS_MAX_ROUND_OUTPUT     60000                    (default)
     HERMES_HANDS_CONTEXT_WINDOW       131072 tokens            (default)
-    HERMES_HANDS_COMPACT_AT           45%                      (default)
+    HERMES_HANDS_COMPACT_AT           69%                      (default)
     HERMES_HANDS_DENY                 (none)                   (default)
 
 hermes-hands - session <SESSION> >   nothing to compact yet — no call output or turn to elide

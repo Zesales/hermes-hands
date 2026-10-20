@@ -41,6 +41,26 @@ func newKeeper(t *testing.T, turns int) (*Keeper, *session.Log) {
 	return &Keeper{Store: st, Rec: rec, Window: 131072, At: 45}, log
 }
 
+// the trigger is At percent of the window, but leaves room above the request
+// for the reply (20K) and a buffer (4K) — unless the window is too small
+func TestTriggerLeavesRoomForTheReply(t *testing.T) {
+	k := &Keeper{Window: 131072, At: 69, RoundOutput: 60000}
+	if got := k.trigger(); got != 131072*69/100 { // 90439 — room 106496 is plenty
+		t.Errorf("trigger = %d", got)
+	}
+	k.At = 95
+	if got, want := k.trigger(), 131072-24576; got != want {
+		t.Errorf("capped trigger = %d, want %d", got, want)
+	}
+	k = &Keeper{Window: 32768, At: 90, RoundOutput: 60000} // room < half the window: the share stays
+	if got := k.trigger(); got != 32768*90/100 {
+		t.Errorf("small window trigger = %d", got)
+	}
+	if (&Keeper{Window: 131072}).trigger() != 0 || (*Keeper)(nil).trigger() != 0 {
+		t.Error("no share or no keeper: no trigger")
+	}
+}
+
 func TestMeterMeasuresASingleCallRun(t *testing.T) {
 	k, _ := newKeeper(t, 0)
 	// the session's first run: the prompt is the fixed part plus msg

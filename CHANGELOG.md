@@ -25,6 +25,25 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
 - **`tool_call "Local Output"` is steered** like the other hands tools —
   seen live, a run of them went through unsteered: the guard knew only
   shell / read / write / edit.
+- **Compaction: later and deeper.** Seen live: a long session compacted for
+  the 33rd time — the trigger was 45 % of a 131k window (~59k), and turns
+  collapsed only down to three quarters of it (~42k), so each compaction
+  bought ~17k. hermes-agent does not compact at its 0.5 default there: under
+  a 512K window it raises any `compression.threshold` to at least 0.75
+  (`agent/context_compressor.py`).
+  - `HERMES_HANDS_COMPACT_AT` defaults to `auto`, following hermes-agent's
+    own rule a few points below it: 79 % at 64K (its 64K floor, capped at
+    85 %), 69 % from ~86K to 512K (its 75 % floor), 47 % from 512K (its
+    0.5 default). `/config` says when a window is under the 64K hermes-agent
+    refuses.
+    A config written by `setup` before carries `HERMES_HANDS_COMPACT_AT=45`
+    as a value of its own — change it to `auto` (or remove the line).
+  - Turns collapse down to half the trigger, not three quarters: at 69 % of
+    131k a compaction now leaves ~45k free instead of ~17k — fewer
+    compactions, and fewer misses of the server's prompt cache.
+  - Whatever the share, the trigger leaves 24K above the request — 20K for
+    the reply, a 4K buffer — so a raised `HERMES_HANDS_COMPACT_AT` cannot run
+    a request into the window's end (at 131k: at most ~107k).
 - **The operator's own rules come first**: what they say in the chat —
   "save nothing to memory", "don't touch X" — holds for the whole session,
   also after compaction, and outranks the instructions' permissions (seen

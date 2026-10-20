@@ -21,15 +21,56 @@ const (
 )
 
 // The context (internal/compact): the model's window in tokens, the share of
-// it in percent a request may reach before hermes-hands compacts first — kept
-// below hermes-agent's own compression.threshold (default 0.5), so the
-// lossless compaction comes first — and the bytes of one round's results
-// together. 0 = unknown / off / no limit.
+// it in percent a request may reach before hermes-hands compacts first, and
+// the bytes of one round's results together. 0 = unknown / off / no limit.
+//
+// The share stays a few points below where hermes-agent compacts on its own,
+// so the lossless compaction comes first (AgentCompactsAt): 6 points under a
+// 512K window — 69 % where hermes-agent's floor of 75 % binds — and 3 from
+// 512K, where its threshold is 50 % by default (DefaultCompactAtLarge 47).
 const (
 	DefaultContextWindow  = 131072
-	DefaultCompactAt      = 45
+	DefaultCompactAt      = 69
+	DefaultCompactAtLarge = 47
+	LargeWindow           = 512000
+	MinAgentWindow        = 64000
 	DefaultMaxRoundOutput = 60000
 )
+
+// AgentCompactsAt is where hermes-agent 0.22 compacts on its own, in tokens,
+// for a window without an output reservation (agent/context_compressor.py,
+// agent/model_metadata.py): 0 under 64K, which it refuses; under 512K its
+// threshold raised to at least 75 %, but never below 64K tokens, capped at
+// 85 % of the window; from 512K its threshold, 50 % by default.
+func AgentCompactsAt(window int) int {
+	switch {
+	case window < MinAgentWindow:
+		return 0
+	case window < LargeWindow:
+		t := window * 75 / 100
+		if t < MinAgentWindow {
+			t = min(MinAgentWindow, window*85/100)
+		}
+		return t
+	}
+	return window / 2
+}
+
+// CompactAtFor is the compaction share for a window when
+// HERMES_HANDS_COMPACT_AT is unset or "auto": a few points below
+// AgentCompactsAt — 79 % at 64K, 69 % at 128K–256K, 47 % from 512K. A window
+// hermes-agent refuses keeps the plain default (/config says why).
+func CompactAtFor(window int) int {
+	t := AgentCompactsAt(window)
+	if t == 0 {
+		return DefaultCompactAt
+	}
+	margin := 6
+	if window >= LargeWindow {
+		margin = 3
+	}
+	return (t*100+window/2)/window - margin // rounded: 383999 of 511999 is 75 %, not 74
+}
 
 // flags holds command-line overrides (SetFlag) — the strongest layer Load
 // resolves.
@@ -142,6 +183,7 @@ func Load() (*Config, error) {
 		}
 	}
 
+	window := intOr(merged["HERMES_HANDS_CONTEXT_WINDOW"], DefaultContextWindow)
 	return &Config{
 		APIURL:     merged["HERMES_API_URL"],
 		APIKey:     merged["HERMES_API_KEY"],
@@ -170,8 +212,8 @@ func Load() (*Config, error) {
 		RunTimeout:       intOr(merged["HERMES_HANDS_RUN_TIMEOUT"], 120),
 		MaxOutput:        intOr(merged["HERMES_HANDS_MAX_OUTPUT"], 20000),
 		MaxRoundOutput:   intOr(merged["HERMES_HANDS_MAX_ROUND_OUTPUT"], DefaultMaxRoundOutput),
-		ContextWindow:    intOr(merged["HERMES_HANDS_CONTEXT_WINDOW"], DefaultContextWindow),
-		CompactAt:        min(intOr(merged["HERMES_HANDS_COMPACT_AT"], DefaultCompactAt), 95),
+		ContextWindow:    window,
+		CompactAt:        min(intOr(merged["HERMES_HANDS_COMPACT_AT"], CompactAtFor(window)), 95),
 		StateDir:         firstNonEmpty(merged["HERMES_HANDS_STATE"], home),
 
 		Home:          home,

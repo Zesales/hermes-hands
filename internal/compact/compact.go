@@ -85,10 +85,12 @@ type Depth int
 
 const (
 	// Auto, before a request that would come too close to the window:
-	// outputs elided only as far as the target — half the share At of the
-	// Window — needs (every round but the latest keepRounds, then every
-	// round); turns collapsed only while the prompt would stay above three
-	// quarters of At.
+	// outputs elided only as far as the target — half the trigger — needs
+	// (every round but the latest keepRounds, then every round); turns
+	// collapsed while the prompt would stay above that target too. Deep
+	// rather than often: a compaction that leaves half the trigger free buys
+	// rounds, and every compaction rewrites the prompt's prefix, which the
+	// server's prompt cache then misses.
 	Auto Depth = iota
 	// Now, asked for (/compact, rpc compact): every output so far elided;
 	// turns collapsed only like Auto's.
@@ -111,9 +113,9 @@ func (k *Keeper) Compact(d Depth) (session.Event, error) {
 	prev, _ := session.LastCompact(evs)
 	before, from := k.before(evs, prev)
 	target, collapseAbove := 0, 0 // no window known: outputs elided, nothing collapsed
-	if k.Window > 0 && k.At > 0 {
-		trigger := k.Window * k.At / 100
-		target, collapseAbove = trigger/2, trigger*3/4
+	if trigger := k.trigger(); trigger > 0 {
+		target = trigger / 2
+		collapseAbove = target
 	}
 	top := evs[len(evs)-1].Seq
 	c := session.Event{Kind: session.KindCompact, Upto: top, Collapse: prev.Collapse}

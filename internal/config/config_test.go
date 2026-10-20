@@ -50,7 +50,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.RetentionDays != 14 {
 		t.Errorf("RetentionDays = %d, want 14", c.RetentionDays)
 	}
-	if c.MaxRoundOutput != 60000 || c.ContextWindow != 131072 || c.CompactAt != 45 {
+	if c.MaxRoundOutput != 60000 || c.ContextWindow != 131072 || c.CompactAt != 69 {
 		t.Errorf("context defaults wrong: round output %d, window %d, compact at %d", c.MaxRoundOutput, c.ContextWindow, c.CompactAt)
 	}
 	if c.Sandbox != "steer" || sandboxMode(" Smart ") != "smart" || sandboxMode("show") != "show" || sandboxMode("bogus") != "steer" {
@@ -280,5 +280,22 @@ func mustWrite(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// the compaction share follows the window: a few points below where
+// hermes-agent compacts on its own — 75% under 512K, its threshold (50% by
+// default) from there; "auto" is the default, a number overrides it
+func TestCompactAtFollowsTheWindow(t *testing.T) {
+	for _, tc := range []struct {
+		window int
+		want   int
+	}{{131072, 69}, {262144, 69}, {511999, 69}, {512000, 47}, {1048576, 47},
+		{64000, 79}, {80000, 74}, // hermes-agent's 64K floor, capped at 85 %
+		{32768, 69}, // under hermes-agent's minimum: the plain default
+	} {
+		if got := CompactAtFor(tc.window); got != tc.want {
+			t.Errorf("CompactAtFor(%d) = %d, want %d", tc.window, got, tc.want)
+		}
 	}
 }

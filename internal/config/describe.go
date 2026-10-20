@@ -108,6 +108,9 @@ func compactAt(pct, window int) string {
 	if pct <= 0 || window <= 0 {
 		return "off (only /compact)"
 	}
+	if window < MinAgentWindow {
+		return strconv.Itoa(pct) + "% — hermes-agent refuses windows under 64K"
+	}
 	return strconv.Itoa(pct) + "%"
 }
 
