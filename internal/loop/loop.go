@@ -96,6 +96,10 @@ type Loop struct {
 	// see session.Recap). Set by the caller, consumed by Run.
 	ResumeNote string
 
+	// Inbox holds what the operator writes while a turn runs; each round's
+	// request takes it along (takeAdded). nil: nothing can be added.
+	Inbox *Inbox
+
 	// planned: the last turn ran in plan mode — the next one outside it says
 	// once that changes apply again (planNote).
 	planned bool

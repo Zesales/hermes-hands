@@ -35,6 +35,10 @@ type TranscriptOpts struct {
 	RoundOutput int
 }
 
+// AddedMark opens what the operator wrote while the turn ran, in the request
+// that carries it and in the transcript alike.
+const AddedMark = "[the operator adds, while you worked]\n"
+
 // LastCompact is the compaction in effect: the last KindCompact event of evs.
 // ok is false while hermes-agent holds the transcript (none yet).
 func LastCompact(evs []Event) (Event, bool) {
@@ -105,6 +109,8 @@ func (t *transcript) collapsed(turn []Event) {
 		switch e.Kind {
 		case KindUser:
 			t.add("user", "[operator] "+e.Text)
+		case KindAdded:
+			t.add("user", "[the operator added] "+e.Text)
 		case KindCall:
 			refs = append(refs, e.Ref)
 			tools[e.Tool]++
@@ -211,6 +217,9 @@ func (t *transcript) turn(turn []Event, o TranscriptOpts) {
 		case KindUser:
 			flush()
 			t.add("user", "[operator] "+e.Text)
+		case KindAdded: // sent after the round's results, as in the request
+			flush()
+			t.add("user", AddedMark+e.Text)
 		case KindHermesTool:
 			server = append(server, fmt.Sprintf("[your server tool %s: %s — %s]", e.Tool, clip(e.Text, 160), firstOr(e.Action, "ran")))
 		case KindReply:

@@ -791,3 +791,62 @@ func TestElidedNote(t *testing.T) {
 		t.Errorf("note = %q", n)
 	}
 }
+
+// what the operator writes while a turn runs goes out with the next round,
+// after the results, marked as theirs — and is logged as "added"
+func TestRunTakesWhatTheOperatorAdded(t *testing.T) {
+	inbox := &Inbox{}
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	var added []string
+	d := realDisp(t, prompt.AutoApprover{})
+	l := &Loop{API: sa, Dispatch: d, MaxRounds: 8, Inbox: inbox, Emit: func(ev session.Event) {
+		if ev.Kind == session.KindAdded {
+			added = append(added, ev.Text)
+		}
+	}}
+	l.OnResult = func(string, string, int) { inbox.Push("also check the tests") } // typed while the hands ran
+	out := l.Run(context.Background(), "read foo", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "done" {
+		t.Fatalf("out = %+v", out)
+	}
+	if strings.Contains(sa.msgs[0], "also check the tests") {
+		t.Errorf("round 1 cannot carry it yet: %q", sa.msgs[0])
+	}
+	m := sa.msgs[1]
+	if i, j := strings.Index(m, `"results"`), strings.Index(m, session.AddedMark+"also check the tests"); i < 0 || j < i {
+		t.Errorf("round 2 must carry it after the results: %q", m)
+	}
+	if len(added) != 1 || added[0] != "also check the tests" || len(inbox.Take()) != 0 {
+		t.Errorf("added events = %q", added)
+	}
+}
+
+// what the turn did not take — it ended first — stays for the next turn
+func TestInboxKeepsWhatTheTurnDidNotTake(t *testing.T) {
+	inbox := &Inbox{}
+	sa := &scriptAsker{replies: []api.AskResult{reply(`{"calls":[],"final":"done"}`, true)}}
+	l := &Loop{API: sa, MaxRounds: 8, Inbox: inbox}
+	sa2 := &pushOnAsk{scriptAsker: sa, push: func() { inbox.Push("next idea") }}
+	l.API = sa2
+	if out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {}); !out.OK {
+		t.Fatalf("out = %+v", out)
+	}
+	if got := inbox.Take(); len(got) != 1 || got[0] != "next idea" {
+		t.Errorf("inbox after the turn = %q, want the line for the next turn", got)
+	}
+}
+
+// pushOnAsk runs push while a request is out — the operator typing while
+// Hermes thinks.
+type pushOnAsk struct {
+	*scriptAsker
+	push func()
+}
+
+func (p *pushOnAsk) Ask(ctx context.Context, msg, sess, skey string) (api.AskResult, error) {
+	p.push()
+	return p.scriptAsker.Ask(ctx, msg, sess, skey)
+}

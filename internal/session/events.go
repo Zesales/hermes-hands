@@ -20,6 +20,7 @@ const EventsVersion = 1
 // Event kinds, in the order a turn produces them.
 const (
 	KindUser       = "user"        // the operator's message (Text)
+	KindAdded      = "added"       // what the operator wrote while the turn ran, sent with the next round (Text)
 	KindCall       = "call"        // a hands call, written BEFORE it runs (Ref, ID, Tool, Args)
 	KindResult     = "result"      // its outcome (Ref, Tool, Exit, Ms, Lines, Bytes; output in out/<Ref>.txt)
 	KindHermesTool = "hermes_tool" // Hermes used one of its OWN server tools (Tool, Text = preview, Action)

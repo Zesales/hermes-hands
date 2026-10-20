@@ -35,6 +35,8 @@ type UI struct {
 	activitySince time.Time // when that started — the spinner counts from here
 	budget        string    // where the turn stands ("round 3/25 · calls 12/100"); "" = not shown
 	streamOpen    bool      // Delta printed the "hermes" label; StreamDone closes it
+	typeAhead     bool      // the operator can type during the turn (TypeAhead): the hint says so
+	typing        string    // what they type (SetTyping); "" = the hint
 }
 
 // New builds a UI writing to stderr. Colour is on when stderr is a tty,
@@ -125,8 +127,15 @@ func (u *UI) StartWorking() (stop func()) {
 					budget = "  ·  " + u.budget
 				}
 				if u.spinning {
-					fmt.Fprintf(u.w, "\r%s   %s%s%s%s%s  ·  %ds%s  ·  Ctrl+C to cancel%s\x1b[K",
-						u.cDim, u.cAcc, frames[i%len(frames)], label, u.cR, u.cDim, el, budget, u.cR)
+					tail := "Ctrl+C to cancel" + u.cR
+					switch {
+					case u.typing != "":
+						tail = u.cR + u.cYou + "you› " + u.cR + clipTail(u.typing, u.cols()/2) + "▏"
+					case u.typeAhead:
+						tail = "type to add · Ctrl+C to cancel" + u.cR
+					}
+					fmt.Fprintf(u.w, "\r%s   %s%s%s%s%s  ·  %ds%s  ·  %s\x1b[K",
+						u.cDim, u.cAcc, frames[i%len(frames)], label, u.cR, u.cDim, el, budget, tail)
 				}
 				u.mu.Unlock()
 			}
@@ -190,6 +199,31 @@ func (u *UI) You(msg string) {
 		fmt.Fprintf(u.w, "%s%syou%s\n", u.cB, u.cYou, u.cR)
 		io.WriteString(u.w, indentLines(msg, "   "))
 	})
+}
+
+// Added is what the operator wrote while the turn ran, as it goes out with
+// the next round: a dim "you (added)" label, the message indented 3.
+func (u *UI) Added(msg string) {
+	u.sync(func() {
+		fmt.Fprintf(u.w, "%s%syou%s%s (added)%s\n", u.cB, u.cYou, u.cR, u.cDim, u.cR)
+		io.WriteString(u.w, indentLines(msg, "   "))
+	})
+}
+
+// TypeAhead says whether the operator can type during the turn (repl): the
+// working line then says so, and shows what they type (SetTyping).
+func (u *UI) TypeAhead(on bool) {
+	u.mu.Lock()
+	u.typeAhead, u.typing = on, ""
+	u.mu.Unlock()
+}
+
+// SetTyping puts what the operator is typing during a turn on the working
+// line ("" takes it off); Enter queues it for the next round (repl).
+func (u *UI) SetTyping(s string) {
+	u.mu.Lock()
+	u.typing = s
+	u.mu.Unlock()
 }
 
 // Working is the pre-animation static line — non-tty and tests use it.
@@ -397,4 +431,17 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// clipTail keeps the last w runes of s — the end of a line being typed is
+// where the cursor is.
+func clipTail(s string, w int) string {
+	r := []rune(s)
+	if w < 8 {
+		w = 8
+	}
+	if len(r) <= w {
+		return s
+	}
+	return "…" + string(r[len(r)-w+1:])
 }

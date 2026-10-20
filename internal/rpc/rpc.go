@@ -7,6 +7,9 @@
 // Requests:
 //
 //	{"id":1,"type":"turn","text":"why is CI red?"}
+//	{"id":11,"type":"append","text":"also check the lint job"}  while a turn runs: goes out with its next
+//	                                          round (no turn running: a turn of its own); what the turn
+//	                                          did not take becomes the next turn, under this id
 //	{"id":2,"type":"new"}
 //	{"id":3,"type":"use","session":"hh_20260902T101112_abc123"}
 //	{"id":4,"type":"check"}
@@ -22,6 +25,8 @@
 //
 //	{"type":"ready","session":"hh_...","cwd":"/repo","version":"X.Y.Z","approvals":"off","hermes_agent":"0.22.2"}
 //	                                     (+ "compat":"…" when hermes_agent is outside the supported range)
+//	{"type":"queued","id":11,"text":"also check the lint job"}  append taken; when a round sends it:
+//	{"type":"added","id":1,"text":"also check the lint job"}    in the running turn's events
 //	{"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}       before it runs
 //	{"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
 //	{"type":"hermes_tool","id":1,"tool":"terminal","preview":"...","action":"steered"}
@@ -56,6 +61,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"hermes-hands/internal/app"
 	"hermes-hands/internal/compact"
@@ -83,7 +89,12 @@ type Deps struct {
 func Run(smode string, d Deps) int {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
-	emit := func(v map[string]any) { _ = enc.Encode(v) }
+	var emitMu sync.Mutex // a turn runs in the background while requests are read
+	emit := func(v map[string]any) {
+		emitMu.Lock()
+		_ = enc.Encode(v)
+		emitMu.Unlock()
+	}
 
 	a, err := d.NewApp()
 	if err != nil {
@@ -111,6 +122,13 @@ type server struct {
 	runner  *turn.Runner
 	emit    func(map[string]any)
 	debugOn bool
+
+	// A turn runs in the background (startTurn) so append reaches it; every
+	// other request waits for it, in order, as before.
+	mu         sync.Mutex
+	busy       bool
+	lastAppend any // the id a turn of what was appended too late answers under
+	turns      sync.WaitGroup
 }
 
 // start preflights like the REPL — /v1/capabilities, without which the
@@ -179,13 +197,18 @@ func (s *server) serve(in io.Reader) {
 			s.emit(map[string]any{"type": "error", "id": id, "message": fmt.Sprintf("unknown request type %q", req.Type)})
 			continue
 		}
+		if req.Type != "append" {
+			s.turns.Wait() // everything else after the running turn, in order
+		}
 		h(s, req, id)
 	}
+	s.turns.Wait()
 }
 
 // handlers answers each request type; id is the request's id, echoed back.
 var handlers = map[string]func(s *server, req request, id any){
-	"turn":      (*server).turn,
+	"turn":      (*server).startTurn,
+	"append":    (*server).appendText,
 	"history":   (*server).history,
 	"new":       (*server).newSession,
 	"use":       (*server).use,
@@ -201,13 +224,59 @@ func (s *server) fail(id any, msg string) {
 	s.emit(map[string]any{"type": "error", "id": id, "message": msg})
 }
 
-// turn runs one turn; the answer — or why there is none — closes it.
-func (s *server) turn(req request, id any) {
+// startTurn runs a turn in the background, so append can reach it. What
+// was appended but not taken — the turn ended first — becomes the next turn,
+// answered under the last append's id.
+func (s *server) startTurn(req request, id any) {
 	if req.Text == "" {
 		s.fail(id, "turn needs a non-empty text")
 		return
 	}
-	res := s.runner.Run(req.Text, &front{emit: s.emit, id: id, heads: map[int]string{}})
+	s.mu.Lock()
+	s.busy = true
+	s.mu.Unlock()
+	s.turns.Add(1)
+	go func() {
+		defer s.turns.Done()
+		text := req.Text
+		for {
+			s.turn(text, id)
+			s.mu.Lock()
+			left := s.a.Loop.Inbox.Take()
+			if len(left) == 0 {
+				s.busy = false
+				s.mu.Unlock()
+				return
+			}
+			id = s.lastAppend
+			s.mu.Unlock()
+			text = strings.Join(left, "\n\n")
+		}
+	}()
+}
+
+// appendText queues text for the running turn's next round — or, with no
+// turn running, makes it a turn of its own.
+func (s *server) appendText(req request, id any) {
+	if req.Text == "" {
+		s.fail(id, "append needs a non-empty text")
+		return
+	}
+	s.mu.Lock()
+	if s.busy {
+		s.a.Loop.Inbox.Push(req.Text)
+		s.lastAppend = id
+		s.mu.Unlock()
+		s.emit(map[string]any{"type": "queued", "id": id, "text": req.Text})
+		return
+	}
+	s.mu.Unlock()
+	s.startTurn(req, id)
+}
+
+// turn runs one turn; the answer — or why there is none — closes it.
+func (s *server) turn(text string, id any) {
+	res := s.runner.Run(text, &front{emit: s.emit, id: id, heads: map[int]string{}})
 	switch res.End.Outcome {
 	case "timeout":
 		s.fail(id, fmt.Sprintf("turn timed out — no reply from hermes-agent (HERMES_HANDS_RESPONSE_TIMEOUT=%ds)", res.End.Limit))

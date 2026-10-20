@@ -15,6 +15,7 @@ import (
 // transcript it goes along. Hermes' reply is recorded (KindReply): the
 // transcript of a compacted session is built from those.
 func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *session.Record) (api.AskResult, error) {
+	l.takeAdded(t)
 	history := l.Ctx.History()
 	msg := t.send
 	if t.recap && history == nil { // hermes-hands' own transcript carries the turn already
