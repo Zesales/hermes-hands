@@ -22,6 +22,17 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
   short; "you do not chat" and "your instruction is a look" are gone, and a
   new example answers an opinion straight away. The rule against Hermes'
   own exec / file / delegation tools is unchanged.
+- **`tool_call "Local Output"` is steered** like the other hands tools —
+  seen live, a run of them went through unsteered: the guard knew only
+  shell / read / write / edit.
+- **The frame names the envelope again**: "To look, or for a task, your
+  instruction is the envelope: `local_shell` (ls / git / rg) or
+  `local_read` in its calls" — the cue the old frame had. `tool_call` is
+  named once in the instructions, not five times: a forbidding mention
+  primes as much as it forbids. A/B in fresh sessions against v0.14.4's
+  instructions (3 × a task + an opinion each): tasks 3/3 either way; own
+  tools reached for 5× (2× `tool_call` with a hands name) vs 2× (none
+  through `tool_call`); the opinion answered straight away 2/3 vs 3/3.
 - **The envelope passed to `tool_call` is steered** as a hands tool called
   as Hermes' own (`tool_call` "Unnamed call", "Unnamed call +2"): the steer
   says the envelope's `calls` are not tool_call's, and the instructions say

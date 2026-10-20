@@ -654,6 +654,7 @@ func TestRunFramesFirstMessage(t *testing.T) {
 		"MESSAGE from the operator — working directory: cwd /home/me/proj (git branch: main)",
 		"was hälst du von der readme ?", // the message, verbatim, as the body
 		"answer it in final, as in a chat — look\nfirst only when the answer needs facts from their machine",
+		"your instruction is the envelope: `local_shell` (ls / git / rg) or\n`local_read` in its calls",
 		"think it through first, not in the reply — then\nONE JSON object",
 		`{"id":"c1","tool":"local_shell|local_read|local_write|local_edit|local_output"`,
 		`"final":null}`,

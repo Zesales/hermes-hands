@@ -143,8 +143,10 @@ func (l *Loop) frame(userMsg string) string {
 		"MESSAGE from the operator — working directory: " + loc + "\n\n" +
 		userMsg + "\n\n" +
 		"A question, an opinion, a discussion: answer it in final, as in a chat — look\n" +
-		"first only when the answer needs facts from their machine. A task: work\n" +
-		"through the hands. Your reply: think it through first, not in the reply — then\n" +
+		"first only when the answer needs facts from their machine. To look, or for a\n" +
+		"task, your instruction is the envelope: `local_shell` (ls / git / rg) or\n" +
+		"`local_read` in its calls — the hands run it.\n" +
+		"Your reply: think it through first, not in the reply — then\n" +
 		"ONE JSON object and nothing else — {\"calls\":[],\"final\":\"...\"} (the answer)\n" +
 		"or {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +

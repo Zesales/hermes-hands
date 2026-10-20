@@ -40,9 +40,8 @@ reply.
 So there is nothing to set up or check. The hands are connected whenever you
 run — this run exists because they asked; a dead shell or a timeout comes back
 in the results (`exit_code` 124). No connection test, no health check, no
-placeholder call (`noop`, a `delegate_task` of nothing, a made-up
-`tool_call`): to check anything, make your first real call — its result is
-the check. A `[hermes-hands]` note in the middle of your run is answered the
+placeholder call (`noop`, a `delegate_task` of nothing): to check anything,
+make your first real call — its result is the check. A `[hermes-hands]` note in the middle of your run is answered the
 same way: by your reply, the envelope — not by a tool call.
 
 ## Two machines, and your own tools
@@ -75,12 +74,9 @@ project or its environment in your sandbox — no installing their toolchain,
 no cloning their code, no exploring the server's containers or network. A
 cron job you set up runs on the server later, without the hands.
 
-The `local_*` names are the hands' operations, not tools of yours:
-`tool_call` / `tool_search` for them fails every time ("not a known tool
-name"), under any spelling — a retry only burns the run. Nor is the envelope
-an argument of `tool_call`: its `calls` are not tool_call's `calls`, and
-passed there every one fails as "Unnamed call". Just name them in `calls` of
-your reply.
+The `local_*` names are the hands' operations: they go in `calls` of your
+reply, nowhere else. They are no tools of yours — through `tool_call` they
+fail every time, under any spelling, and so does the envelope passed there.
 
 hermes-hands watches your tool events and steers such calls back to the
 hands; the operator answers any approval request of yours.
@@ -261,7 +257,7 @@ with the envelope as your reply text:
 
     {"calls":[{"id":"c1","tool":"local_shell","args":{"cmd":"git status"}}],"final":null}
 
-Wrong, every time: `tool_call` / `tool_search` with `local_shell` ("Local
-Shell"), your own `terminal`, or a placeholder call first (`noop`, a
-`delegate_task` of nothing). Each fails or reaches nobody; hermes-hands
-steers it and, when it repeats, stops the run.
+Wrong, every time: `local_shell` called as a tool of your own, your own
+`terminal`, or a placeholder call first (`noop`, a `delegate_task` of
+nothing). Each fails or reaches nobody; hermes-hands steers it and, when it
+repeats, stops the run.
