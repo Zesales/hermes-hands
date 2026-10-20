@@ -178,15 +178,16 @@ func TestGoldenREPL(t *testing.T) {
 
 // Every slash command once, around one turn: the read-only ones (/help,
 // /config, /check, /sessions, /session), the ones that change something
-// (/yolo twice, /debug on + off, /new), the ones that need a turn first (/out,
-// /history, /fork — which the mock refuses), and the mistakes (an unknown
-// command, /out without a number).
+// (/approve round the cycle, /yolo twice, /debug on + off, /new), the ones
+// that need a turn first (/out, /history, /fork — which the mock refuses),
+// and the mistakes (an unknown command, /approve and /out with a bad
+// argument).
 func TestGoldenREPLCommands(t *testing.T) {
 	srv := hermesmock.NewStream("golden")
 	defer srv.Close()
 	g := newGoldenRun(t, srv.URL, "ask")
 	golden(t, "repl_commands.txt", g.run(t, "", strings.Join([]string{
-		"/help", "/yolo", "/yolo", "/bogus",
+		"/help", "/approve", "/approve", "/approve", "/approve bogus", "/yolo", "/yolo", "/bogus",
 		"show me the readme", "o", "y",
 		"/out 2", "/out x", "/history 1", "/sessions", "/session",
 		"/debug on", "/debug off", "/check", "/config", "/compact", "/compact agressive", "/compact-aggressive", "/context", "/fork",

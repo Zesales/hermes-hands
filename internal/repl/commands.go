@@ -29,6 +29,7 @@ var commands = []command{
 	{[]string{"/fork"}, (*repl).fork},
 	{[]string{"/history", "/chat-history"}, (*repl).history},
 	{[]string{"/out"}, (*repl).out},
+	{[]string{"/approve"}, (*repl).approve},
 	{[]string{"/yolo"}, (*repl).yolo},
 	{[]string{"/debug"}, (*repl).debug},
 	{[]string{"/check"}, (*repl).check},
@@ -75,6 +76,42 @@ func (r *repl) setup(string) {
 		}
 	}
 	fmt.Fprintln(os.Stderr)
+}
+
+// approveCycle is what /approve without an argument steps through.
+var approveCycle = []string{"ask", "plan", "auto"}
+
+// approveSays is what each mode means, as /approve reports it.
+var approveSays = map[string]string{
+	"ask":   "ask — shell / write / edit ask first",
+	"plan":  "plan — Hermes looks and answers with a plan: reads run, shell asks, nothing is written",
+	"auto":  "auto — shell / write / edit run unattended",
+	"never": "never — shell / write / edit are refused, reads only",
+}
+
+// approve sets the hands' approvals: ask | plan | auto | never, or — with no
+// argument — the next of ask → plan → auto. A runtime switch like /yolo:
+// this session only, the next one opened starts from the config.
+func (r *repl) approve(arg string) {
+	mode := strings.ToLower(strings.TrimSpace(arg))
+	switch mode {
+	case "":
+		mode = approveCycle[0]
+		for i, m := range approveCycle {
+			if m == r.a.Approvals() {
+				mode = approveCycle[(i+1)%len(approveCycle)]
+			}
+		}
+	case "yolo", "off":
+		mode = "auto"
+	}
+	says, ok := approveSays[mode]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "  /approve ask | plan | auto | never — no argument: the next of ask → plan → auto (now: %s)\n\n", r.a.Approvals())
+		return
+	}
+	r.a.SetApprovals(mode)
+	fmt.Fprintf(os.Stderr, "  approvals: %s (this session only)\n\n", says)
 }
 
 // yolo toggles approvals for the hands' shell / write / edit — a runtime
