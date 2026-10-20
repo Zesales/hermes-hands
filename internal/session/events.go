@@ -59,6 +59,7 @@ type Event struct {
 	Ms      int64           `json:"ms,omitempty"`
 	Lines   int             `json:"lines,omitempty"`
 	Bytes   int             `json:"bytes,omitempty"`
+	Hash    string          `json:"hash,omitempty"` // a result's output, for "same output as #n" (OutputHash; ElideMin bytes and up)
 	OK      *bool           `json:"ok,omitempty"`
 	Tokens  int             `json:"tokens,omitempty"`
 	Action  string          `json:"action,omitempty"`   // hermes_tool: "" | server | steered | stopped | repeat | approved | denied; approval: yes | no | all | quit | once | session | deny

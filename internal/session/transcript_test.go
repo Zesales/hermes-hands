@@ -258,3 +258,28 @@ func TestTranscriptLeavesOutHermesToolAttempts(t *testing.T) {
 		t.Errorf("stopped turn = %q", msgs[2].Content)
 	}
 }
+
+// an output Hermes has verbatim already goes out once: a repeat of it is a
+// reference; a short one is not worth it
+func TestTranscriptSendsARepeatedOutputOnce(t *testing.T) {
+	big := strings.Repeat("same line\n", 100)
+	h := OutputHash(big)
+	evs := []Event{
+		{Seq: 1, Turn: 1, Kind: KindUser, Text: "read it twice"},
+		{Seq: 2, Turn: 1, Kind: KindReply, Text: `{"calls":[{"id":"c1","tool":"local_read","args":{"path":"a"}}],"final":null}`},
+		{Seq: 3, Turn: 1, Kind: KindCall, Ref: 1, ID: "c1", Tool: "local_read", Args: json.RawMessage(`{"path":"a"}`)},
+		{Seq: 4, Turn: 1, Kind: KindResult, Ref: 1, Tool: "local_read", Bytes: len(big), Hash: h},
+		{Seq: 5, Turn: 1, Kind: KindReply, Text: `{"calls":[{"id":"c1","tool":"local_read","args":{"path":"a"}}],"final":null}`},
+		{Seq: 6, Turn: 1, Kind: KindCall, Ref: 2, ID: "c1", Tool: "local_read", Args: json.RawMessage(`{"path":"a"}`)},
+		{Seq: 7, Turn: 1, Kind: KindResult, Ref: 2, Tool: "local_read", Bytes: len(big), Hash: h},
+		{Seq: 8, Turn: 1, Kind: KindReply, Text: `{"calls":[],"final":"done"}`},
+	}
+	msgs := Transcript(evs, TranscriptOpts{Output: func(int) string { return big }})
+	all := ""
+	for _, m := range msgs {
+		all += m.Content
+	}
+	if strings.Count(all, "same line") != 100 || !strings.Contains(all, "[same output as #1 — above") {
+		t.Errorf("the output went out %d/100 lines; transcript:\n%s", strings.Count(all, "same line"), all)
+	}
+}

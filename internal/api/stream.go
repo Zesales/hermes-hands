@@ -149,8 +149,9 @@ const steersPerKind = 5
 
 // againMsg is a steer for a kind of mistake the run was steered for once
 // already: the full text went out then, and hermes-agent keeps every steer in
-// the session — five times the whole paragraph only made it longer.
-const againMsg = "[hermes-hands] Again: your `%s` call is not how the hands' work is done. No tool call answers this — your next reply is the envelope {\"calls\":[...],\"final\":null}."
+// the session — five times the whole paragraph only made it longer. It names
+// the rule the instructions state (Rule E), which every run carries anyway.
+const againMsg = "[hermes-hands] Again: your `%s` call — Rule E: your next reply is the envelope, no tool call."
 
 // stopped is the result of a run hermes-hands stopped itself.
 func (rs *runStream) stopped() AskResult {

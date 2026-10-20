@@ -3,6 +3,7 @@ package compact
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,9 +27,9 @@ func newKeeper(t *testing.T, turns int) (*Keeper, *session.Log) {
 		t.Fatal(err)
 	}
 	log, _ := st.OpenLog(rec)
-	big := strings.Repeat("output line\n", 2500)
 	ref := 0
 	for i := 0; i < turns; i++ {
+		big := strings.Repeat(fmt.Sprintf("output line %d\n", i), 2500) // each turn its own: a repeated output goes out once
 		ref++
 		log.BeginTurn()
 		log.Add(session.Event{Kind: session.KindUser, Text: "step"})

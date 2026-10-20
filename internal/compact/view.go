@@ -129,3 +129,24 @@ func orRendered(checkpoint string) string {
 	}
 	return checkpoint
 }
+
+// Verbatim maps each output Hermes still has verbatim in its conversation —
+// a result after the last compaction's elision, worth a hash (ElideMin bytes
+// and up) — to the earliest #ref that carried it; the loop sends a repeat of
+// it as a reference (session.SameOutput). nil without a keeper.
+func (k *Keeper) Verbatim() map[string]int {
+	if k == nil {
+		return nil
+	}
+	evs := k.events()
+	last, _ := session.LastCompact(evs)
+	m := map[string]int{}
+	for _, e := range evs {
+		if e.Kind == session.KindResult && e.Hash != "" && e.Seq > last.Upto {
+			if _, ok := m[e.Hash]; !ok {
+				m[e.Hash] = e.Ref
+			}
+		}
+	}
+	return m
+}

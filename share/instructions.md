@@ -81,9 +81,9 @@ approval request of yours.
 
 ## Your reply
 
-Think it through before you reply, not in the reply: your reply is always
-exactly one JSON object and nothing around it — no prose before or after it,
-no code fences —
+**Rule E — the envelope.** Think it through before you reply, not in the
+reply: your reply is always exactly one JSON object and nothing around it —
+no prose before or after it, no code fences —
 
     {"calls": [ {"id": "c1", "tool": "<operation>", "args": { ... }} ], "final": null}
 

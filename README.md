@@ -346,7 +346,7 @@ The local session store lives in `~/hermes-hands/sessions/`
 | file | what |
 |---|---|
 | `<id>/session.json` | the index record — `--session <id>` and `sessions` work offline |
-| `<id>/events.jsonl` | everything the terminal showed, as an append-only, versioned event log: your messages, every hands call (before it runs) and result, the approval prompts you answered, Hermes' own tool attempts, answers, turn footers — plus Hermes' replies and the compactions, which the transcript of a compacted session is built from (without Hermes' own tool attempts: they would be examples of the mistake in its history) |
+| `<id>/events.jsonl` | everything the terminal showed, as an append-only, versioned event log: your messages, every hands call (before it runs) and result, the approval prompts you answered, Hermes' own tool attempts, answers, turn footers — plus Hermes' replies and the compactions, which the transcript of a compacted session is built from (without Hermes' own tool attempts: they would be examples of the mistake in its history; an output it has verbatim already goes once, a repeat as `[same output as #n …]`) |
 | `<id>/out/<n>.txt` | the full (scrubbed) output of call `#n` |
 | `<id>/debug.jsonl` | the `/debug` trace, only while it is on |
 | `<id>/chat-checkpoints/NNNN.json` | what Hermes reads from compaction N on — see [Context and compaction](#context-and-compaction) |

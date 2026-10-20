@@ -336,6 +336,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 	if stopped != nil {
 		return *stopped, true
 	}
+	elems = l.dedupe(elems)
 	t.pending, t.pendingRound = elems, round
 	t.send = l.resultsMsg(l.fitRound(elems, l.MaxRoundOutput), t.userMsg, round)
 	l.announce(round + 1)

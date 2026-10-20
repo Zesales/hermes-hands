@@ -83,6 +83,7 @@ func Transcript(evs []Event, o TranscriptOpts) []Msg {
 
 type transcript struct {
 	msgs []Msg
+	seen map[string]int // output hash -> the #ref that went out verbatim with it first
 }
 
 func (t *transcript) add(role, content string) {
@@ -279,10 +280,18 @@ func (t *transcript) results(calls []Event, results map[int]Event, o TranscriptO
 			e.ExitCode = intOr(r.Exit, 0)
 			e.Args = elideArgs(c.Args)
 			e.Output = fmt.Sprintf(`[elided by hermes-hands: %d lines, %d bytes — local_output {"ref":%d} reads it]`, r.Lines, r.Bytes, c.Ref)
+		case r.Hash != "" && t.seen[r.Hash] != 0 && t.seen[r.Hash] < c.Ref:
+			e.ExitCode, e.Output = intOr(r.Exit, 0), SameOutput(t.seen[r.Hash])
 		default:
 			e.ExitCode = intOr(r.Exit, 0)
 			if o.Output != nil {
 				e.Output = o.Output(c.Ref)
+			}
+			if r.Hash != "" {
+				if t.seen == nil {
+					t.seen = map[string]int{}
+				}
+				t.seen[r.Hash] = c.Ref
 			}
 			verbatim = append(verbatim, len(elems))
 			outs, refs = append(outs, e.Output), append(refs, c.Ref)

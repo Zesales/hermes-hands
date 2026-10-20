@@ -54,6 +54,17 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
   - A run's second to fifth steer for the same kind of mistake is one
     line ("Again: your `…` call is not how the hands' work is done …"):
     the full paragraph went out once, and hermes-agent keeps every steer.
+  - **An output Hermes has verbatim already goes out once.** Every result
+    of 300 bytes and up carries a hash in the log; a repeat of an output
+    still in Hermes' conversation — read again in a later round, or twice in
+    one — goes out as `[same output as #6 — above; local_output {"ref":6}
+    reads it again]`, in the live round and in a compacted transcript alike.
+    Seen live: a long turn read the same file sections again and again, each
+    in full. Nothing is lost: the log keeps every output, local_output reads
+    any.
+  - The central rule has a name in the instructions — **Rule E — the
+    envelope** — and a repeated steer points at it in one line: "Again:
+    your `…` call — Rule E: your next reply is the envelope, no tool call."
   - The results message opens in one sentence, not five: "The worker ran
     your job on the operator's machine — real output, not your sandbox …
     Reply with the next job or your final" — the instructions say the
