@@ -4,6 +4,22 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
+## 0.15.0 — (unreleased, `bump:minor`) `/approve`: ask, plan, auto
+
+- **`/approve`** sets the hands' approvals for the open session: no
+  argument steps `ask` → `plan` → `auto` → `ask`, `/approve ask | plan |
+  auto | never` sets one. A runtime switch like `/yolo` (which stays):
+  never saved, every session opened starts from the config again.
+- **`plan`**, a new approvals mode (also as `HERMES_HANDS_APPROVE=plan`):
+  Hermes looks and answers with a plan. `local_read` / `local_output` run,
+  `local_shell` asks as in `ask`, `local_write` / `local_edit` are refused
+  before anyone is asked — the result tells Hermes to put the change into
+  its plan; an edit that would not apply still says so. Every turn in plan
+  mode tells Hermes up front to end with a plan (what it found, each change
+  file by file, the commands to run), and the first turn after it says
+  once that changes apply again — the plan phase's "change nothing" does
+  not linger in the chat.
+
 ## 0.14.3 — (unreleased, `bump:patch`) an exchange, not a tool: a misdirected call is steered, then its run stopped
 
 Seen in real code sessions and in the measurements of 2026-10-14: Hermes

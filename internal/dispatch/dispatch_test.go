@@ -269,6 +269,53 @@ func TestWriteFileNewAndApproval(t *testing.T) {
 	}
 }
 
+// planApprover is a fakeApprover in plan mode.
+type planApprover struct{ fakeApprover }
+
+func (*planApprover) Planning() bool { return true }
+
+// plan mode (/approve plan): a write or an edit is refused before anyone is
+// asked and the file stays as it was; an edit that would not apply still
+// says so, and a read runs as usual
+func TestPlanModeWritesNothing(t *testing.T) {
+	ap := &planApprover{fakeApprover{d: prompt.Approve}}
+	d, root := newDisp(t, ap)
+	os.WriteFile(filepath.Join(root, "c.txt"), []byte("one two"), 0o644)
+	if !d.Planning() {
+		t.Fatal("Planning() = false with a planning approver")
+	}
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"write_file", map[string]any{"path": "new.txt", "content": "x"}},
+		{"edit_file", map[string]any{"path": "c.txt", "old": "one", "new": "1"}},
+	} {
+		if res, err := d.Dispatch(tc.tool, raw(tc.args)); err != nil || res.Exit != 125 || res.Out != notWritten {
+			t.Errorf("%s in plan mode = %+v, %v", tc.tool, res, err)
+		}
+	}
+	if ap.last != "" {
+		t.Errorf("plan mode asked about a write: %q", ap.last)
+	}
+	if _, err := os.Stat(filepath.Join(root, "new.txt")); err == nil {
+		t.Error("plan mode created a file")
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "c.txt")); string(b) != "one two" {
+		t.Errorf("plan mode changed a file: %q", b)
+	}
+	if res, _ := d.Dispatch("edit_file", raw(map[string]any{"path": "c.txt", "old": "zzz", "new": "q"})); res.Exit != 1 ||
+		!strings.Contains(res.Out, "matched 0 times") {
+		t.Errorf("edit that would not apply = %+v", res)
+	}
+	if res, _ := d.Dispatch("read_file", raw(map[string]any{"path": "c.txt"})); res.Exit != 0 || !strings.Contains(res.Out, "one two") {
+		t.Errorf("read in plan mode = %+v", res)
+	}
+	if (&Dispatcher{Approver: &fakeApprover{}}).Planning() {
+		t.Error("an approver without plan mode is no planner")
+	}
+}
+
 func TestEditFileLiteralAndCounts(t *testing.T) {
 	ap := &fakeApprover{d: prompt.Approve}
 	d, root := newDisp(t, ap)

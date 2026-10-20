@@ -16,6 +16,7 @@ hermes-hands - session <SESSION> >   Type a message to your Hermes brain. It wor
     /compact      compact this session's chat now (a chat checkpoint; outputs stay readable)
     /compact-aggressive  also every earlier turn as question + answer — when /compact was not enough
     /context      what Hermes reads now (/context full = every message)
+    /approve      approvals ask → plan → auto (or /approve ask|plan|auto|never)
     /yolo         toggle approvals for shell / write / edit
     /debug        toggle the redacted connection trace (session debug.jsonl)
     /setup        (re)configure the gateway URL + key
@@ -23,6 +24,14 @@ hermes-hands - session <SESSION> >   Type a message to your Hermes brain. It wor
     /check        re-test the gateway connection
     /help         show this
     /exit         quit  (Ctrl-D too; Ctrl-C cancels the running turn)
+
+hermes-hands - session <SESSION> >   approvals: plan — Hermes looks and answers with a plan: reads run, shell asks, nothing is written (this session only)
+
+hermes-hands - session <SESSION> >   approvals: auto — shell / write / edit run unattended (this session only)
+
+hermes-hands - session <SESSION> >   approvals: ask — shell / write / edit ask first (this session only)
+
+hermes-hands - session <SESSION> >   /approve ask | plan | auto | never — no argument: the next of ask → plan → auto (now: ask)
 
 hermes-hands - session <SESSION> >   approvals: OFF (yolo) — shell / write run unattended (this session only)
 

@@ -425,6 +425,28 @@ func TestRunResultsSayTheReplyIsTheEnvelope(t *testing.T) {
 	}
 }
 
+// plan mode is said at the start of every turn in it, and once when it is
+// over — else the plan phase's "change nothing" would linger in the chat
+func TestPlanModeNotes(t *testing.T) {
+	ap := &prompt.TTYApprover{Mode: "plan"}
+	sa := &scriptAsker{replies: []api.AskResult{reply(`{"calls":[],"final":"the plan"}`, true)}}
+	l := &Loop{API: sa, Dispatch: &dispatch.Dispatcher{Approver: ap}, MaxRounds: 8}
+	turn := func(msg string) { l.Run(context.Background(), msg, rec(), func(string, string, int) {}) }
+	turn("plan it")
+	ap.Mode = "auto"
+	turn("do it")
+	turn("and the docs")
+	if !strings.Contains(sa.msgs[0], "[plan mode — the operator wants a plan first") || strings.Contains(sa.msgs[0], "plan mode is over") {
+		t.Errorf("turn in plan mode = %q", sa.msgs[0])
+	}
+	if !strings.Contains(sa.msgs[1], "[plan mode is over: local_write / local_edit apply again") || strings.Contains(sa.msgs[1], "wants a plan first") {
+		t.Errorf("first turn after plan mode = %q", sa.msgs[1])
+	}
+	if strings.Contains(sa.msgs[2], "plan mode") {
+		t.Errorf("a later turn still mentions plan mode: %q", sa.msgs[2])
+	}
+}
+
 func stoppedRun() api.AskResult {
 	return api.AskResult{State: "stopped", RunID: "run_s", Threaded: true, Stopped: "`tool_call` Local Shell"}
 }

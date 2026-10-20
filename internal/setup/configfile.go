@@ -16,7 +16,7 @@ import (
 // default: a fresh config sets all of them — the file shows what is in effect
 // — and a later setup appends the ones an older config lacks.
 var configDefaults = []struct{ key, val, note string }{
-	{"HERMES_HANDS_APPROVE", "ask", "ask | auto | never — --yolo and /yolo switch it per run"},
+	{"HERMES_HANDS_APPROVE", "ask", "ask | plan | auto | never — --yolo, /yolo and /approve switch it per run"},
 	{"HERMES_HANDS_STREAM", "auto", "auto | on | off"},
 	{"HERMES_HANDS_SANDBOX", "steer", "Hermes' own server terminal/file tools: steer (back to the hands) | smart | show"},
 	{"HERMES_HANDS_MAX_ROUNDS", strconv.Itoa(config.DefaultMaxRounds), "requests to Hermes per turn (0 = no limit)"},

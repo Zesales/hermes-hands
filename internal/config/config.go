@@ -63,7 +63,7 @@ type Config struct {
 	ConnectTimeout, MaxTime, PollInterval time.Duration
 	APIRetries                            int
 	APIRunTimeout                         time.Duration
-	Approve                               string // ask | auto | never (anything else behaves as ask)
+	Approve                               string // ask | plan | auto | never (anything else behaves as ask)
 	Stream                                string // HERMES_HANDS_STREAM: "" / auto | on | off
 	Deny                                  []string
 	MaxRounds, RunTimeout, MaxOutput      int

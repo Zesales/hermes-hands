@@ -38,7 +38,7 @@ func (AutoApprover) Confirm(string, string) Decision { return Approve }
 // process, so an "all" answer latches for the rest of the run (bash
 // HH_APPROVE_ALL), across turns.
 type TTYApprover struct {
-	Mode    string // HERMES_HANDS_APPROVE: ask | auto | never (anything else == ask)
+	Mode    string // HERMES_HANDS_APPROVE: ask | plan | auto | never (anything else == ask)
 	Warnf   func(format string, a ...any)
 	allDone bool
 
@@ -68,7 +68,11 @@ type TTYApprover struct {
 	openTTY func() (io.ReadWriteCloser, error)
 }
 
-// Confirm ports hh_confirm exactly:
+// Planning reports plan mode: the hands write nothing (dispatch refuses
+// local_write / local_edit before asking); shell commands still ask.
+func (a *TTYApprover) Planning() bool { return a.Mode == "plan" }
+
+// Confirm ports hh_confirm exactly (plan asks like ask):
 //
 //	auto            -> Approve
 //	never           -> warn, Deny

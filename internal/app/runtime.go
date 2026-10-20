@@ -2,7 +2,7 @@ package app
 
 import "hermes-hands/internal/prompt"
 
-// Runtime switches — /yolo, /debug, the rpc approvals and debug requests —
+// Runtime switches — /approve, /yolo, /debug, the rpc approvals and debug requests —
 // change the running process only. They are written into Cfg (source
 // "runtime") so /config shows what is in effect, never into the config file,
 // and ResetRuntime drops them whenever a session is opened: every session, a
@@ -28,7 +28,7 @@ func (a *App) rememberStartup() {
 	}
 }
 
-// SetApprovals switches the hands' approvals (ask | auto | never) for this
+// SetApprovals switches the hands' approvals (ask | plan | auto | never) for this
 // process. Back at the start-up value it is no runtime switch any more.
 func (a *App) SetApprovals(mode string) {
 	if ta, ok := a.approver(); ok {
@@ -42,7 +42,7 @@ func (a *App) SetApprovals(mode string) {
 	}
 }
 
-// Approvals is the approvals mode in effect: ask | auto | never.
+// Approvals is the approvals mode in effect: ask | plan | auto | never.
 func (a *App) Approvals() string {
 	if ta, ok := a.approver(); ok {
 		return ta.Mode

@@ -298,6 +298,9 @@ func (d *Dispatcher) doWrite(args map[string]json.RawMessage) (Result, error) {
 	if res, held := d.heldBack(abs, p); held {
 		return res, nil
 	}
+	if d.Planning() {
+		return Result{Exit: 125, Out: notWritten}, nil
+	}
 
 	var diff string
 	if fi, err := os.Stat(abs); err == nil && fi.Mode().IsRegular() {
@@ -354,6 +357,9 @@ func (d *Dispatcher) doEdit(args map[string]json.RawMessage) (Result, error) {
 	// `awk sub()` regex + `&` interpretation.
 	if n := strings.Count(content, old); n != 1 {
 		return Result{Exit: 1, Out: fmt.Sprintf("edit_file: 'old' matched %d times in %s (need exactly 1)", n, p)}, nil
+	}
+	if d.Planning() { // after the match check: a plan's edit that would not apply is worth knowing
+		return Result{Exit: 125, Out: notWritten}, nil
 	}
 	updated := strings.Replace(content, old, newS, 1)
 	diff := unifiedDiff(p, abs, updated)
