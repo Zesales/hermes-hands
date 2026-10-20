@@ -64,10 +64,11 @@ type Verdict struct {
 }
 
 // handsToolRe matches the hands' tool names (and their display forms, as in
-// Hermes' tool_call preview "Local Shell").
-var handsToolRe = regexp.MustCompile(`(?i)\blocal[ _-]?(shell|read|write|edit)\b`)
+// Hermes' tool_call preview "Local Shell") — local_output too: seen live, a
+// run of tool_call "Local Output" went through unsteered.
+var handsToolRe = regexp.MustCompile(`(?i)\blocal[ _-]?(shell|read|write|edit|output)\b`)
 
-const handsToolMsg = "[hermes-hands] `local_shell` / `local_read` / `local_write` / `local_edit` are not tools of yours — not via tool_call, not via tool_search, under no spelling: their \"not a known tool name\" error is final, a retry only burns the run. They are names you put in your reply envelope, and the hands run them on the operator's machine. No tool call answers this note: end this run with your reply {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell\",\"args\":{\"cmd\":\"…\"}}],\"final\":null}."
+const handsToolMsg = "[hermes-hands] `local_shell` / `local_read` / `local_write` / `local_edit` / `local_output` are not tools of yours — not via tool_call, not via tool_search, under no spelling: their \"not a known tool name\" error is final, a retry only burns the run. They are names you put in your reply envelope, and the hands run them on the operator's machine. No tool call answers this note: end this run with your reply {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell\",\"args\":{\"cmd\":\"…\"}}],\"final\":null}."
 
 // localWork is what every steer tells Hermes: where the work belongs, and
 // what to do when a tool is missing there.

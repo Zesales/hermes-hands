@@ -52,6 +52,7 @@ func TestCheckAndStrict(t *testing.T) {
 	// the live follow-up: after a steer, Hermes tried its deferral mechanism
 	for _, tc := range []struct{ tool, preview string }{
 		{"tool_call", "Local Shell"},
+		{"tool_call", "Local Output"},
 		{"tool_search", "local_read"},
 		{"local_shell", ""},
 		{"terminal", "local_shell ls"},
