@@ -506,8 +506,9 @@ func TestStreamRun_SandboxGuard(t *testing.T) {
 		t.Errorf("hermes tools = %q", seen)
 	}
 	if len(steers) != 2 || !strings.Contains(steers[0], "`terminal`") || !strings.Contains(steers[1], "`read_file`") ||
-		!strings.Contains(steers[0], `"input"`) {
-		t.Errorf("steers = %q, want one per sandbox call, each naming its tool", steers)
+		!strings.Contains(steers[0], `"input"`) || !strings.Contains(steers[0], "never set it up in your sandbox") ||
+		!strings.Contains(steers[1], "Again:") || strings.Contains(steers[1], "never set it up") {
+		t.Errorf("steers = %q, want one per sandbox call, each naming its tool — the full text once, then short", steers)
 	}
 	if len(approvals) != 1 || !strings.Contains(approvals[0], `"choice":"deny"`) || !strings.Contains(approvals[0], `"request_id":"ap-1"`) {
 		t.Errorf("approvals = %q", approvals)

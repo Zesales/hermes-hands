@@ -420,7 +420,7 @@ func TestRunResultsSayTheReplyIsTheEnvelope(t *testing.T) {
 	if out, _, _ := run(t, sa, realDisp(t, prompt.AutoApprover{}), 8); !out.OK {
 		t.Fatalf("out = %+v", out)
 	}
-	if !strings.Contains(sa.msgs[1], "your reply text, the envelope, and it ends this run: no tool of yours reaches the hands") {
+	if !strings.Contains(sa.msgs[1], "your reply text, the envelope; no tool of yours reaches the worker") {
 		t.Errorf("results message = %q", trunc(sa.msgs[1], 600))
 	}
 }

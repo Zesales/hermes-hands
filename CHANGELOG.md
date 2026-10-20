@@ -44,6 +44,20 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
   - Whatever the share, the trigger leaves 24K above the request — 20K for
     the reply, a 4K buffer — so a raised `HERMES_HANDS_COMPACT_AT` cannot run
     a request into the window's end (at 131k: at most ~107k).
+- **Less noise in what Hermes reads, again and again.**
+  - Hermes' own tool attempts are no longer in the transcript of a
+    compacted session. A long session's history carried dozens of "[your
+    server tool tool_call: Local Shell — steered]" — examples, in the
+    model's own past, of the very mistake — and the reflex grew with the
+    session. The terminal and the log keep them. A turn stopped for them
+    reads "hermes-hands stopped it before an answer", naming no tool.
+  - A run's second to fifth steer for the same kind of mistake is one
+    line ("Again: your `…` call is not how the hands' work is done …"):
+    the full paragraph went out once, and hermes-agent keeps every steer.
+  - The results message opens in one sentence, not five: "The worker ran
+    your job on the operator's machine — real output, not your sandbox …
+    Reply with the next job or your final" — the instructions say the
+    rest, and hermes-agent stores every round's message.
 - **Type while Hermes works**, as in Claude Code. What the operator types
   during a turn stands on the working line (`you› …`); Enter queues it
   (`queued for the next round: …`), and the turn's next round takes it

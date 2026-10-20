@@ -351,15 +351,10 @@ func (l *Loop) resultsMsg(elems []resultElem, userMsg string, round int) string 
 	// place downstream of round 1 where the model still sees what was asked.
 	// Cheap even when the server does thread it correctly: one restated
 	// sentence, no meaningful token cost.
-	return "[hands results] Your hands ran the instruction you just gave, in the operator's" +
-		" working directory" + l.locNote() + ". This is real output from the operator's" +
-		" machine — the operator did NOT paste it, and it is NOT from your sandbox. Each" +
-		" result's output is the actual file contents / command output; exit_code 0 means" +
-		" it worked (empty or non-zero: try another instruction, never \"I can't read it\")." +
-		questionNote(userMsg) +
-		" Now give the operator your answer in final — or another instruction if you need" +
-		" more. Either one is your reply text, the envelope, and it ends this run: no tool" +
-		" of yours reaches the hands.\n" + string(payload) + l.roundBudgetNote(round+1)
+	return "[hands results] The worker ran your job on the operator's machine" + l.locNote() +
+		" — real output, not your sandbox; empty output or a non-zero exit means: try another" +
+		" command." + questionNote(userMsg) + " Reply with the next job or your final — your reply" +
+		" text, the envelope; no tool of yours reaches the worker.\n" + string(payload) + l.roundBudgetNote(round+1)
 }
 
 func (l *Loop) emit(ev session.Event) {

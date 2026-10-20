@@ -147,6 +147,11 @@ type runStream struct {
 // refuses the stop.
 const steersPerKind = 5
 
+// againMsg is a steer for a kind of mistake the run was steered for once
+// already: the full text went out then, and hermes-agent keeps every steer in
+// the session — five times the whole paragraph only made it longer.
+const againMsg = "[hermes-hands] Again: your `%s` call is not how the hands' work is done. No tool call answers this — your next reply is the envelope {\"calls\":[...],\"final\":null}."
+
 // stopped is the result of a run hermes-hands stopped itself.
 func (rs *runStream) stopped() AskResult {
 	return AskResult{State: "stopped", RunID: rs.runID, Threaded: rs.threaded, HermesTools: rs.tools, Stopped: rs.stopping}
@@ -259,8 +264,12 @@ func (c *Client) hermesTool(ctx context.Context, base, runID string, e sseEvent,
 		check = guard.Strict
 	}
 	if v := check(e.Tool, e.Preview); v.Steer {
+		msg := v.Message
+		if steered[v.Kind] > 0 { // the run had the full text for this kind once
+			msg = fmt.Sprintf(againMsg, e.Tool)
+		}
 		switch {
-		case steered[v.Kind] < steersPerKind && c.steer(ctx, base, runID, v.Message):
+		case steered[v.Kind] < steersPerKind && c.steer(ctx, base, runID, msg):
 			steered[v.Kind]++
 			action = "steered"
 		// A steer the server refused never reached the model — waiting for it
