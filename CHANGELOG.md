@@ -4,7 +4,7 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.16.0 — (unreleased, `bump:minor`) an assistant that answers; `@path` attachments
+## 0.15.0 — (unreleased, `bump:minor`) an assistant that answers; `@path`; type while it works; compaction later and deeper
 
 Seen in real sessions: every message came to Hermes framed as a PROBLEM
 about the working directory — "you do not chat", "your instruction is a
@@ -147,7 +147,9 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
   100 KB, scrubbed). Read-only, also from outside the working directory.
   A 4xx for the images is reported as such and keeps the session id.
 
-## 0.15.0 — (unreleased, `bump:minor`) `/approve`: ask, plan, auto
+## 0.14.4 — 2026-10-20 — `/approve`: ask, plan, auto
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
 - **`/approve`** sets the hands' approvals for the open session: no
   argument steps `ask` → `plan` → `auto` → `ask`, `/approve ask | plan |
@@ -163,7 +165,9 @@ parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
   once that changes apply again — the plan phase's "change nothing" does
   not linger in the chat.
 
-## 0.14.3 — (unreleased, `bump:patch`) an exchange, not a tool: a misdirected call is steered, then its run stopped
+## 0.14.3 — 2026-10-20 — an exchange, not a tool: a misdirected call is steered, then its run stopped
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
 Seen in real code sessions and in the measurements of 2026-10-14: Hermes
 treats the hands as tools of its own. Steered once, a model kept calling
