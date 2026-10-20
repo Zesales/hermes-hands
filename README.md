@@ -184,6 +184,20 @@ and the REPL starts even when unconfigured. When the gateway supports SSE the
 answer text previews live as it generates (`HERMES_HANDS_STREAM` =
 `auto`|`on`|`off`); the final answer renders through `glow`/`bat` if installed.
 
+**Attach a file with `@path`**, as in Claude Code: `@shot.png`,
+`@"path with spaces"`, `@~/notes.txt` in a message — or an image dropped into
+the terminal, which pastes its path. Read-only, and also from outside the
+directory: you named it. An image (png, jpeg, gif, webp, up to 5 MB) goes
+along as an image in the turn's first run — the model behind Hermes needs
+vision; hermes-agent keeps only `[screenshot]` of it in the session. A text
+file goes along as its content (up to 100 KB, secrets scrubbed). A name that
+is no file stays text; each attachment shows as a note.
+
+**Questions get answers.** Hermes answers a question, an opinion or a
+discussion straight away, as in a chat, and looks on your machine only when
+the answer depends on it; a task — change, fix, build, run — it works
+through the hands.
+
 Every hands call is shown **before it runs** — its session-wide number, the
 tool and what it runs — and again when it finishes, with a short excerpt of
 its output (the first and last lines on success; the last lines plus earlier
@@ -224,11 +238,12 @@ tools — `tool_call` "Noop Placeholder", a `delegate_task` of "noop check",
 right after a steer or to "check the connection". The hands are connected
 whenever Hermes runs; its first real call in the envelope is the check.
 Web, memory, skills and cron for real work are never steered. A run is
-steered up to five times per kind of mistake. Past that hermes-hands
-**stops the run** (`↳ again after its steers — run stopped; hermes-hands
-asks once more`) and sends the same message again with a correction in
-front — at most twice a turn, then the turn ends `BLOCKED` and `continue`
-starts over. Without that a model can loop on its mistake for many minutes
+steered up to five times per kind of mistake. Past that — or at once when
+the server refuses a steer, which then never reached the model —
+hermes-hands **stops the run** (`↳ run stopped — hermes-hands asks once
+more, with a correction`) and sends the same message again with the
+correction in front: at most twice a turn, then the turn ends `BLOCKED` and
+`continue` starts over. Without that a model can loop on its mistake for many minutes
 until hermes-agent's own retry guard gives up.
 
 When one of Hermes' server-side tools asks for **approval**, you decide —

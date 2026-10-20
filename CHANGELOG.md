@@ -4,6 +4,51 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
+## 0.16.0 — (unreleased, `bump:minor`) an assistant that answers; `@path` attachments
+
+Seen in real sessions: every message came to Hermes framed as a PROBLEM
+about the working directory — "you do not chat", "your instruction is a
+look" — so a question or an opinion was worked on instead of answered.
+And Hermes passed the hands envelope to its own `tool_call`, whose
+parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
+
+- **An assistant that answers or acts.** The instructions open with the
+  decision: a question, an opinion, a discussion, a plan to talk through →
+  answered in `final`, as in a chat, looking first only when the answer
+  depends on facts from the operator's machine; a task → worked through the
+  hands; unsure → answer, and say what it would do. "A claim about their
+  machine needs a look; an opinion or general knowledge does not." The frame
+  says MESSAGE from the operator instead of PROBLEM and the same rule in
+  short; "you do not chat" and "your instruction is a look" are gone, and a
+  new example answers an opinion straight away. The rule against Hermes'
+  own exec / file / delegation tools is unchanged.
+- **The envelope passed to `tool_call` is steered** as a hands tool called
+  as Hermes' own (`tool_call` "Unnamed call", "Unnamed call +2"): the steer
+  says the envelope's `calls` are not tool_call's, and the instructions say
+  it too.
+- **A stopped run's prose is no answer.** Seen live: hermes-hands stopped
+  a run past its steers, and in the same moment hermes-agent's own retry
+  guard completed it with "I stopped retrying because I kept running
+  tool_call 8 times…" — which ended the turn instead of the corrected ask.
+  After a stop only an envelope that made it before the stop is used; any
+  other reply counts as stopped and the message is asked again.
+- **A refused steer stops the run at once.** A steer the server refuses
+  never reaches the model, so waiting for it to catch itself is pointless:
+  hermes-hands stops the run and asks again with the correction in the next
+  run's input, which needs no `/steer`. Steers that arrive keep the five
+  chances. The stop line and note no longer say "after its steers".
+- **A refused steer says why**: the warning and the debug trace carry the
+  server's reason (a 409 is `run_not_accepting_steer` or
+  `steer_not_accepted`) — seen live, every steer after the first of a run
+  refused with a bare "HTTP 409".
+- **`@path` attachments**, as in Claude Code: `@path`, `@"path with
+  spaces"`, `@~/…`, or an image path dropped into the terminal. An image
+  (png, jpeg, gif, webp, up to 5 MB) goes along as an `image_url` part with
+  a `data:` URL in the turn's first run — hermes-agent keeps only
+  `[screenshot]` of it in the session; a text file as its content (up to
+  100 KB, scrubbed). Read-only, also from outside the working directory.
+  A 4xx for the images is reported as such and keeps the session id.
+
 ## 0.15.0 — (unreleased, `bump:minor`) `/approve`: ask, plan, auto
 
 - **`/approve`** sets the hands' approvals for the open session: no
