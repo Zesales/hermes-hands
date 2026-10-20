@@ -116,7 +116,7 @@ func TestHelpByteExact(t *testing.T) {
 	newUI(&b, false, false).Help("/home/x/repo")
 	got := b.String()
 	for _, want := range []string{
-		"Type a message to your Hermes brain",
+		"Type a message to Hermes, your assistant", "@path attaches a file",
 		"in /home/x/repo,",
 		"/new", "/session <id>", "/sessions", "/fork", "/yolo", "/setup", "/config", "/check", "/help", "/exit",
 		"/history", "/out <n>", "/debug",

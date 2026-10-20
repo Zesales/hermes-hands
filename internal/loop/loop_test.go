@@ -649,21 +649,22 @@ func TestRunFramesFirstMessage(t *testing.T) {
 	}
 	got := sa.msgs[0]
 	for _, want := range []string{
-		"you are the brain", "hermes-hands is your hands",
+		"you are the operator's assistant", "hermes-hands is your hands",
 		"persistent bash shell",
-		"PROBLEM — operator's working directory: cwd /home/me/proj (git branch: main)",
-		"was hälst du von der readme ?", // the message, verbatim, as the problem body
-		"think it through first, not in the reply — then ONE instruction",
+		"MESSAGE from the operator — working directory: cwd /home/me/proj (git branch: main)",
+		"was hälst du von der readme ?", // the message, verbatim, as the body
+		"answer it in final, as in a chat — look\nfirst only when the answer needs facts from their machine",
+		"think it through first, not in the reply — then\nONE JSON object",
 		`{"id":"c1","tool":"local_shell|local_read|local_write|local_edit|local_output"`,
 		`"final":null}`,
-		"not a description of yourself or your tools",
+		"Not a description of yourself or your tools unless asked",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("framed round-1 message missing %q\n---\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "operator: was hälst") {
-		t.Errorf("message should stand as the PROBLEM body, not be prefixed 'operator:':\n%s", got)
+		t.Errorf("message should stand as the body, not be prefixed 'operator:':\n%s", got)
 	}
 }
 

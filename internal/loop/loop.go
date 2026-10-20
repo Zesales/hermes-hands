@@ -138,20 +138,20 @@ func (l *Loop) frame(userMsg string) string {
 			loc += " (git branch: " + b + ")"
 		}
 	}
-	return "[hermes-hands — you are the brain; hermes-hands is your hands on the\n" +
-		"operator's machine, a persistent bash shell in the working directory.]\n\n" +
-		"PROBLEM — operator's working directory: " + loc + "\n\n" +
+	return "[hermes-hands — you are the operator's assistant; hermes-hands is your hands\n" +
+		"on the operator's machine, a persistent bash shell in the working directory.]\n\n" +
+		"MESSAGE from the operator — working directory: " + loc + "\n\n" +
 		userMsg + "\n\n" +
-		"Your reply: think it through first, not in the reply — then ONE instruction and\n" +
-		"nothing else —\n" +
-		"{\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
+		"A question, an opinion, a discussion: answer it in final, as in a chat — look\n" +
+		"first only when the answer needs facts from their machine. A task: work\n" +
+		"through the hands. Your reply: think it through first, not in the reply — then\n" +
+		"ONE JSON object and nothing else — {\"calls\":[],\"final\":\"...\"} (the answer)\n" +
+		"or {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +
-		"output to call) — or {\"calls\":[],\"final\":\"...\"} once it is solved. Not a\n" +
-		"chat reply, not a description of yourself or your tools. Your reply ends this\n" +
-		"run; the hands run it and their results are your next message — nothing to\n" +
-		"wait for or check, and no tool of yours reaches them. If you do not know\n" +
-		"the directory yet, your instruction is a look — `local_shell` (ls / git / rg)\n" +
-		"or `local_read`." + l.frameBudget()
+		"output to call). Not a description of yourself or your tools unless asked.\n" +
+		"Your reply ends this run; the hands run its calls and their results are your\n" +
+		"next message — nothing to wait for or check, and no tool of yours reaches\n" +
+		"them." + l.frameBudget()
 }
 
 // Outcome is the turn result. OK == false means Answer is a "BLOCKED: ..."
@@ -338,7 +338,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 // resultsMsg is the message that hands a round's results back.
 func (l *Loop) resultsMsg(elems []resultElem, userMsg string, round int) string {
 	payload, _ := marshalNoHTML(resultsPayload{Results: elems})
-	// The operator's question is restated on every round, not just round 1.
+	// The operator's message is restated on every round, not just round 1.
 	// A gateway can accept our session_id (Threaded=true) without actually
 	// replaying the transcript to the model - in that case this is the ONLY
 	// place downstream of round 1 where the model still sees what was asked.
@@ -420,7 +420,7 @@ func oneLine(s string) string {
 // envelope format also means the model has no idea what it was doing and
 // answers "what can I do for you?" instead of finishing the task.
 func questionNote(userMsg string) string {
-	return " The operator's question this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\"."
+	return " The operator's message this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\"."
 }
 
 func compactJSON(raw json.RawMessage) json.RawMessage {

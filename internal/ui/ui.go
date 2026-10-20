@@ -344,9 +344,9 @@ func (u *UI) StreamDone() bool {
 
 // Help is the REPL `/help` block: what typing does, then the slash commands.
 func (u *UI) Help(cwd string) {
-	fmt.Fprintf(u.w, "%s  Type a message to your Hermes brain. It works this directory through\n", u.cDim)
-	fmt.Fprintf(u.w, "  you — local_shell, local_read, local_write, local_edit in %s,\n", cwd)
-	io.WriteString(u.w, "  each with your approval.\n")
+	fmt.Fprintf(u.w, "%s  Type a message to Hermes, your assistant: it answers, and works this directory\n", u.cDim)
+	fmt.Fprintf(u.w, "  through you — local_shell, local_read, local_write, local_edit in %s,\n", cwd)
+	io.WriteString(u.w, "  each with your approval. @path attaches a file — an image, or a text file's content.\n")
 	io.WriteString(u.w, "    /new          start a fresh session in this directory\n")
 	io.WriteString(u.w, "    /session      show this session's detail (turns, tokens, splits)\n")
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
