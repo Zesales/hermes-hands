@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"hermes-hands/internal/ttyio"
@@ -38,23 +39,25 @@ func (AutoApprover) Confirm(string, string) Decision { return Approve }
 // process, so an "all" answer latches for the rest of the run (bash
 // HH_APPROVE_ALL), across turns.
 type TTYApprover struct {
-	Mode    string // HERMES_HANDS_APPROVE: ask | plan | auto | never (anything else == ask)
+	Mode    string // HERMES_HANDS_APPROVE: ask | plan | auto | never (anything else == ask); set it with SetMode once in use
 	Warnf   func(format string, a ...any)
 	allDone bool
+	mu      sync.Mutex // guards Mode: the REPL's /approve switches it while a turn reads it
 
 	// Out is where the summary + detail are rendered (default os.Stderr).
 	Out io.Writer
 
 	// AskLine, when set, reads the y/n/a/q answer instead of a raw /dev/tty
-	// read. The REPL points this at its liner so the prompt shares the one
-	// terminal owner (a second reader on /dev/tty deadlocks against liner's
-	// input goroutine — the "can't type / Ctrl-C does nothing" hang). It
-	// returns an error on Ctrl-C, which is treated as "quit turn".
+	// read. The REPL points this at its box, so the prompt shares the one
+	// terminal owner (a second reader on /dev/tty deadlocks against the
+	// first — the "can't type / Ctrl-C does nothing" hang). It returns an
+	// error on Ctrl-C, which is treated as "quit turn".
 	AskLine func(prompt string) (string, error)
 
 	// Pause, when set, is called before the prompt is drawn; its return value
-	// is called after the answer is read. The REPL uses it to freeze the
-	// animated "working" spinner so it doesn't overwrite the prompt line.
+	// is called after the answer is read. The REPL uses it to leave the wait
+	// out of the turn's time — and, with no box, to take the "working" line
+	// off so it doesn't overwrite the prompt.
 	Pause func() (resume func())
 
 	// OnAnswer, when set, hears every approval the operator actually answered
@@ -70,7 +73,21 @@ type TTYApprover struct {
 
 // Planning reports plan mode: the hands write nothing (dispatch refuses
 // local_write / local_edit before asking); shell commands still ask.
-func (a *TTYApprover) Planning() bool { return a.Mode == "plan" }
+func (a *TTYApprover) Planning() bool { return a.ModeNow() == "plan" }
+
+// SetMode switches the mode — safe while a turn asks.
+func (a *TTYApprover) SetMode(mode string) {
+	a.mu.Lock()
+	a.Mode = mode
+	a.mu.Unlock()
+}
+
+// ModeNow is the mode in effect.
+func (a *TTYApprover) ModeNow() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.Mode
+}
 
 // Confirm ports hh_confirm exactly (plan asks like ask):
 //
@@ -81,7 +98,7 @@ func (a *TTYApprover) Planning() bool { return a.Mode == "plan" }
 //	prompt on /dev/tty; y -> Approve; a -> latch + Approve;
 //	q or read failure (EOF) -> AbortTurn; anything else -> Deny
 func (a *TTYApprover) Confirm(summary, detail string) Decision {
-	switch a.Mode {
+	switch a.ModeNow() {
 	case "auto":
 		return Approve
 	case "never":
@@ -92,7 +109,7 @@ func (a *TTYApprover) Confirm(summary, detail string) Decision {
 		return Approve
 	}
 
-	if a.Pause != nil { // freeze the "working" spinner while the prompt is up
+	if a.Pause != nil { // the wait is the operator's, not the turn's
 		defer a.Pause()()
 	}
 
@@ -102,7 +119,7 @@ func (a *TTYApprover) Confirm(summary, detail string) Decision {
 	}
 	const q = "  [y]es  [n]o  [a]ll  [q]uit turn > "
 
-	// Preferred path: the REPL's liner reads the answer, so there is exactly
+	// Preferred path: the REPL's box reads the answer, so there is exactly
 	// one owner of the terminal.
 	asked := time.Now()
 	if a.AskLine != nil {
