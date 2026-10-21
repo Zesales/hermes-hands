@@ -36,6 +36,30 @@ gateway runs.
 - **Ctrl-C is a key now** (the terminal's signals are off while the box
   reads): it cancels the running turn, between turns it clears the line;
   Ctrl-D on an empty line between turns quits.
+- **`say`: Hermes tells the operator what it does, while it works.** The
+  envelope has an optional `say` — one sentence beside a round's calls,
+  what Hermes does now and why — shown as `hermes › …` over the calls (and
+  as `say` over `--rpc`). Seen live: work went its own way for minutes with
+  nothing but call lines on screen.
+- **A message added during a turn no longer ends it.** Seen live: the
+  operator asked "what was your last tool_call?" in the middle of a
+  "continue your work" — Hermes could only answer in a `final`, which ended
+  the turn, and asked for another "continue". The added message now comes
+  with the rule — a question is answered in `say` beside the next calls, a
+  correction is followed, `final` only when the job is done or the operator
+  says stop — and the instructions say the same, with an example.
+- **The budget cuts an envelope instead of refusing it.** Of an envelope
+  over `HERMES_HANDS_MAX_CALLS_PER_ROUND` (or the turn's calls left) the
+  first calls run and the rest come back `not_run`, to send again — before,
+  nothing ran and the round was lost.
+- **`"stop_on_error": true`** in an envelope: after the first call that
+  fails (a non-zero exit, a declined approval) the rest of it comes back
+  `not_run` instead of running on a broken state — for dependent steps: an
+  edit, the build, the tests. The instructions use it for such chains.
+- A call not run is in the results as `{"id":…,"exit_code":-1,"output":"",
+  "not_run":"<why> — send it again if it is still needed"}` — and so in a
+  rebuilt transcript (event `not_run`). The calls still run one after
+  another, in order, in the one shell.
 - **`github.com/peterh/liner` is gone**, and `github.com/mattn/go-runewidth`
   with it — `golang.org/x/sys` is the one dependency. The setup wizard reads
   the key with the echo off (`ttyio.NoEcho`), Ctrl-C ignored meanwhile.
