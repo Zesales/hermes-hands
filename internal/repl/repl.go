@@ -140,6 +140,7 @@ func (r *repl) handle(input string) {
 	// Everything a turn prints goes through the session's event log
 	// (stored, scrubbed) — so reopening the session replays it 1:1. While it
 	// runs, what the operator types goes to the turn's next round.
+	r.a.UI.SetApprovals(r.a.Approvals())
 	r.ta = startTypeahead(r.a.UI, r.a.Loop.Inbox)
 	res := r.runner.Run(input, &front{ui: r.a.UI})
 	typed, cmds := r.ta.finish()

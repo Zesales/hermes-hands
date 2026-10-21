@@ -13,9 +13,10 @@ import (
 )
 
 // typeahead reads what the operator types while a turn runs, as in Claude
-// Code: it stands on the working line, Enter queues it for the turn's next
-// round (loop.Inbox), and what is still being typed when the turn ends —
-// with any /command typed meanwhile — waits for the prompt. An approval
+// Code: it stands on the input line of the dock under the conversation,
+// Enter queues it for the turn's next round (loop.Inbox) — the dock lists
+// it, numbered, until it goes out — and what is still being typed when the
+// turn ends — with any /command typed meanwhile — waits for the prompt. An approval
 // prompt takes the terminal over (hold); Ctrl-C still cancels the turn.
 type typeahead struct {
 	ui      *ui.UI
@@ -175,7 +176,7 @@ func (t *typeahead) enter() {
 		t.ui.Note(line + " runs when the turn is done — commands run between turns")
 	default:
 		t.inbox.Push(line)
-		t.ui.Note("queued for the next round: " + clipLine(line, 100))
+		t.ui.Queue(line)
 	}
 }
 
@@ -220,13 +221,4 @@ func (t *typeahead) finish() (typed string, cmds []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return strings.TrimSpace(string(t.buf)), t.cmds
-}
-
-// clipLine shortens s to n runes, marking the cut.
-func clipLine(s string, n int) string {
-	r := []rune(strings.Join(strings.Fields(s), " "))
-	if len(r) <= n {
-		return string(r)
-	}
-	return string(r[:n-1]) + "…"
 }

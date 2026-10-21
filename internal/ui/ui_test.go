@@ -180,8 +180,8 @@ func TestStartWorking_AnimatedLineShowsElapsedAndHint(t *testing.T) {
 	if !strings.Contains(got, " 0s ") {
 		t.Errorf("animated line should carry an elapsed-seconds counter, got %q", got)
 	}
-	if !strings.HasSuffix(got, "\r\x1b[K") {
-		t.Errorf("stop() must wipe the line, got tail %q", got[max(0, len(got)-8):])
+	if !strings.HasSuffix(got, "\r\x1b[J\x1b[?25h") {
+		t.Errorf("stop() must wipe the dock, got tail %q", got[max(0, len(got)-12):])
 	}
 }
 
@@ -297,11 +297,11 @@ func TestSyncClearsSpinnerLine(t *testing.T) {
 	var b strings.Builder
 	u := newUI(&b, true, true)
 	u.mu.Lock()
-	u.spinning = true
+	u.working = true
 	u.mu.Unlock()
 	u.CallStart(1, "shell", "ls", nil)
-	if !strings.HasPrefix(b.String(), "\r\x1b[K") {
-		t.Errorf("CallStart while spinning must clear the line first, got %q", b.String())
+	if !strings.HasPrefix(b.String(), "\x1b[?25l\r\x1b[J") {
+		t.Errorf("CallStart while working must take the dock off first, got %q", b.String())
 	}
 	if !strings.Contains(b.String(), "shell") {
 		t.Errorf("CallStart content missing: %q", b.String())

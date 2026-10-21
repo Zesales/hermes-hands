@@ -27,22 +27,34 @@ type UI struct {
 	cDim, cB, cR                   string
 	cYou, cHermes, cOK, cBad, cAcc string
 
-	mu       sync.Mutex // serialises every write vs. the spinner goroutine
-	spinning bool
-	paused   time.Duration // accumulated Hold() time this turn (approval waits) — reset by StartWorking
+	mu      sync.Mutex    // serialises every write vs. the dock's repaint
+	fd      int           // the terminal the UI writes to, for the dock's width; -1 = none
+	working bool          // StartWorking … its stop: the dock is up (dock.go)
+	held    int           // Hold()s open: a prompt owns the terminal, the dock is off
+	up      int           // rows from the dock's top to the cursor: what wipe goes back up
+	start   time.Time     // when the turn started working
+	frame   int           // the working line's animation step
+	paused  time.Duration // accumulated Hold() time this turn (approval waits) — reset by StartWorking
 
-	activity      string    // what the spinner waits on ("#14 shell"); "" = plain "working"
-	activitySince time.Time // when that started — the spinner counts from here
-	budget        string    // where the turn stands ("round 3/25 · calls 12/100"); "" = not shown
-	streamOpen    bool      // Delta printed the "hermes" label; StreamDone closes it
-	typeAhead     bool      // the operator can type during the turn (TypeAhead): the hint says so
-	typing        string    // what they type (SetTyping); "" = the hint
+	activity      string      // what the spinner waits on ("#14 shell"); "" = plain "working"
+	activitySince time.Time   // when that started — the spinner counts from here
+	budget        string      // where the turn stands ("round 3/25 · calls 12/100"); "" = not shown
+	streamOpen    bool        // Delta printed the "hermes" label; StreamDone closes it
+	typeAhead     bool        // the operator can type during the turn (TypeAhead): the dock has its input line
+	typing        string      // what they type (SetTyping); "" = the hint
+	queue         []queuedMsg // what they queued this turn and the loop has not taken yet (Queue)
+	nQueued       int         // how many they queued this turn — the last one's number
+	approvals     string      // the turn's approval mode, in the dock's footer (SetApprovals)
 }
 
 // New builds a UI writing to stderr. Colour is on when stderr is a tty,
 // NO_COLOR is empty, and TERM (default "dumb") is not "dumb".
 func New(stderr *os.File) *UI {
-	return newUI(stderr, colorEnabled(stderr), ttyio.IsTerminal(stderr))
+	u := newUI(stderr, colorEnabled(stderr), ttyio.IsTerminal(stderr))
+	if u.tty {
+		u.fd = int(stderr.Fd())
+	}
+	return u
 }
 
 func colorEnabled(stderr *os.File) bool {
@@ -56,7 +68,7 @@ func colorEnvOK() bool {
 }
 
 func newUI(w io.Writer, color, tty bool) *UI {
-	u := &UI{w: w, tty: tty}
+	u := &UI{w: w, tty: tty, fd: -1}
 	if color {
 		u.cDim, u.cB, u.cR = "\x1b[2m", "\x1b[1m", "\x1b[0m"
 		u.cYou, u.cHermes = "\x1b[36m", "\x1b[32m"
@@ -82,112 +94,6 @@ func (u *UI) cols() int {
 	return c
 }
 
-// sync runs f as the sole writer, wiping the spinner's line first (if one is
-// running) so f's output doesn't collide with it.
-func (u *UI) sync(f func()) {
-	u.mu.Lock()
-	if u.spinning {
-		fmt.Fprint(u.w, "\r\x1b[K")
-	}
-	f()
-	u.mu.Unlock()
-}
-
-// StartWorking shows an animated "…working" line until the returned stop is
-// called (idempotent, safe from any goroutine). Non-tty: the old static line.
-func (u *UI) StartWorking() (stop func()) {
-	if !u.tty {
-		u.Working() // the plain static line; no goroutine, no repaint
-		return func() {}
-	}
-	u.mu.Lock()
-	u.spinning = true
-	u.paused = 0 // fresh turn: no approval waits counted against it yet
-	u.mu.Unlock()
-	start := time.Now()
-	done := make(chan struct{})
-	go func() {
-		frames := []string{".  ", ".. ", "...", " ..", "  .", "   "}
-		tk := time.NewTicker(220 * time.Millisecond)
-		defer tk.Stop()
-		for i := 0; ; i++ {
-			select {
-			case <-done:
-				return
-			case <-tk.C:
-				u.mu.Lock()
-				el := int((time.Since(start) - u.paused).Seconds())
-				label := "working"
-				if u.activity != "" {
-					label = u.activity + " running"
-					el = int(time.Since(u.activitySince).Seconds())
-				}
-				budget := ""
-				if u.budget != "" {
-					budget = "  ·  " + u.budget
-				}
-				if u.spinning {
-					tail := "Ctrl+C to cancel" + u.cR
-					switch {
-					case u.typing != "":
-						tail = u.cR + u.cYou + "you› " + u.cR + clipTail(u.typing, u.cols()/2) + "▏"
-					case u.typeAhead:
-						tail = "type to add · Ctrl+C to cancel" + u.cR
-					}
-					fmt.Fprintf(u.w, "\r%s   %s%s%s%s%s  ·  %ds%s  ·  %s\x1b[K",
-						u.cDim, u.cAcc, frames[i%len(frames)], label, u.cR, u.cDim, el, budget, tail)
-				}
-				u.mu.Unlock()
-			}
-		}
-	}()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			close(done)
-			u.mu.Lock()
-			u.spinning = false
-			fmt.Fprint(u.w, "\r\x1b[K")
-			u.mu.Unlock()
-		})
-	}
-}
-
-// Hold suspends the spinner's repaint (wiping its current line) until the
-// returned resume runs. Wrap it around a foreground prompt that owns the line
-// — e.g. the approval y/n/a/q gate — so the spinner can't overwrite it. The
-// held interval is excluded from the elapsed counter (both the live spinner
-// and the turn's final "worked for Xs", via Paused()): waiting on the
-// operator's y/n/a/q answer is not hermes-agent taking time to work.
-func (u *UI) Hold() (resume func()) {
-	u.mu.Lock()
-	was := u.spinning
-	u.spinning = false
-	heldSince := time.Now()
-	if was {
-		fmt.Fprint(u.w, "\r\x1b[K")
-	}
-	u.mu.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			u.mu.Lock()
-			u.paused += time.Since(heldSince)
-			u.spinning = was
-			u.mu.Unlock()
-		})
-	}
-}
-
-// Paused reports how long the current turn has spent held (approval prompts)
-// so far. Subtract it from a wall-clock turn duration to get actual working
-// time, e.g. before TurnDone.
-func (u *UI) Paused() time.Duration {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return u.paused
-}
-
 // Rule ports ui_rule: a full-width dim horizontal rule.
 func (u *UI) Rule() {
 	u.sync(func() { fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, strings.Repeat("─", u.cols()), u.cR) })
@@ -202,28 +108,18 @@ func (u *UI) You(msg string) {
 }
 
 // Added is what the operator wrote while the turn ran, as it goes out with
-// the next round: a dim "you (added)" label, the message indented 3.
+// the next round: a dim "you (added)" label — live with the number it had in
+// the dock's queue, which it leaves now — the message indented 3.
 func (u *UI) Added(msg string) {
 	u.sync(func() {
-		fmt.Fprintf(u.w, "%s%syou%s%s (added)%s\n", u.cB, u.cYou, u.cR, u.cDim, u.cR)
+		label := " (added)"
+		if len(u.queue) > 0 {
+			label = fmt.Sprintf(" (added · %d)", u.queue[0].n)
+			u.queue = u.queue[1:]
+		}
+		fmt.Fprintf(u.w, "%s%syou%s%s%s%s\n", u.cB, u.cYou, u.cR, u.cDim, label, u.cR)
 		io.WriteString(u.w, indentLines(msg, "   "))
 	})
-}
-
-// TypeAhead says whether the operator can type during the turn (repl): the
-// working line then says so, and shows what they type (SetTyping).
-func (u *UI) TypeAhead(on bool) {
-	u.mu.Lock()
-	u.typeAhead, u.typing = on, ""
-	u.mu.Unlock()
-}
-
-// SetTyping puts what the operator is typing during a turn on the working
-// line ("" takes it off); Enter queues it for the next round (repl).
-func (u *UI) SetTyping(s string) {
-	u.mu.Lock()
-	u.typing = s
-	u.mu.Unlock()
 }
 
 // Working is the pre-animation static line — non-tty and tests use it.
@@ -344,7 +240,7 @@ func (u *UI) Line(s string) {
 // DimLine writes one dim line (used for HERMES_HANDS_VERBOSE chatter, matching
 // hh_vlog's dim wrapping).
 func (u *UI) DimLine(msg string) {
-	fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, msg, u.cR)
+	u.sync(func() { fmt.Fprintf(u.w, "%s%s%s\n", u.cDim, msg, u.cR) })
 }
 
 // Delta streams one chunk of the answer as it arrives, after a blank line and
@@ -431,17 +327,4 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
-}
-
-// clipTail keeps the last w runes of s — the end of a line being typed is
-// where the cursor is.
-func clipTail(s string, w int) string {
-	r := []rune(s)
-	if w < 8 {
-		w = 8
-	}
-	if len(r) <= w {
-		return s
-	}
-	return "…" + string(r[len(r)-w+1:])
 }
