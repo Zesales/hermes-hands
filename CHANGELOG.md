@@ -4,21 +4,46 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.15.1 — (unreleased, `bump:patch`) type while it works: a box under the conversation
+## 0.16.0 — (unreleased, `bump:minor`) the box: one input under the conversation, as in Claude Code
 
-- **A box under the conversation while a turn runs**, as in Claude Code:
-  the working line, a rule against the conversation above, the messages
-  queued so far — numbered `1`, `2`, … — the input line, `you› type to add
-  a message to the run`, a closing rule, and a footer with the turn's
-  approval mode (`⏵ approvals auto`). A queued message stays in the box
-  until the turn's next round takes it, then moves up into the
-  conversation as `you (added · 1)`. Before, what was typed stood at the
-  end of the working line and Enter printed a `queued for the next round`
-  note. Everything a turn prints — calls, results, notes, hermes-hands'
-  own warnings — lands above the box; an approval prompt takes it off
-  while it is up. Every box line is cut to the terminal's real width (wide
-  characters counted double), so a narrow window does not break it; the
-  typing shows at once, not with the next spinner tick.
+- **The box, from the start.** The REPL's input is a box under the
+  conversation — a rule, the input line, a rule, a footer with the approval
+  mode and the session (`⏵ approvals ask  ·  session …`) — a turn running or
+  not. Everything hermes-hands prints lands above it. It is a line editor
+  of its own (`internal/repl/box.go`, `keys.go`, `edit.go`): ←/→, Alt-←/→,
+  Home/End, Backspace, Delete, Ctrl-W, Ctrl-U, Ctrl-K, ↑/↓ through the lines
+  sent, Tab completes a `/command`, Ctrl-L clears the screen; Enter sends,
+  `\` before Enter, Ctrl-J or Alt-Enter is a new line, a paste keeps its
+  newlines (bracketed paste). The input line scrolls with the cursor; a
+  newline in it shows as `↵`. Every box line is cut to the terminal's real
+  width (wide characters counted double) and the box is drawn again when the
+  terminal changes its size.
+- **While a turn runs** the working line stands over the box, and what is
+  queued for the turn's next round is listed, numbered `1`, `2`, …, until it
+  goes out — then it moves up into the conversation as `you (added · 1)`.
+  `/approve`, `/yolo`, `/help`, `/config` and `/exit` act at once — the turn
+  runs in the background now; a `/command` that changes the session waits
+  for the turn's end. A streamed answer goes above the box a whole line at a
+  time; the line not complete yet stands in the box.
+- **Approvals are answered in the box**, the hands' and Hermes' own server
+  ones: the question takes the input line, the working line says
+  `waiting for your answer` (the wait stays out of the turn's time). It never
+  takes a line being typed: it waits until the line is sent or cleared and
+  the keys rest (0.7 s) — and a key that is none of its letters sends it
+  back to wait, what was typed staying the operator's. Ctrl-C at the
+  question quits the turn; Ctrl-C while one still waits cancels the turn
+  with it.
+- **Ctrl-C is a key now** (the terminal's signals are off while the box
+  reads): it cancels the running turn, between turns it clears the line;
+  Ctrl-D on an empty line between turns quits.
+- **`github.com/peterh/liner` is gone**, and `github.com/mattn/go-runewidth`
+  with it — `golang.org/x/sys` is the one dependency. The setup wizard reads
+  the key with the echo off (`ttyio.NoEcho`), Ctrl-C ignored meanwhile.
+- hermes-hands' own warnings (`config`'s too) go through the UI, above the
+  box — written straight to stderr they landed in it.
+- With no terminal on stdin the REPL reads plain lines, one at a time, as
+  before — the golden tests drive it so, byte for byte as before but for
+  `/help`, which names the keys now.
 
 ## 0.15.0 — 2026-10-21 — an assistant that answers; `@path`; type while it works; compaction later and deeper
 

@@ -184,19 +184,34 @@ and the REPL starts even when unconfigured. When the gateway supports SSE the
 answer text previews live as it generates (`HERMES_HANDS_STREAM` =
 `auto`|`on`|`off`); the final answer renders through `glow`/`bat` if installed.
 
-**Type while Hermes works**, as in Claude Code: while a turn runs, a box sits
-under the conversation — the working line, a rule, then what you queued,
-numbered, your input line (`you› type to add a message to the run`) and a
-footer with the turn's approval mode (`⏵ approvals auto`).
-Enter queues the line: it is listed in the box as `1`, `2`, … until it goes
-out with the turn's next round, after the results — then it moves up into
-the conversation as `you (added · 1)`. Everything the turn prints lands
-above the box. What the turn did not take — it ended first — becomes the
-next turn; after Ctrl-C or a timeout it waits in the prompt instead, with the
-line you were still typing, to send or change. A `/command` typed meanwhile
-runs when the turn is done. Backspace, Ctrl-W, Ctrl-U edit; an approval
-prompt takes the keys (and the box steps aside) while it is up; Ctrl-C still
-cancels the turn.
+**The box**, as in Claude Code: from the start, your input is a box under
+the conversation — a rule, the input line (`you› …`), a rule and a footer
+with the approval mode and the session. Everything hermes-hands prints lands
+above it. Its keys are a shell's: ←/→, Alt-←/→ a word, Home/End, Backspace,
+Delete, Ctrl-W, Ctrl-U, Ctrl-K, ↑/↓ the lines you sent before, Tab completes
+a `/command`, Ctrl-L clears the screen. Enter sends; `\` before Enter,
+Ctrl-J or Alt-Enter is a new line, and a paste keeps its newlines. Ctrl-C
+cancels the running turn (between turns it clears the line), Ctrl-D on an
+empty line quits.
+
+**Type while Hermes works.** While a turn runs, the working line stands
+over the box. Enter queues what you typed for the turn's next round: it is
+listed in the box as `1`, `2`, … until it goes out, after the results — then
+it moves up into the conversation as `you (added · 1)`. `/approve`, `/yolo`,
+`/help`, `/config` and `/exit` act at once; a `/command` that changes the
+session (`/new`, `/compact`, …) runs when the turn is done. What the turn did
+not take — it ended first — becomes the next turn; after Ctrl-C or a
+timeout it waits in the box, to send or change.
+
+**Approvals are answered in the box**: the question takes the input line
+(`⚠ [y]es  [n]o  [a]ll  [q]uit turn >`), the working line says it waits for
+you. It never takes a line you are typing: it waits until you sent or
+cleared it and the keys rest — and a key that is none of its letters sends
+it back to wait, what you typed stays yours. Ctrl-C at the question quits
+the turn.
+
+Without a terminal on stdin (a pipe, a script) the REPL reads plain lines,
+one at a time, each turn to its end before the next.
 
 **Attach a file with `@path`**, as in Claude Code: `@shot.png`,
 `@"path with spaces"`, `@~/notes.txt` in a message — or an image dropped into
@@ -721,8 +736,8 @@ prompts for a separate one. The prompt is read straight from
 incrementally on every `make dev`). `make clean` wipes `./.dev/`, including the
 toolchain cache.
 
-Go 1.26.10, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
-`github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
+Go 1.26.10, `CGO_ENABLED=0`. The one dependency, `golang.org/x/sys`, is
+**vendored** — builds
 never fetch modules (the one download is the pinned Go image). Layout: `main.go`
 (the build-time version, then `internal/cli`) +
 `internal/{api,app,cli,compat,config,debuglog,dispatch,guard,knowsystem,loop,prompt,redact,repl,rpc,session,setup,shell,ttyio,turn,ui}` +
