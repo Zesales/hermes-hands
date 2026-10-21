@@ -55,6 +55,7 @@ hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
   ⚠  hermes wants to run terminal on its SERVER sandbox (not your machine):
       rm -rf /tmp/scratch
   [o]nce  [s]ession  [n]o >  ✓ hermes-sandbox approval granted  rm -rf /tmp/scratch
+ hermes › Reading the README, then a shell check.
  #1 local_read  README.md
  #1 ✓ exit 0 · 1 line
  #2 local_shell  printf 'one\ntwo\n'
@@ -89,6 +90,7 @@ you
       rm -rf /tmp/scratch
   [o]nce  [s]ession  [n]o > o
  ✓ hermes-sandbox approval granted  rm -rf /tmp/scratch
+ hermes › Reading the README, then a shell check.
  #1 local_read  README.md
  #1 ✓ exit 0 · 1 line
  #2 local_shell  printf 'one\ntwo\n'

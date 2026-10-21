@@ -153,7 +153,7 @@ func (l *Loop) frame(userMsg string) string {
 		"`local_read` in its calls — the hands run it.\n" +
 		"Your reply: think it through first, not in the reply — then\n" +
 		"ONE JSON object and nothing else — {\"calls\":[],\"final\":\"...\"} (the answer)\n" +
-		"or {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
+		"or {\"say\":\"<what you do now and why, one sentence>\",\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +
 		"output to call). Not a description of yourself or your tools unless asked.\n" +
 		"Your reply ends this run; the hands run its calls and their results are your\n" +
@@ -235,7 +235,7 @@ type turnState struct {
 	turnlog string // the turn so far, for a gateway that does not thread it (recap)
 	recap   bool
 
-	fixups, rejects int // recovery nudges spent: a botched / empty envelope, one over the budget
+	fixups int // recovery nudges spent: a botched / empty envelope
 
 	images []api.Image // the operator's @path images: sent with the turn's first run only
 
@@ -283,8 +283,8 @@ func (l *Loop) stopped(what string, round int, t *turnState) (Outcome, bool) {
 }
 
 // handle acts on Hermes' reply of round: a final or prose ends the turn
-// (done); an envelope's calls run and their results become the next message;
-// a botched, empty or over-budget envelope gets a nudge instead.
+// (done); an envelope's calls run — its say shown first — and their results
+// become the next message; a botched or empty envelope gets a nudge instead.
 func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 	env := parseEnvelope(reply)
 	switch {
@@ -318,21 +318,18 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 	if o, stop := l.capped(round); stop {
 		return o, true
 	}
-	if why, note := l.oversize(len(env.calls)); why != "" {
-		// All or nothing: an envelope over the budget runs not at all, so
-		// no half-run batch (file A edited, the dependent B not) remains.
-		if t.rejects >= maxFixups {
-			return Outcome{Answer: "BLOCKED: Hermes kept sending envelopes over the call budget.", OK: false}, true
-		}
-		t.rejects++
-		l.noteOperator(note)
-		t.send, t.pending = why+"\n"+questionNote(t.userMsg)+l.roundBudgetNote(round+1), nil
-		t.turnlog += fmt.Sprintf("[round %d] (envelope of %d calls over the budget, nothing run)\n", round, len(env.calls))
-		return Outcome{}, false
+	if env.say != "" {
+		l.emit(session.Event{Kind: session.KindSay, Text: l.scrub(env.say), Round: round})
 	}
-
+	// Over the budget the first calls run and the rest come back not run;
+	// the results say which, so a half-run batch (file A edited, the
+	// dependent B not) is never a surprise.
+	keep, why, note := l.runnable(len(env.calls))
+	if note != "" {
+		l.noteOperator(note)
+	}
 	l.vlogf("round %d: %d call(s)", round, len(env.calls))
-	elems, stopped := l.runCalls(env.calls, round, &t.turnlog)
+	elems, stopped := l.runCalls(env.calls, keep, why, env.stopOnError, round, &t.turnlog)
 	if stopped != nil {
 		return *stopped, true
 	}
@@ -354,8 +351,8 @@ func (l *Loop) resultsMsg(elems []resultElem, userMsg string, round int) string 
 	// sentence, no meaningful token cost.
 	return "[hands results] The worker ran your job on the operator's machine" + l.locNote() +
 		" — real output, not your sandbox; empty output or a non-zero exit means: try another" +
-		" command." + questionNote(userMsg) + " Reply with the next job or your final — your reply" +
-		" text, the envelope; no tool of yours reaches the worker.\n" + string(payload) + l.roundBudgetNote(round+1)
+		" command." + questionNote(userMsg) + " Reply with the next job — its say, one sentence: what you do" +
+		" now — or your final: your reply text, the envelope; no tool of yours reaches the worker.\n" + string(payload) + l.roundBudgetNote(round+1)
 }
 
 func (l *Loop) emit(ev session.Event) {

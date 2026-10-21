@@ -133,6 +133,14 @@ func (u *UI) Approval(summary, detail, answer string) {
 	})
 }
 
+// Say is Hermes' one sentence beside a round's calls — what it does now and
+// why: the operator sees where the work is going while it runs.
+func (u *UI) Say(text string) {
+	u.sync(func() {
+		fmt.Fprintf(u.w, " %shermes ›%s %s\n", u.cHermes, u.cR, strings.Join(strings.Fields(text), " "))
+	})
+}
+
 // Note is one dim line inside a turn (a capped round budget, a cancel, …).
 func (u *UI) Note(msg string) {
 	u.sync(func() { fmt.Fprintf(u.w, " %s%s%s\n", u.cDim, msg, u.cR) })

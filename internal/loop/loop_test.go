@@ -312,25 +312,87 @@ func TestBudgetTiers(t *testing.T) {
 	}
 }
 
-func TestOversizeEnvelopeRunsNothing(t *testing.T) {
-	big := `{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}},{"tool":"read_file","args":{"path":"foo.txt"}},{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`
+// an envelope over the per-envelope cap: the first calls run, the rest come
+// back not run — Hermes is told which and why, the operator sees a note
+func TestOversizeEnvelopeRunsTheFirstCalls(t *testing.T) {
+	big := `{"calls":[{"id":"c1","tool":"read_file","args":{"path":"foo.txt"}},{"id":"c2","tool":"read_file","args":{"path":"foo.txt"}},{"id":"c3","tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`
 	sa := &scriptAsker{replies: []api.AskResult{reply(big, true), reply(`{"calls":[],"final":"done"}`, true)}}
-	var ran int
+	var ran, notRun int
+	var notes []string
 	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 8, MaxCallsPerRound: 2,
 		Emit: func(ev session.Event) {
-			if ev.Kind == session.KindCall {
+			switch ev.Kind {
+			case session.KindCall:
 				ran++
+			case session.KindNotRun:
+				notRun++
+			case session.KindNote:
+				notes = append(notes, ev.Text)
 			}
 		}}
 	out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {})
 	if !out.OK || out.Answer != "done" {
 		t.Fatalf("out = %+v", out)
 	}
-	if ran != 0 || out.Calls != 0 || out.Rounds != 2 {
-		t.Errorf("an envelope over the per-envelope cap must run nothing: ran=%d calls=%d rounds=%d", ran, out.Calls, out.Rounds)
+	if ran != 2 || notRun != 1 || out.Calls != 2 || out.Rounds != 2 {
+		t.Errorf("the first 2 run, 1 not: ran=%d notRun=%d calls=%d rounds=%d", ran, notRun, out.Calls, out.Rounds)
 	}
-	if !strings.Contains(sa.msgs[1], "NOTHING was run") || !strings.Contains(sa.msgs[1], "at most 2 per envelope") {
-		t.Errorf("Hermes should be told why, got: %q", trunc(sa.msgs[1], 300))
+	want := `{"id":"c3","tool":"local_read","args":{"path":"foo.txt"},"exit_code":-1,"output":"","not_run":"over the budget: the operator allows 2 calls per envelope — send it again if it is still needed"}`
+	if !strings.Contains(sa.msgs[1], want) {
+		t.Errorf("Hermes should be told which and why, got: %q", trunc(sa.msgs[1], 900))
+	}
+	if len(notes) == 0 || !strings.Contains(notes[0], "the first 2 run, 1 sent back to Hermes") {
+		t.Errorf("operator notes = %q", notes)
+	}
+}
+
+// "stop_on_error": true — after the first call that fails the rest of the
+// envelope comes back not run; without it every call runs
+func TestStopOnErrorLeavesTheRestNotRun(t *testing.T) {
+	for _, stop := range []bool{true, false} {
+		env := fmt.Sprintf(`{"calls":[{"id":"c1","tool":"local_shell","args":{"cmd":"false"}},{"id":"c2","tool":"local_shell","args":{"cmd":"echo second"}}],"stop_on_error":%v,"final":null}`, stop)
+		sa := &scriptAsker{replies: []api.AskResult{reply(env, true), reply(`{"calls":[],"final":"done"}`, true)}}
+		d := realDisp(t, prompt.AutoApprover{})
+		d.Shell = shell.New(d.RepoRoot, 20000)
+		t.Cleanup(d.Shell.Stop)
+		ran := 0
+		l := &Loop{API: sa, Dispatch: d, MaxRounds: 5, Emit: func(ev session.Event) {
+			if ev.Kind == session.KindCall {
+				ran++
+			}
+		}}
+		if out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {}); !out.OK {
+			t.Fatalf("out = %+v", out)
+		}
+		skipped := strings.Contains(sa.msgs[1], `"not_run":"stop_on_error: c1 (#1) failed with exit 1`)
+		if stop && (ran != 1 || !skipped) || !stop && (ran != 2 || skipped) {
+			t.Errorf("stop_on_error %v: ran %d, skipped %v — %s", stop, ran, skipped, trunc(sa.msgs[1], 600))
+		}
+	}
+}
+
+// say goes to the operator before the round's calls; beside a final it is
+// not shown — the answer is the final
+func TestSayGoesToTheOperatorBeforeTheCalls(t *testing.T) {
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(`{"say":"Reading foo first.","calls":[{"id":"c1","tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"say":"not shown","calls":[],"final":"done"}`, true),
+	}}
+	var kinds, said []string
+	l := &Loop{API: sa, Dispatch: realDisp(t, prompt.AutoApprover{}), MaxRounds: 5, Emit: func(ev session.Event) {
+		switch ev.Kind {
+		case session.KindSay:
+			said = append(said, ev.Text)
+			kinds = append(kinds, ev.Kind)
+		case session.KindCall:
+			kinds = append(kinds, ev.Kind)
+		}
+	}}
+	if out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {}); !out.OK || out.Answer != "done" {
+		t.Fatalf("out = %+v", out)
+	}
+	if strings.Join(kinds, " ") != "say call" || len(said) != 1 || said[0] != "Reading foo first." {
+		t.Errorf("kinds %q, said %q", kinds, said)
 	}
 }
 

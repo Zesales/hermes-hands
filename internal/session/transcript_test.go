@@ -283,3 +283,17 @@ func TestTranscriptSendsARepeatedOutputOnce(t *testing.T) {
 		t.Errorf("the output went out %d/100 lines; transcript:\n%s", strings.Count(all, "same line"), all)
 	}
 }
+
+// a call the hands did not run is in the rebuilt results as it went out:
+// after the ones that ran, not_run and why, no output
+func TestTranscriptNotRun(t *testing.T) {
+	evs := roundTurn(1, 1, "ok")
+	nr := Event{Seq: 100, Turn: 1, Kind: KindNotRun, Round: 1, ID: "c2", Tool: "local_shell", Args: json.RawMessage(`{"cmd":"make test"}`),
+		Text: "stop_on_error: c1 (#1) failed with exit 1 — send it again if it is still needed"}
+	evs = append(append(append([]Event{}, evs[:4]...), nr), evs[4:]...)
+	msgs := Transcript(evs, TranscriptOpts{Output: func(int) string { return "ok" }})
+	want := `{"id":"c2","tool":"local_shell","args":{"cmd":"make test"},"exit_code":-1,"output":"","not_run":"stop_on_error: c1 (#1) failed with exit 1 — send it again if it is still needed"}`
+	if len(msgs) < 3 || !strings.Contains(msgs[2].Content, want) {
+		t.Errorf("results = %v", msgs)
+	}
+}

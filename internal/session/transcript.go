@@ -37,7 +37,8 @@ type TranscriptOpts struct {
 
 // AddedMark opens what the operator wrote while the turn ran, in the request
 // that carries it and in the transcript alike.
-const AddedMark = "[the operator adds, while you worked]\n"
+const AddedMark = "[the operator adds, while you work — the job of this turn goes on: a question you answer in say, " +
+	"beside your next calls; a correction you follow, and say so; final only when the job is done, or they ask you to stop]\n"
 
 // LastCompact is the compaction in effect: the last KindCompact event of evs.
 // ok is false while hermes-agent holds the transcript (none yet).
@@ -187,6 +188,7 @@ func (t *transcript) turn(turn []Event, o TranscriptOpts) {
 	var (
 		calls   []Event           // the batch in flight: its calls …
 		results = map[int]Event{} // … and their results, by #ref
+		notRun  []Event           // … and the calls of it the hands did not run
 		replied bool              // this turn's log has Hermes' replies (older logs do not)
 		final   bool              // the last reply asked for nothing more: it was the answer
 	)
@@ -204,8 +206,8 @@ func (t *transcript) turn(turn []Event, o TranscriptOpts) {
 			// calls it asked for
 			t.add("assistant", envelope(calls, calls[0].Seq <= o.Upto))
 		}
-		t.add("user", t.results(calls, results, o))
-		calls, results = nil, map[int]Event{}
+		t.add("user", t.results(calls, results, notRun, o))
+		calls, results, notRun = nil, map[int]Event{}, nil
 	}
 	for _, e := range turn {
 		switch e.Kind {
@@ -228,6 +230,8 @@ func (t *transcript) turn(turn []Event, o TranscriptOpts) {
 			final = false
 		case KindResult:
 			results[e.Ref] = e
+		case KindNotRun:
+			notRun = append(notRun, e)
 		case KindAnswer:
 			flush()
 			switch {
@@ -255,14 +259,15 @@ func stoppedWhy(answer string) string {
 
 // results renders one batch's results the way the hands sent them: verbatim
 // (the stored output, fitted to the round budget again) or elided (a stub).
-func (t *transcript) results(calls []Event, results map[int]Event, o TranscriptOpts) string {
+func (t *transcript) results(calls []Event, results map[int]Event, notRun []Event, o TranscriptOpts) string {
 	type elem struct {
 		ID       string          `json:"id"`
-		Ref      int             `json:"ref"`
+		Ref      int             `json:"ref,omitempty"`
 		Tool     string          `json:"tool"`
 		Args     json.RawMessage `json:"args"`
 		ExitCode int             `json:"exit_code"`
 		Output   string          `json:"output"`
+		NotRun   string          `json:"not_run,omitempty"`
 	}
 	if elidedBatch(calls, results, o.Upto) {
 		return elidedResults(calls, results, o)
@@ -300,6 +305,9 @@ func (t *transcript) results(calls []Event, results map[int]Event, o TranscriptO
 	}
 	for i, out := range FitRound(outs, refs, o.RoundOutput) {
 		elems[verbatim[i]].Output = out
+	}
+	for _, e := range notRun { // after the ones that ran, as the hands sent them
+		elems = append(elems, elem{ID: e.ID, Tool: e.Tool, Args: e.Args, ExitCode: -1, NotRun: e.Text})
 	}
 	b, _ := marshalNoEscape(map[string]any{"results": elems})
 	return "[hands results]\n" + string(b)
