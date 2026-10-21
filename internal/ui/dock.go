@@ -4,19 +4,16 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"hermes-hands/internal/ttyio"
 )
 
-// The dock is the live block under the conversation while a turn runs, as in
-// Claude Code: the working line, and — when the operator can type during the
-// turn (TypeAhead) — a rule against the conversation above, the messages they
-// queued, numbered, the input line, a closing rule and a footer with the
-// turn's approval mode (SetApprovals):
+// The dock is the live block under the conversation, as in Claude Code. In
+// the REPL it is there from the start (SetDocked): a rule against the
+// conversation above, the input line of the REPL's box, a closing rule and
+// a footer. While a turn runs the working line stands over it, and the
+// messages queued for the turn's next round are listed, numbered:
 //
 //	   ...working  ·  12s  ·  round 2/25 · calls 3/100  ·  Ctrl+C to cancel
 //	──────────────────────────────────────────────────────────────────────
@@ -26,9 +23,10 @@ import (
 //	──────────────────────────────────────────────────────────────────────
 //	  ⏵ approvals auto  ·  Enter queues it for the next round
 //
-// Everything else is printed above it: sync wipes the dock, writes, and
-// draws it again. Every dock line is cut to the terminal's width — a line
-// that wrapped would throw the wipe off by a row.
+// Everything else is printed above it: sync takes the dock off, writes, and
+// puts it back. Every dock line is cut to the terminal's width — a line
+// that wrapped would throw the wipe off by a row. Not docked (--rpc, no
+// terminal to type in) the dock is the working line alone.
 
 // maxQueued is how many queued messages the dock lists; more are counted.
 const maxQueued = 5
@@ -38,6 +36,17 @@ const maxQueued = 5
 type queuedMsg struct {
 	n    int
 	text string
+}
+
+// Input is the dock's input line as the REPL's box has it.
+type Input struct {
+	Prompt string // before the text: "you› ", or the question up
+	Text   []rune
+	Cursor int    // where the cursor stands in Text
+	Hint   string // dim, in place of an empty Text
+	Ask    bool   // Prompt is a question waiting for its answer
+	Note   string // a line over the input ("" = none)
+	Footer string // in place of the footer SetFooter set ("" = that one)
 }
 
 var frames = []string{".  ", ".. ", "...", " ..", "  .", "   "}
@@ -57,9 +66,30 @@ func (u *UI) sync(f func()) {
 	}
 }
 
-// live reports whether the dock is on screen: a turn is working and no
-// prompt holds the terminal.
-func (u *UI) live() bool { return u.working && u.held == 0 }
+// change runs f, which changes what the dock shows, and brings the screen
+// up to date in one write: the dock wiped and drawn anew, put up, or taken
+// off.
+func (u *UI) change(f func()) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	was := u.live()
+	var s string
+	if was {
+		s = u.wipe()
+	}
+	f()
+	switch {
+	case u.live():
+		s += "\r" + u.draw()
+	case was:
+		s += "\x1b[?25h"
+	}
+	io.WriteString(u.w, s)
+}
+
+// live reports whether the dock is on screen: docked or a turn working, and
+// no prompt holding the terminal.
+func (u *UI) live() bool { return (u.docked || u.working) && u.held == 0 }
 
 // repaint draws the dock anew, in one write.
 func (u *UI) repaint() { io.WriteString(u.w, u.wipe()+u.draw()) }
@@ -78,6 +108,9 @@ func (u *UI) wipe() string {
 // its input line, after what is typed.
 func (u *UI) draw() string {
 	lines, row, col := u.dock(u.width())
+	if len(lines) == 0 {
+		return "\x1b[?25h"
+	}
 	var b strings.Builder
 	b.WriteString(strings.Join(lines, "\n"))
 	u.up = len(lines) - 1
@@ -98,8 +131,13 @@ func (u *UI) draw() string {
 // dock is the dock's lines, each cut to w columns, and the row and column of
 // the cursor on its input line (row -1: no input line).
 func (u *UI) dock(w int) (lines []string, row, col int) {
-	lines = append(lines, fit(u.workingLine(), w))
-	if !u.typeAhead {
+	if u.streamOpen && u.streamTail != "" {
+		lines = append(lines, fit("   "+u.streamTail, w))
+	}
+	if u.working {
+		lines = append(lines, fit(u.workingLine(), w))
+	}
+	if !u.docked {
 		return lines, -1, 0
 	}
 	rule := u.cDim + strings.Repeat("─", w-1) + u.cR
@@ -114,31 +152,55 @@ func (u *UI) dock(w int) (lines []string, row, col int) {
 	if more := len(u.queue) - len(shown); more > 0 {
 		lines = append(lines, fmt.Sprintf("%s     … %d more queued%s", u.cDim, more, u.cR))
 	}
-	const prompt = "you› "
-	col = textWidth(prompt)
-	in := u.cB + u.cYou + prompt + u.cR
-	if u.typing == "" {
-		in += u.cDim + "type to add a message to the run" + u.cR
-	} else {
-		typed := tailFit(u.typing, w-1-col-1)
-		in += typed
-		col += textWidth(typed)
+	if u.in.Note != "" {
+		lines = append(lines, fit(u.cAcc+"  ⚠ "+u.in.Note+u.cR, w))
 	}
-	row = len(lines)
-	lines = append(lines, fit(in, w), rule)
-	if u.approvals != "" {
-		lines = append(lines, fit(fmt.Sprintf("%s  ⏵ approvals %s%s%s%s  ·  Enter queues it for the next round%s",
-			u.cDim, u.cR, u.cAcc, u.approvals, u.cR+u.cDim, u.cR), w))
+	in, c := u.inputLine(w)
+	row, col = len(lines), c
+	lines = append(lines, in, rule)
+	footer := u.footer
+	if u.in.Footer != "" {
+		footer = u.in.Footer
+	}
+	if footer != "" {
+		lines = append(lines, fit(u.cDim+"  "+footer+u.cR, w))
 	}
 	return lines, row, col
 }
 
-// workingLine is the dock's first line: what the turn waits on, how long,
-// where it stands against its budget.
+// inputLine is the input line cut to w columns — the text scrolled so the
+// cursor stays in view — and the column of the cursor.
+func (u *UI) inputLine(w int) (string, int) {
+	p := u.in.Prompt
+	if textWidth(p) > w/2 { // a long question
+		p = fit(p, w/2)
+	}
+	col := textWidth(p)
+	colour := u.cB + u.cYou
+	if u.in.Ask {
+		colour = u.cB + u.cAcc
+	}
+	head := colour + p + u.cR
+	if len(u.in.Text) == 0 {
+		return fit(head+u.cDim+u.in.Hint+u.cR, w), col
+	}
+	view, at := inputView(u.in.Text, u.in.Cursor, w-1-col-1)
+	return head + view, col + at
+}
+
+// workingLine is the line over the dock while a turn works: what it waits
+// on, how long, where it stands against its budget.
 func (u *UI) workingLine() string {
-	el := int((time.Since(u.start) - u.paused).Seconds())
+	waiting := time.Duration(0)
+	if u.awaiting > 0 {
+		waiting = time.Since(u.awaitSince)
+	}
+	el := int((time.Since(u.start) - u.paused - waiting).Seconds())
 	label := "working"
-	if u.activity != "" {
+	switch {
+	case u.awaiting > 0:
+		label = "waiting for your answer"
+	case u.activity != "":
 		label = u.activity + " running"
 		el = int(time.Since(u.activitySince).Seconds())
 	}
@@ -158,228 +220,4 @@ func (u *UI) width() int {
 		}
 	}
 	return u.cols()
-}
-
-// StartWorking puts the dock up until the returned stop is called
-// (idempotent, safe from any goroutine). Non-tty: the old static line.
-func (u *UI) StartWorking() (stop func()) {
-	if !u.tty {
-		u.Working() // the plain static line; no goroutine, no repaint
-		return func() {}
-	}
-	u.mu.Lock()
-	u.working, u.start, u.frame = true, time.Now(), 0
-	u.paused = 0 // fresh turn: no approval waits counted against it yet
-	if u.live() {
-		io.WriteString(u.w, "\r"+u.draw())
-	}
-	u.mu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		tk := time.NewTicker(220 * time.Millisecond)
-		defer tk.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-tk.C:
-				u.mu.Lock()
-				u.frame++
-				if u.live() {
-					u.repaint()
-				}
-				u.mu.Unlock()
-			}
-		}
-	}()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			close(done)
-			u.mu.Lock()
-			if u.live() {
-				io.WriteString(u.w, u.wipe()+"\x1b[?25h")
-			}
-			u.working = false
-			u.mu.Unlock()
-		})
-	}
-}
-
-// Hold takes the dock off until the returned resume runs. Wrap it around a
-// foreground prompt that owns the terminal — e.g. the approval y/n/a/q gate —
-// so the dock can't overwrite it. The held interval is excluded from the
-// elapsed counter (both the live one and the turn's final "worked for Xs",
-// via Paused()): waiting on the operator's answer is not hermes-agent
-// taking time to work.
-func (u *UI) Hold() (resume func()) {
-	u.mu.Lock()
-	if u.live() {
-		io.WriteString(u.w, u.wipe()+"\x1b[?25h")
-	}
-	u.held++
-	heldSince := time.Now()
-	u.mu.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			u.mu.Lock()
-			u.paused += time.Since(heldSince)
-			u.held--
-			if u.live() {
-				io.WriteString(u.w, "\r"+u.draw())
-			}
-			u.mu.Unlock()
-		})
-	}
-}
-
-// Paused reports how long the current turn has spent held (approval prompts)
-// so far. Subtract it from a wall-clock turn duration to get actual working
-// time, e.g. before TurnDone.
-func (u *UI) Paused() time.Duration {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return u.paused
-}
-
-// TypeAhead says whether the operator can type during the turn (repl): the
-// dock then has its input line, and lists what they queue. Either way the
-// queue starts empty.
-func (u *UI) TypeAhead(on bool) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.typeAhead, u.typing, u.queue, u.nQueued = on, "", nil, 0
-	if u.live() {
-		u.repaint()
-	}
-}
-
-// SetApprovals names the approval mode the dock's footer shows ("" = no
-// footer); the REPL sets it as a turn starts — /approve switches it between
-// turns.
-func (u *UI) SetApprovals(mode string) {
-	u.mu.Lock()
-	u.approvals = mode
-	u.mu.Unlock()
-}
-
-// SetTyping puts what the operator is typing during a turn on the dock's
-// input line ("" brings the hint back); Enter queues it (Queue).
-func (u *UI) SetTyping(s string) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.typing = s
-	if u.live() {
-		u.repaint()
-	}
-}
-
-// Queue lists a message the operator queued during the turn in the dock,
-// numbered; Added takes it off as it goes out with the next round. With the
-// dock off it is a line in the conversation instead.
-func (u *UI) Queue(text string) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.nQueued++
-	u.queue = append(u.queue, queuedMsg{u.nQueued, text})
-	if u.live() {
-		u.repaint()
-		return
-	}
-	fmt.Fprintf(u.w, " %squeued %d for the next round: %s%s\n", u.cDim, u.nQueued, clipWidth(strings.Join(strings.Fields(text), " "), 100), u.cR)
-}
-
-// Print writes s as it is, above the dock — hermes-hands' own warnings that
-// come up while a turn runs.
-func (u *UI) Print(s string) { u.sync(func() { io.WriteString(u.w, s) }) }
-
-// fit cuts s — colour codes and all — to fewer than w columns.
-func fit(s string, w int) string {
-	limit := w - 1
-	if textWidth(s) <= limit {
-		return s
-	}
-	var b strings.Builder
-	cols := 0
-	for i := 0; i < len(s); {
-		if n := colourLen(s[i:]); n > 0 {
-			b.WriteString(s[i : i+n])
-			i += n
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if cols+runeWidth(r) > limit-1 {
-			break
-		}
-		cols += runeWidth(r)
-		b.WriteString(s[i : i+size])
-		i += size
-	}
-	b.WriteString("…")
-	if strings.Contains(s, "\x1b") {
-		b.WriteString("\x1b[0m")
-	}
-	return b.String()
-}
-
-// tailFit keeps the end of s that fits in w columns — the end of a line
-// being typed is where the cursor is.
-func tailFit(s string, w int) string {
-	if w < 8 {
-		w = 8
-	}
-	if textWidth(s) <= w {
-		return s
-	}
-	r := []rune(s)
-	cols, i := 1, len(r) // 1: the "…"
-	for i > 0 && cols+runeWidth(r[i-1]) <= w {
-		i--
-		cols += runeWidth(r[i])
-	}
-	return "…" + string(r[i:])
-}
-
-// textWidth is the columns s takes on screen, colour codes left out.
-func textWidth(s string) int {
-	cols := 0
-	for i := 0; i < len(s); {
-		if n := colourLen(s[i:]); n > 0 {
-			i += n
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(s[i:])
-		cols += runeWidth(r)
-		i += size
-	}
-	return cols
-}
-
-// colourLen is the length of the escape sequence s starts with, 0 for none.
-func colourLen(s string) int {
-	if len(s) < 2 || s[0] != 0x1b || s[1] != '[' {
-		return 0
-	}
-	for i := 2; i < len(s); i++ {
-		if s[i] >= 0x40 && s[i] <= 0x7e {
-			return i + 1
-		}
-	}
-	return len(s)
-}
-
-// runeWidth is the columns r takes: 0 for a combining mark, 2 in the wide
-// East Asian and emoji ranges, else 1 — near enough to keep a line from
-// wrapping.
-func runeWidth(r rune) int {
-	switch {
-	case unicode.Is(unicode.Mn, r), r == 0x200d, r >= 0xfe00 && r <= 0xfe0f:
-		return 0
-	case r >= 0x1100 && r <= 0x115f, r >= 0x2e80 && r <= 0xa4cf, r >= 0xac00 && r <= 0xd7a3,
-		r >= 0xf900 && r <= 0xfaff, r >= 0xfe30 && r <= 0xfe4f, r >= 0xff00 && r <= 0xff60,
-		r >= 0xffe0 && r <= 0xffe6, r >= 0x1f300 && r <= 0x1faff, r >= 0x20000 && r <= 0x3fffd:
-		return 2
-	}
-	return 1
 }

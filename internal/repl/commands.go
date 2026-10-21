@@ -3,7 +3,6 @@ package repl
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"hermes-hands/internal/app"
@@ -52,7 +51,7 @@ var commandNamed = func() map[string]command {
 
 func (r *repl) help(string) {
 	r.a.UI.Help(r.a.RepoRoot)
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(r.conv)
 }
 
 // setup re-runs the setup wizard and, when it configured something, rebuilds
@@ -66,7 +65,7 @@ func (r *repl) setup(string) {
 			r.wireApp()
 			r.configured = r.a.Cfg.Configured()
 			if _, err := r.a.Client.Server().Check(context.Background()); err != nil {
-				fmt.Fprintf(os.Stderr, "BLOCKED: %v\n", err)
+				fmt.Fprintf(r.conv, "BLOCKED: %v\n", err)
 			}
 			rec := r.rec
 			if nr, err := r.a.Store.Resolve(r.smode, r.a.RepoRoot); err == nil {
@@ -75,7 +74,7 @@ func (r *repl) setup(string) {
 			r.use(rec, true)
 		}
 	}
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(r.conv)
 }
 
 // approveCycle is what /approve without an argument steps through.
@@ -107,11 +106,11 @@ func (r *repl) approve(arg string) {
 	}
 	says, ok := approveSays[mode]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "  /approve ask | plan | auto | never — no argument: the next of ask → plan → auto (now: %s)\n\n", r.a.Approvals())
+		fmt.Fprintf(r.conv, "  /approve ask | plan | auto | never — no argument: the next of ask → plan → auto (now: %s)\n\n", r.a.Approvals())
 		return
 	}
 	r.a.SetApprovals(mode)
-	fmt.Fprintf(os.Stderr, "  approvals: %s (this session only)\n\n", says)
+	fmt.Fprintf(r.conv, "  approvals: %s (this session only)\n\n", says)
 }
 
 // yolo toggles approvals for the hands' shell / write / edit — a runtime
@@ -119,12 +118,12 @@ func (r *repl) approve(arg string) {
 func (r *repl) yolo(string) {
 	if r.a.Approvals() == "auto" {
 		r.a.SetApprovals("ask")
-		fmt.Fprintln(os.Stderr, "  approvals: ON — shell / write ask first")
+		fmt.Fprintln(r.conv, "  approvals: ON — shell / write ask first")
 	} else {
 		r.a.SetApprovals("auto")
-		fmt.Fprintln(os.Stderr, "  approvals: OFF (yolo) — shell / write run unattended (this session only)")
+		fmt.Fprintln(r.conv, "  approvals: OFF (yolo) — shell / write run unattended (this session only)")
 	}
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(r.conv)
 }
 
 // debug switches the redacted wire trace: on | off | (nothing) = toggle.
@@ -140,29 +139,29 @@ func (r *repl) debug(arg string) {
 	r.a.NoteDebug(r.debugOn)
 	r.applyDebug()
 	if r.debugOn {
-		fmt.Fprintf(os.Stderr, "  debug: ON — redacted connection trace → %s\n", r.a.Store.DebugPath(r.rec))
-		fmt.Fprintf(os.Stderr, "  (local only, 0600, deleted with the session after %d idle days)\n", r.a.Cfg.RetentionDays)
+		fmt.Fprintf(r.conv, "  debug: ON — redacted connection trace → %s\n", r.a.Store.DebugPath(r.rec))
+		fmt.Fprintf(r.conv, "  (local only, 0600, deleted with the session after %d idle days)\n", r.a.Cfg.RetentionDays)
 	} else {
-		fmt.Fprintln(os.Stderr, "  debug: OFF")
+		fmt.Fprintln(r.conv, "  debug: OFF")
 	}
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(r.conv)
 }
 
 func (r *repl) check(string) {
 	if res, err := r.a.Client.Server().Check(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "BLOCKED: %s\n", err)
+		fmt.Fprintf(r.conv, "BLOCKED: %s\n", err)
 	} else {
 		r.configured = true
-		fmt.Fprintln(os.Stderr, app.CheckLine(res))
+		fmt.Fprintln(r.conv, app.CheckLine(res))
 	}
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(r.conv)
 }
 
 // config is read-only on purpose: hermes-hands never writes settings back —
 // the operator edits the file by hand (see the header this prints).
 func (r *repl) config(string) {
-	fmt.Fprint(os.Stderr, config.Describe(r.a.Cfg))
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprint(r.conv, config.Describe(r.a.Cfg))
+	fmt.Fprintln(r.conv)
 }
 
 // compact compacts the open session's chat now — hermes-hands' own
@@ -172,8 +171,8 @@ func (r *repl) config(string) {
 // instead of something else.
 func (r *repl) compact(arg string) {
 	if arg != "" {
-		fmt.Fprintln(os.Stderr, "  /compact takes no argument — /compact-aggressive also turns every earlier turn into question + answer.")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(r.conv, "  /compact takes no argument — /compact-aggressive also turns every earlier turn into question + answer.")
+		fmt.Fprintln(r.conv)
 		return
 	}
 	r.compactAs(compact.Now)
@@ -184,8 +183,8 @@ func (r *repl) compact(arg string) {
 // (the files each one changed and read still named).
 func (r *repl) compactAggressive(arg string) {
 	if arg != "" {
-		fmt.Fprintln(os.Stderr, "  /compact-aggressive takes no argument.")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(r.conv, "  /compact-aggressive takes no argument.")
+		fmt.Fprintln(r.conv)
 		return
 	}
 	r.compactAs(compact.Aggressive)
@@ -194,16 +193,16 @@ func (r *repl) compactAggressive(arg string) {
 func (r *repl) compactAs(d compact.Depth) {
 	ev, err := r.a.Keeper.Compact(d)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  %v\n\n", err)
+		fmt.Fprintf(r.conv, "  %v\n\n", err)
 		return
 	}
 	r.a.UI.Show(r.runner.Record(ev), "")
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(r.conv)
 }
 
 // context shows what Hermes reads now: the meter, the latest chat
 // checkpoint and what came after it — "full" prints every message.
 func (r *repl) context(arg string) {
-	fmt.Fprint(os.Stderr, compact.Describe(r.a.Keeper.View(), arg == "full"))
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprint(r.conv, compact.Describe(r.a.Keeper.View(), arg == "full"))
+	fmt.Fprintln(r.conv)
 }

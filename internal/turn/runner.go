@@ -215,8 +215,8 @@ func (r *Runner) Cancel() {
 }
 
 // CancelOnInterrupt makes SIGINT cancel the running turn until the returned
-// stop is called. At the REPL prompt liner turns Ctrl-C into its own error
-// (raw mode, no signal), so this only ever fires mid-turn.
+// stop is called. The REPL's box reads Ctrl-C as a key (no signal), so this
+// fires for a SIGINT from elsewhere — or with stdin no terminal.
 func (r *Runner) CancelOnInterrupt() (stop func()) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT)

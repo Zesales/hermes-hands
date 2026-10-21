@@ -29,22 +29,27 @@ type UI struct {
 
 	mu      sync.Mutex    // serialises every write vs. the dock's repaint
 	fd      int           // the terminal the UI writes to, for the dock's width; -1 = none
-	working bool          // StartWorking … its stop: the dock is up (dock.go)
-	held    int           // Hold()s open: a prompt owns the terminal, the dock is off
+	docked  bool          // the REPL's box is in the dock, from start to exit (SetDocked)
+	working bool          // StartWorking … its stop: the working line is up (live.go)
+	held    int           // Hold()s open: something else owns the terminal, the dock is off
 	up      int           // rows from the dock's top to the cursor: what wipe goes back up
 	start   time.Time     // when the turn started working
 	frame   int           // the working line's animation step
-	paused  time.Duration // accumulated Hold() time this turn (approval waits) — reset by StartWorking
+	paused  time.Duration // accumulated Hold() and Await() time this turn (approval waits) — reset by StartWorking
+
+	awaiting   int       // Await()s open: a question waits for the operator
+	awaitSince time.Time // since when
 
 	activity      string      // what the spinner waits on ("#14 shell"); "" = plain "working"
 	activitySince time.Time   // when that started — the spinner counts from here
 	budget        string      // where the turn stands ("round 3/25 · calls 12/100"); "" = not shown
 	streamOpen    bool        // Delta printed the "hermes" label; StreamDone closes it
-	typeAhead     bool        // the operator can type during the turn (TypeAhead): the dock has its input line
-	typing        string      // what they type (SetTyping); "" = the hint
+	streamTail    string      // docked: the streamed line not complete yet, shown in the dock
+	in            Input       // the box's input line (SetInput)
+	footer        string      // the dock's footer (SetFooter)
 	queue         []queuedMsg // what they queued this turn and the loop has not taken yet (Queue)
 	nQueued       int         // how many they queued this turn — the last one's number
-	approvals     string      // the turn's approval mode, in the dock's footer (SetApprovals)
+	lw            *lineWriter // Writer()
 }
 
 // New builds a UI writing to stderr. Colour is on when stderr is a tty,
@@ -166,10 +171,9 @@ func (u *UI) Banner(version, cwd, hermesID string) {
 	fmt.Fprintf(u.w, "%s/help  /new  /sessions  /check  /exit%s\n\n", u.cDim, u.cR)
 }
 
-// SessionPrompt is the REPL input prompt: "hermes-hands - session <id> > ". It
-// MUST stay free of ANSI escapes — liner.Prompt rejects any prompt containing a
-// control rune (ErrInvalidPrompt), which would make the REPL exit right after
-// the banner on a colour-capable terminal.
+// SessionPrompt is the REPL's prompt when stdin is no terminal and lines are
+// read plainly, without the box: "hermes-hands - session <id> > ". Plain
+// text, no colour: it goes wherever stderr goes.
 func (u *UI) SessionPrompt(id string) string {
 	return "hermes-hands - session " + strings.TrimPrefix(id, "hh_") + " > "
 }
@@ -246,14 +250,26 @@ func (u *UI) DimLine(msg string) {
 // Delta streams one chunk of the answer as it arrives, after a blank line and
 // under the same "hermes" label and indent Answer uses — so a streamed answer
 // and the same answer replayed from the event log (a blank line, then Answer)
-// look alike. StreamDone ends it.
+// look alike. StreamDone ends it. Docked, whole lines go above the dock and
+// the line not complete yet stands in it: the dock stays, the box usable.
 func (u *UI) Delta(s string) {
 	u.sync(func() {
 		if !u.streamOpen {
 			u.streamOpen = true
-			fmt.Fprintf(u.w, "\n%s%shermes%s\n   ", u.cB, u.cHermes, u.cR)
+			fmt.Fprintf(u.w, "\n%s%shermes%s\n", u.cB, u.cHermes, u.cR)
+			if !u.docked {
+				io.WriteString(u.w, "   ")
+			}
 		}
-		io.WriteString(u.w, strings.ReplaceAll(s, "\n", "\n   "))
+		if !u.docked {
+			io.WriteString(u.w, strings.ReplaceAll(s, "\n", "\n   "))
+			return
+		}
+		lines := strings.Split(u.streamTail+s, "\n")
+		for _, l := range lines[:len(lines)-1] {
+			fmt.Fprintf(u.w, "   %s\n", l)
+		}
+		u.streamTail = lines[len(lines)-1]
 	})
 }
 
@@ -261,12 +277,22 @@ func (u *UI) Delta(s string) {
 // one was open.
 func (u *UI) StreamDone() bool {
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	if !u.streamOpen {
+	open := u.streamOpen
+	u.mu.Unlock()
+	if !open {
 		return false
 	}
-	u.streamOpen = false
-	fmt.Fprintln(u.w)
+	u.sync(func() {
+		u.streamOpen = false
+		if !u.docked {
+			fmt.Fprintln(u.w)
+			return
+		}
+		if u.streamTail != "" {
+			fmt.Fprintf(u.w, "   %s\n", u.streamTail)
+		}
+		u.streamTail = ""
+	})
 	return true
 }
 
@@ -274,9 +300,15 @@ func (u *UI) StreamDone() bool {
 
 // Help is the REPL `/help` block: what typing does, then the slash commands.
 func (u *UI) Help(cwd string) {
+	u.sync(func() { u.help(cwd) })
+}
+
+func (u *UI) help(cwd string) {
 	fmt.Fprintf(u.w, "%s  Type a message to Hermes, your assistant: it answers, and works this directory\n", u.cDim)
 	fmt.Fprintf(u.w, "  through you — local_shell, local_read, local_write, local_edit in %s,\n", cwd)
 	io.WriteString(u.w, "  each with your approval. @path attaches a file — an image, or a text file's content.\n")
+	io.WriteString(u.w, "  Enter sends — while Hermes works it queues for its next round. ↑↓ history, Tab completes a\n")
+	io.WriteString(u.w, "  /command, \\ before Enter or Ctrl-J a new line, Ctrl-L clears the screen.\n")
 	io.WriteString(u.w, "    /new          start a fresh session in this directory\n")
 	io.WriteString(u.w, "    /session      show this session's detail (turns, tokens, splits)\n")
 	io.WriteString(u.w, "    /session <id> switch to another session  (ids from /sessions)\n")
@@ -294,7 +326,7 @@ func (u *UI) Help(cwd string) {
 	io.WriteString(u.w, "    /config       config file path + effective settings (read-only; edit by hand)\n")
 	io.WriteString(u.w, "    /check        re-test the gateway connection\n")
 	io.WriteString(u.w, "    /help         show this\n")
-	fmt.Fprintf(u.w, "    /exit         quit  (Ctrl-D too; Ctrl-C cancels the running turn)%s\n", u.cR)
+	fmt.Fprintf(u.w, "    /exit         quit  (Ctrl-D on an empty line too; Ctrl-C cancels the running turn)%s\n", u.cR)
 }
 
 func have(name string) bool {

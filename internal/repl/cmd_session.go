@@ -3,7 +3,6 @@ package repl
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 
 	"hermes-hands/internal/app"
@@ -18,31 +17,31 @@ func (r *repl) session(arg string) {
 		if fresh == nil {
 			fresh = r.rec
 		}
-		fmt.Fprint(os.Stderr, session.FormatDetail(fresh))
+		fmt.Fprint(r.conv, session.FormatDetail(fresh))
 		if si, err := r.a.Client.Sessions().Info(context.Background(), fresh.HermesSessionID); err == nil {
-			fmt.Fprintln(os.Stderr, "  — from hermes-agent —")
+			fmt.Fprintln(r.conv, "  — from hermes-agent —")
 			if si.Messages > 0 {
-				fmt.Fprintf(os.Stderr, "  messages             : %d\n", si.Messages)
+				fmt.Fprintf(r.conv, "  messages             : %d\n", si.Messages)
 			}
 			if si.Tokens > 0 {
-				fmt.Fprintf(os.Stderr, "  context tokens       : %d\n", si.Tokens)
+				fmt.Fprintf(r.conv, "  context tokens       : %d\n", si.Tokens)
 			}
 			if si.Parent != "" {
-				fmt.Fprintf(os.Stderr, "  parent (pre-compact) : %s\n", si.Parent)
+				fmt.Fprintf(r.conv, "  parent (pre-compact) : %s\n", si.Parent)
 			}
 			if si.Model != "" {
-				fmt.Fprintf(os.Stderr, "  model                : %s\n", si.Model)
+				fmt.Fprintf(r.conv, "  model                : %s\n", si.Model)
 			}
 			if si.Ended {
-				fmt.Fprintln(os.Stderr, "  ended                : yes")
+				fmt.Fprintln(r.conv, "  ended                : yes")
 			}
 		}
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(r.conv)
 		return
 	}
 	nr, err := r.a.Store.Resolve(arg, r.a.RepoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  %v\n\n", err)
+		fmt.Fprintf(r.conv, "  %v\n\n", err)
 		return
 	}
 	r.a.UI.NewSessionNote(nr.ID)
@@ -52,14 +51,14 @@ func (r *repl) session(arg string) {
 // sessions lists this machine's sessions; -v adds each one's hermes-agent
 // session.
 func (r *repl) sessions(arg string) {
-	fmt.Fprint(os.Stderr, app.SessionList(r.a.Store, r.a.Client, arg == "-v" || arg == "--verbose"))
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprint(r.conv, app.SessionList(r.a.Store, r.a.Client, arg == "-v" || arg == "--verbose"))
+	fmt.Fprintln(r.conv)
 }
 
 func (r *repl) newSession(string) {
 	nr, err := r.a.Store.Resolve("new", r.a.RepoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "hermes-hands: %v\n", err)
+		fmt.Fprintf(r.conv, "hermes-hands: %v\n", err)
 		return
 	}
 	r.a.UI.NewSessionNote(nr.ID)
@@ -69,20 +68,20 @@ func (r *repl) newSession(string) {
 // fork branches the session on the server and switches to the branch.
 func (r *repl) fork(string) {
 	if r.rec.HermesSessionID == "" {
-		fmt.Fprintln(os.Stderr, "  no hermes-agent session yet — run a turn first")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(r.conv, "  no hermes-agent session yet — run a turn first")
+		fmt.Fprintln(r.conv)
 		return
 	}
 	newID, err := r.a.Client.Sessions().Fork(context.Background(), r.rec.HermesSessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  BLOCKED: %v\n\n", err)
+		fmt.Fprintf(r.conv, "  BLOCKED: %v\n\n", err)
 		return
 	}
 	nr, _ := r.a.Store.Resolve("new", r.a.RepoRoot)
 	nr.HermesSessionID = newID
 	_, _ = r.a.Store.SetTitleLocal(nr, "fork of "+r.rec.ID)
 	r.use(nr, false)
-	fmt.Fprintf(os.Stderr, "  forked → hermes-agent session %s (local %s)\n\n", newID, r.rec.ID)
+	fmt.Fprintf(r.conv, "  forked → hermes-agent session %s (local %s)\n\n", newID, r.rec.ID)
 }
 
 // history replays this session, every turn; <n> its last n turns; <id>
@@ -95,7 +94,7 @@ func (r *repl) history(arg string) {
 		} else if other, err := r.a.Store.Load(arg); err == nil {
 			target = other
 		} else {
-			fmt.Fprintf(os.Stderr, "  no such session: %s\n\n", arg)
+			fmt.Fprintf(r.conv, "  no such session: %s\n\n", arg)
 			return
 		}
 	}
@@ -105,7 +104,7 @@ func (r *repl) history(arg string) {
 		return
 	}
 	r.a.UI.Replay(evs, n, target.ID, app.StoredOutput(r.a.Store, target))
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(r.conv)
 }
 
 // out prints the stored full output of call #<n>.
