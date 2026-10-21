@@ -92,6 +92,25 @@ func (l *Loop) runCall(c callSpec, id string, round int) (resultElem, *Outcome) 
 	return e, nil
 }
 
+// dedupe sends an output Hermes has verbatim already — earlier this
+// session, or earlier in this round — as a reference to it: seen live, a
+// long turn read the same file sections again and again, each in full.
+func (l *Loop) dedupe(elems []resultElem) []resultElem {
+	first := l.Ctx.Verbatim()
+	if len(first) == 0 {
+		return elems
+	}
+	for i, e := range elems {
+		if len(e.Output) < session.ElideMin {
+			continue
+		}
+		if ref, ok := first[session.OutputHash(e.Output)]; ok && ref < e.Ref {
+			elems[i].Output = session.SameOutput(ref)
+		}
+	}
+	return elems
+}
+
 // fitRound fits a round's results into limit bytes together (0 = no limit)
 // and returns the fitted copy: Hermes gets that, the session keeps every
 // output whole (stored when its result was recorded) — local_output reads a

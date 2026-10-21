@@ -85,7 +85,7 @@ func New(cfg *config.Config, builtin string) (*App, error) {
 		Rules:      known.Scoped(), // a subdirectory's rules, at the first call into it
 	}
 	lp := &loop.Loop{
-		API: client.Runs(), Dispatch: disp,
+		API: client.Runs(), Dispatch: disp, Inbox: &loop.Inbox{},
 		MaxRounds: cfg.MaxRounds, MaxCalls: cfg.MaxCalls, MaxCallsPerRound: cfg.MaxCallsPerRound,
 		MaxRoundOutput: cfg.MaxRoundOutput,
 		Scrub:          redact.Scrub,

@@ -32,6 +32,12 @@ type HistoryAsker interface {
 	AskWith(ctx context.Context, msg, sess, skey string, history []api.Message) (api.AskResult, error)
 }
 
+// ImageAsker is an Asker that can send images with the message
+// (api.Runs.AskImages) — the operator's @path attachments.
+type ImageAsker interface {
+	AskImages(ctx context.Context, msg, sess, skey string, history []api.Message, images []api.Image) (api.AskResult, error)
+}
+
 // Loop drives the delegation rounds for one turn.
 type Loop struct {
 	API      Asker
@@ -90,6 +96,10 @@ type Loop struct {
 	// see session.Recap). Set by the caller, consumed by Run.
 	ResumeNote string
 
+	// Inbox holds what the operator writes while a turn runs; each round's
+	// request takes it along (takeAdded). nil: nothing can be added.
+	Inbox *Inbox
+
 	// planned: the last turn ran in plan mode — the next one outside it says
 	// once that changes apply again (planNote).
 	planned bool
@@ -132,20 +142,23 @@ func (l *Loop) frame(userMsg string) string {
 			loc += " (git branch: " + b + ")"
 		}
 	}
-	return "[hermes-hands — you are the brain; hermes-hands is your hands on the\n" +
-		"operator's machine, a persistent bash shell in the working directory.]\n\n" +
-		"PROBLEM — operator's working directory: " + loc + "\n\n" +
+	return "[hermes-hands — you are the operator's assistant; hermes-hands is your execution\n" +
+		"worker (the hands) on the operator's machine, a persistent bash shell in the\n" +
+		"working directory.]\n\n" +
+		"MESSAGE from the operator — working directory: " + loc + "\n\n" +
 		userMsg + "\n\n" +
-		"Your reply: think it through first, not in the reply — then ONE instruction and\n" +
-		"nothing else —\n" +
-		"{\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
+		"A question, an opinion, a discussion: answer it in final, as in a chat — look\n" +
+		"first only when the answer needs facts from their machine. To look, or for a\n" +
+		"task, your instruction is the envelope: `local_shell` (ls / git / rg) or\n" +
+		"`local_read` in its calls — the hands run it.\n" +
+		"Your reply: think it through first, not in the reply — then\n" +
+		"ONE JSON object and nothing else — {\"calls\":[],\"final\":\"...\"} (the answer)\n" +
+		"or {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +
-		"output to call) — or {\"calls\":[],\"final\":\"...\"} once it is solved. Not a\n" +
-		"chat reply, not a description of yourself or your tools. Your reply ends this\n" +
-		"run; the hands run it and their results are your next message — nothing to\n" +
-		"wait for or check, and no tool of yours reaches them. If you do not know\n" +
-		"the directory yet, your instruction is a look — `local_shell` (ls / git / rg)\n" +
-		"or `local_read`." + l.frameBudget()
+		"output to call). Not a description of yourself or your tools unless asked.\n" +
+		"Your reply ends this run; the hands run its calls and their results are your\n" +
+		"next message — nothing to wait for or check, and no tool of yours reaches\n" +
+		"them." + l.frameBudget()
 }
 
 // Outcome is the turn result. OK == false means Answer is a "BLOCKED: ..."
@@ -176,7 +189,7 @@ const (
 	maxStops = 2
 
 	stoppedMark = "[hermes-hands] your last run was stopped"
-	stoppedNote = stoppedMark + ": after its steers you still called %s. " +
+	stoppedNote = stoppedMark + ": you called %s, one of your own tools, for the hands' work. " +
 		"Your own tools never reach the operator's machine — the hands do, through the envelope. " +
 		"Answer the message below with your reply text: the envelope {\"calls\":[...],\"final\":null}, or a final — no tool call.\n\n"
 )
@@ -190,7 +203,8 @@ var botchedRe = regexp.MustCompile(`(?i)"(calls|tool)"[[:space:]]*:`)
 func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, persist func(runID, serverSID string, tokens int)) (out Outcome) {
 	l.rounds, l.calls, l.noted = 0, 0, tierNone
 	defer func() { out.Rounds, out.Calls = l.rounds, l.calls }()
-	t := &turnState{userMsg: userMsg, send: l.opening(userMsg), turnlog: "[operator] " + userMsg + "\n"}
+	withFiles, images := l.attach(userMsg) // the files go along once; the rounds restate userMsg
+	t := &turnState{userMsg: userMsg, send: l.opening(withFiles), images: images, turnlog: "[operator] " + userMsg + "\n"}
 	for round := 1; ; round++ {
 		l.vlogf("round %d -> Hermes", round)
 		l.rounds = round
@@ -222,6 +236,8 @@ type turnState struct {
 	recap   bool
 
 	fixups, rejects int // recovery nudges spent: a botched / empty envelope, one over the budget
+
+	images []api.Image // the operator's @path images: sent with the turn's first run only
 
 	stops   int    // runs hermes-hands stopped this turn (maxStops)
 	stopped string // the message a stopped run answered, asked again behind stoppedNote
@@ -259,7 +275,7 @@ func (l *Loop) stopped(what string, round int, t *turnState) (Outcome, bool) {
 	if !strings.HasPrefix(t.send, stoppedMark) {
 		t.stopped = t.send
 	}
-	l.noteOperator(fmt.Sprintf("run stopped: Hermes still called %s after its steers — asking again, with a correction (%d/%d)",
+	l.noteOperator(fmt.Sprintf("run stopped: Hermes called %s for the hands' work — asking again, with a correction (%d/%d)",
 		what, t.stops, maxStops))
 	t.send = fmt.Sprintf(stoppedNote, what) + t.stopped
 	t.turnlog += fmt.Sprintf("[round %d] (run stopped: %s after its steers; asked again)\n", round, what)
@@ -320,6 +336,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 	if stopped != nil {
 		return *stopped, true
 	}
+	elems = l.dedupe(elems)
 	t.pending, t.pendingRound = elems, round
 	t.send = l.resultsMsg(l.fitRound(elems, l.MaxRoundOutput), t.userMsg, round)
 	l.announce(round + 1)
@@ -329,21 +346,16 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 // resultsMsg is the message that hands a round's results back.
 func (l *Loop) resultsMsg(elems []resultElem, userMsg string, round int) string {
 	payload, _ := marshalNoHTML(resultsPayload{Results: elems})
-	// The operator's question is restated on every round, not just round 1.
+	// The operator's message is restated on every round, not just round 1.
 	// A gateway can accept our session_id (Threaded=true) without actually
 	// replaying the transcript to the model - in that case this is the ONLY
 	// place downstream of round 1 where the model still sees what was asked.
 	// Cheap even when the server does thread it correctly: one restated
 	// sentence, no meaningful token cost.
-	return "[hands results] Your hands ran the instruction you just gave, in the operator's" +
-		" working directory" + l.locNote() + ". This is real output from the operator's" +
-		" machine — the operator did NOT paste it, and it is NOT from your sandbox. Each" +
-		" result's output is the actual file contents / command output; exit_code 0 means" +
-		" it worked (empty or non-zero: try another instruction, never \"I can't read it\")." +
-		questionNote(userMsg) +
-		" Now give the operator your answer in final — or another instruction if you need" +
-		" more. Either one is your reply text, the envelope, and it ends this run: no tool" +
-		" of yours reaches the hands.\n" + string(payload) + l.roundBudgetNote(round+1)
+	return "[hands results] The worker ran your job on the operator's machine" + l.locNote() +
+		" — real output, not your sandbox; empty output or a non-zero exit means: try another" +
+		" command." + questionNote(userMsg) + " Reply with the next job or your final — your reply" +
+		" text, the envelope; no tool of yours reaches the worker.\n" + string(payload) + l.roundBudgetNote(round+1)
 }
 
 func (l *Loop) emit(ev session.Event) {
@@ -411,7 +423,7 @@ func oneLine(s string) string {
 // envelope format also means the model has no idea what it was doing and
 // answers "what can I do for you?" instead of finishing the task.
 func questionNote(userMsg string) string {
-	return " The operator's question this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\"."
+	return " The operator's message this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\"."
 }
 
 func compactJSON(raw json.RawMessage) json.RawMessage {

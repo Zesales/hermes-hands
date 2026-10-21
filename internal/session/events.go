@@ -20,6 +20,7 @@ const EventsVersion = 1
 // Event kinds, in the order a turn produces them.
 const (
 	KindUser       = "user"        // the operator's message (Text)
+	KindAdded      = "added"       // what the operator wrote while the turn ran, sent with the next round (Text)
 	KindCall       = "call"        // a hands call, written BEFORE it runs (Ref, ID, Tool, Args)
 	KindResult     = "result"      // its outcome (Ref, Tool, Exit, Ms, Lines, Bytes; output in out/<Ref>.txt)
 	KindHermesTool = "hermes_tool" // Hermes used one of its OWN server tools (Tool, Text = preview, Action)
@@ -58,6 +59,7 @@ type Event struct {
 	Ms      int64           `json:"ms,omitempty"`
 	Lines   int             `json:"lines,omitempty"`
 	Bytes   int             `json:"bytes,omitempty"`
+	Hash    string          `json:"hash,omitempty"` // a result's output, for "same output as #n" (OutputHash; ElideMin bytes and up)
 	OK      *bool           `json:"ok,omitempty"`
 	Tokens  int             `json:"tokens,omitempty"`
 	Action  string          `json:"action,omitempty"`   // hermes_tool: "" | server | steered | stopped | repeat | approved | denied; approval: yes | no | all | quit | once | session | deny

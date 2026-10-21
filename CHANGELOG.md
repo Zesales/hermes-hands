@@ -4,7 +4,162 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.15.0 — (unreleased, `bump:minor`) `/approve`: ask, plan, auto
+## 0.15.0 — (unreleased, `bump:minor`) an assistant that answers; `@path`; type while it works; compaction later and deeper
+
+### Security
+
+- **Built with Go 1.26.10** (was 1.26.9): govulncheck found GO-2026-6809 —
+  `crypto/x509` did not distrust compromised intermediate certificates —
+  on a code path hermes-hands calls (TLS to the Hermes API); fixed in
+  1.26.10. `GO_IMAGE` is `golang:1.26.10-bookworm`, go.mod says
+  `go 1.26.10`.
+
+### Changes
+
+Seen in real sessions: every message came to Hermes framed as a PROBLEM
+about the working directory — "you do not chat", "your instruction is a
+look" — so a question or an opinion was worked on instead of answered.
+And Hermes passed the hands envelope to its own `tool_call`, whose
+parameter is `calls` too: every entry failed as "Unnamed call", unsteered.
+
+- **An assistant that answers or acts.** The instructions open with the
+  decision: a question, an opinion, a discussion, a plan to talk through →
+  answered in `final`, as in a chat, looking first only when the answer
+  depends on facts from the operator's machine; a task → worked through the
+  hands; unsure → answer, and say what it would do. "A claim about their
+  machine needs a look; an opinion or general knowledge does not." The frame
+  says MESSAGE from the operator instead of PROBLEM and the same rule in
+  short; "you do not chat" and "your instruction is a look" are gone, and a
+  new example answers an opinion straight away. The rule against Hermes'
+  own exec / file / delegation tools is unchanged.
+- **`tool_call "Local Output"` is steered** like the other hands tools —
+  seen live, a run of them went through unsteered: the guard knew only
+  shell / read / write / edit.
+- **Compaction: later and deeper.** Seen live: a long session compacted for
+  the 33rd time — the trigger was 45 % of a 131k window (~59k), and turns
+  collapsed only down to three quarters of it (~42k), so each compaction
+  bought ~17k. hermes-agent does not compact at its 0.5 default there: under
+  a 512K window it raises any `compression.threshold` to at least 0.75
+  (`agent/context_compressor.py`).
+  - `HERMES_HANDS_COMPACT_AT` defaults to `auto`, following hermes-agent's
+    own rule a few points below it: 79 % at 64K (its 64K floor, capped at
+    85 %), 69 % from ~86K to 512K (its 75 % floor), 47 % from 512K (its
+    0.5 default). `/config` says when a window is under the 64K hermes-agent
+    refuses.
+    A config written by `setup` before carries `HERMES_HANDS_COMPACT_AT=45`
+    as a value of its own — change it to `auto` (or remove the line).
+  - Turns collapse down to half the trigger, not three quarters: at 69 % of
+    131k a compaction now leaves ~45k free instead of ~17k — fewer
+    compactions, and fewer misses of the server's prompt cache.
+  - Whatever the share, the trigger leaves 24K above the request — 20K for
+    the reply, a 4K buffer — so a raised `HERMES_HANDS_COMPACT_AT` cannot run
+    a request into the window's end (at 131k: at most ~107k).
+- **Less noise in what Hermes reads, again and again.**
+  - Hermes' own tool attempts are no longer in the transcript of a
+    compacted session. A long session's history carried dozens of "[your
+    server tool tool_call: Local Shell — steered]" — examples, in the
+    model's own past, of the very mistake — and the reflex grew with the
+    session. The terminal and the log keep them. A turn stopped for them
+    reads "hermes-hands stopped it before an answer", naming no tool.
+  - A run's second to fifth steer for the same kind of mistake is one
+    line ("Again: your `…` call is not how the hands' work is done …"):
+    the full paragraph went out once, and hermes-agent keeps every steer.
+  - **An output Hermes has verbatim already goes out once.** Every result
+    of 300 bytes and up carries a hash in the log; a repeat of an output
+    still in Hermes' conversation — read again in a later round, or twice in
+    one — goes out as `[same output as #6 — above; local_output {"ref":6}
+    reads it again]`, in the live round and in a compacted transcript alike.
+    Seen live: a long turn read the same file sections again and again, each
+    in full. Nothing is lost: the log keeps every output, local_output reads
+    any.
+  - The central rule has a name in the instructions — **Rule E — the
+    envelope** — and a repeated steer points at it in one line: "Again:
+    your `…` call — Rule E: your next reply is the envelope, no tool call."
+  - The results message opens in one sentence, not five: "The worker ran
+    your job on the operator's machine — real output, not your sandbox …
+    Reply with the next job or your final" — the instructions say the
+    rest, and hermes-agent stores every round's message.
+- **Type while Hermes works**, as in Claude Code. What the operator types
+  during a turn stands on the working line (`you› …`); Enter queues it
+  (`queued for the next round: …`), and the turn's next round takes it
+  along after the results — Hermes reads it with what it asked for, the log
+  shows `you (added)`, the transcript keeps it. What the turn did not take
+  becomes the next turn; after Ctrl-C or a timeout it waits in the prompt
+  with the line still being typed. A `/command` typed meanwhile runs when
+  the turn is done; an approval prompt takes the keys while it is up;
+  Ctrl-C still cancels. The terminal is in character mode during the turn
+  (no echo, signals on) and gets its mode back for every prompt.
+  - `--rpc`: `{"type":"append","text":…}` while a turn runs answers
+    `queued` and arrives as `added` in the turn's events; what the turn did
+    not take becomes the next turn, under the append's id; with no turn
+    running, append is a turn of its own. A turn runs in the background
+    now; every other request waits for it, in order, as before.
+- **Compaction: no gain, no compaction; and Hermes is told what it lost.**
+  Seen live, in a test with a window smaller than the task: a compaction
+  "~34k → ~34k" — what filled the prompt was the round being sent, which no
+  compaction elides — and Hermes reading the same files six times, each read
+  elided by the next compaction.
+  - An automatic compaction that would save less than 4K tokens is skipped
+    (like hermes-agent's `proactive_prune_min_reclaim_tokens`): it would only
+    rewrite the prompt's prefix, which the server's prompt cache then misses.
+  - When a compaction turns outputs of the running turn into lines, the
+    request says so: "outputs #6–#8 of this turn are one line each now — do
+    not read them again in full; work with what you know, read only what is
+    missing, or answer with what you have so far".
+- **The operator's own rules come first**: what they say in the chat —
+  "save nothing to memory", "don't touch X" — holds for the whole session,
+  also after compaction, and outranks the instructions' permissions (seen
+  live: told at the start to save nothing to memory, Hermes later called
+  its memory recall anyway; the instructions had allowed "your memory").
+- **hermes-hands is Hermes' execution worker** — the instructions say so up
+  front: everything that runs on the operator's machine, every command and
+  every file read, write and edit, Hermes hands to the worker, which runs the
+  job and reports back. "No tool you call and no connector to search for or
+  install: it reads your reply" (seen live: `tool_call "Hermes Hands · local
+  shell"`, `tool_search "hermes hands local shell envelope"`). The mapping
+  table gains `process_manage` and `tool_call` / `tool_search` for the
+  worker's operations — "nothing to search for". Shorter (235 lines, was
+  263): repeats folded, the examples redone as whole exchanges — a fact with
+  its source, a task from failing test to fix, a missing tool, a cut output.
+  The frame calls hermes-hands "your execution worker (the hands)".
+- **The frame names the envelope again**: "To look, or for a task, your
+  instruction is the envelope: `local_shell` (ls / git / rg) or
+  `local_read` in its calls" — the cue the old frame had. `tool_call` is
+  named once in the instructions, not five times: a forbidding mention
+  primes as much as it forbids. A/B in fresh sessions against v0.14.4's
+  instructions (3 × a task + an opinion each): tasks 3/3 either way; own
+  tools reached for 5× (2× `tool_call` with a hands name) vs 2× (none
+  through `tool_call`); the opinion answered straight away 2/3 vs 3/3.
+- **The envelope passed to `tool_call` is steered** as a hands tool called
+  as Hermes' own (`tool_call` "Unnamed call", "Unnamed call +2"): the steer
+  says the envelope's `calls` are not tool_call's, and the instructions say
+  it too.
+- **A stopped run's prose is no answer.** Seen live: hermes-hands stopped
+  a run past its steers, and in the same moment hermes-agent's own retry
+  guard completed it with "I stopped retrying because I kept running
+  tool_call 8 times…" — which ended the turn instead of the corrected ask.
+  After a stop only an envelope that made it before the stop is used; any
+  other reply counts as stopped and the message is asked again.
+- **A refused steer stops the run at once.** A steer the server refuses
+  never reaches the model, so waiting for it to catch itself is pointless:
+  hermes-hands stops the run and asks again with the correction in the next
+  run's input, which needs no `/steer`. Steers that arrive keep the five
+  chances. The stop line and note no longer say "after its steers".
+- **A refused steer says why**: the warning and the debug trace carry the
+  server's reason (a 409 is `run_not_accepting_steer` or
+  `steer_not_accepted`) — seen live, every steer after the first of a run
+  refused with a bare "HTTP 409".
+- **`@path` attachments**, as in Claude Code: `@path`, `@"path with
+  spaces"`, `@~/…`, or an image path dropped into the terminal. An image
+  (png, jpeg, gif, webp, up to 5 MB) goes along as an `image_url` part with
+  a `data:` URL in the turn's first run — hermes-agent keeps only
+  `[screenshot]` of it in the session; a text file as its content (up to
+  100 KB, scrubbed). Read-only, also from outside the working directory.
+  A 4xx for the images is reported as such and keeps the session id.
+
+## 0.14.4 — 2026-10-20 — `/approve`: ask, plan, auto
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
 - **`/approve`** sets the hands' approvals for the open session: no
   argument steps `ask` → `plan` → `auto` → `ask`, `/approve ask | plan |
@@ -20,7 +175,9 @@ gateway runs.
   once that changes apply again — the plan phase's "change nothing" does
   not linger in the chat.
 
-## 0.14.3 — (unreleased, `bump:patch`) an exchange, not a tool: a misdirected call is steered, then its run stopped
+## 0.14.3 — 2026-10-20 — an exchange, not a tool: a misdirected call is steered, then its run stopped
+
+hermes-agent: 0.21.0 and newer, tested through 0.22.x (live: 0.22.2).
 
 Seen in real code sessions and in the measurements of 2026-10-14: Hermes
 treats the hands as tools of its own. Steered once, a model kept calling

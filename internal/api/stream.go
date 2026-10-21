@@ -147,6 +147,12 @@ type runStream struct {
 // refuses the stop.
 const steersPerKind = 5
 
+// againMsg is a steer for a kind of mistake the run was steered for once
+// already: the full text went out then, and hermes-agent keeps every steer in
+// the session — five times the whole paragraph only made it longer. It names
+// the rule the instructions state (Rule E), which every run carries anyway.
+const againMsg = "[hermes-hands] Again: your `%s` call — Rule E: your next reply is the envelope, no tool call."
+
 // stopped is the result of a run hermes-hands stopped itself.
 func (rs *runStream) stopped() AskResult {
 	return AskResult{State: "stopped", RunID: rs.runID, Threaded: rs.threaded, HermesTools: rs.tools, Stopped: rs.stopping}
@@ -200,7 +206,13 @@ func (rs *runStream) frame(raw string) (AskResult, bool, error) {
 			}
 			return AskResult{}, true, fmt.Errorf("stream completed with empty output")
 		}
-		// a reply that made it before the stop took effect is used as is
+		// After the stop, only an envelope that made it before the stop took
+		// effect is used as is. Prose is no answer then — seen live: hermes-
+		// agent's own retry guard ("I stopped retrying because I kept running
+		// tool_call 8 times…") ended the turn instead of the corrected ask.
+		if rs.stopping != "" && !strings.Contains(out, `"calls"`) {
+			return rs.stopped(), true, nil
+		}
 		return AskResult{
 			State: "completed", Text: out, RunID: rs.runID,
 			SessionID: e.SessionID, Threaded: rs.threaded,
@@ -240,8 +252,9 @@ func (c *Client) serverApproval(ctx context.Context, base, runID string, e sseEv
 // hermesTool handles one of Hermes' OWN server tool calls: the sandbox guard
 // steers a call aimed at the operator's machine back to the hands (up to
 // steersPerKind times per kind of mistake a run; steered counts) and stops
-// the run past that (true), and the turn is told — "steered" when a steer
-// went out, "stopped", or "repeat" when the server refused the stop.
+// the run past that, or at once when the server refuses a steer (true); the
+// turn is told — "steered" when a steer went out, "stopped", or "repeat" when
+// the server refused the stop too.
 func (c *Client) hermesTool(ctx context.Context, base, runID string, e sseEvent, steered map[string]int) (stop bool) {
 	action := ""
 	if guard.SandboxTools[e.Tool] {
@@ -252,11 +265,18 @@ func (c *Client) hermesTool(ctx context.Context, base, runID string, e sseEvent,
 		check = guard.Strict
 	}
 	if v := check(e.Tool, e.Preview); v.Steer {
+		msg := v.Message
+		if steered[v.Kind] > 0 { // the run had the full text for this kind once
+			msg = fmt.Sprintf(againMsg, e.Tool)
+		}
 		switch {
-		case steered[v.Kind] < steersPerKind:
+		case steered[v.Kind] < steersPerKind && c.steer(ctx, base, runID, msg):
 			steered[v.Kind]++
 			action = "steered"
-			c.steer(ctx, base, runID, v.Message)
+		// A steer the server refused never reached the model — waiting for it
+		// to catch itself is pointless then: stop now, and the correction goes
+		// in the next run's input, which needs no /steer (seen live: every
+		// steer of a run refused with 409, eight tool_call retries).
 		case c.stopRun(ctx, base, runID):
 			action, stop = "stopped", true
 		default:
@@ -285,16 +305,19 @@ func (c *Client) stopRun(ctx context.Context, base, runID string) bool {
 
 // steer redirects a running run (POST /v1/runs/{id}/steer). Best-effort: the
 // guard's display line still tells the operator when the server refuses.
-func (c *Client) steer(ctx context.Context, base, runID, text string) {
+func (c *Client) steer(ctx context.Context, base, runID, text string) (accepted bool) {
 	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	body, _ := marshalJSON(map[string]string{"input": text})
-	code, _, err := c.do(tctx, http.MethodPost, base+"/v1/runs/"+runID+"/steer", body,
+	code, resp, err := c.do(tctx, http.MethodPost, base+"/v1/runs/"+runID+"/steer", body,
 		map[string]string{"Content-Type": "application/json"})
-	c.trace("guard.steer", map[string]any{"run_id": runID, "status": code, "text": text})
+	c.trace("guard.steer", map[string]any{"run_id": runID, "status": code, "text": text, "response": trunc(stripNL(string(resp)), 300)})
 	if err != nil || !is2xx(code) {
-		c.warnf("sandbox guard: steer refused (%s, HTTP %s)", errText(err), httpCode(code))
+		// the server's reason: a 409 is run_not_accepting_steer or steer_not_accepted
+		c.warnf("sandbox guard: steer refused (%s, HTTP %s) %s", errText(err), httpCode(code), trunc(stripNL(string(resp)), 200))
+		return false
 	}
+	return true
 }
 
 // answerApproval answers a pending approval request: once | session | deny.

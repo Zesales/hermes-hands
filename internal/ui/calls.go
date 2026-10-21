@@ -84,10 +84,10 @@ func (u *UI) CallDone(ref int, tool string, exit int, dur time.Duration, out str
 // action "" is a thinking-side tool (web search, memory, cron) and "server"
 // an exec / file tool doing server-side work — both dim notes; "steered"
 // means the call was aimed at the operator's machine and the run was turned
-// back to the hands, "stopped" the same mistake again after the run's steers
-// for it ran out (hermes-hands stopped the run and asks again), "repeat" that
-// when the server refused the stop; "approved" / "denied" answer an approval
-// request.
+// back to the hands, "stopped" a mistake past the run's steers for it, or one
+// whose steer the server refused (hermes-hands stopped the run and asks
+// again), "repeat" that when the server refused the stop too; "approved" /
+// "denied" answer an approval request.
 func (u *UI) HermesTool(tool, preview, action string) {
 	preview = clipWidth(strings.Join(strings.Fields(preview), " "), u.cols()-30)
 	u.sync(func() {
@@ -96,7 +96,7 @@ func (u *UI) HermesTool(tool, preview, action string) {
 			fmt.Fprintf(u.w, " %s⚠ hermes-sandbox%s %s%s%s  %s\n     %s↳ not your machine — steered back to the hands%s\n",
 				u.cBad, u.cR, u.cB, tool, u.cR, preview, u.cDim, u.cR)
 		case "stopped":
-			fmt.Fprintf(u.w, " %s⚠ hermes-sandbox%s %s%s%s  %s\n     %s↳ again after its steers — run stopped; hermes-hands asks once more%s\n",
+			fmt.Fprintf(u.w, " %s⚠ hermes-sandbox%s %s%s%s  %s\n     %s↳ run stopped — hermes-hands asks once more, with a correction%s\n",
 				u.cBad, u.cR, u.cB, tool, u.cR, preview, u.cDim, u.cR)
 		case "repeat":
 			fmt.Fprintf(u.w, " %s⚠ hermes-sandbox%s %s%s%s  %s\n     %s↳ again — this run was steered for it already; not again%s\n",

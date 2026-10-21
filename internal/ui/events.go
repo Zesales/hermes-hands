@@ -17,6 +17,8 @@ func (u *UI) Show(ev session.Event, out string) {
 		u.Line("")
 		u.Rule()
 		u.You(ev.Text)
+	case session.KindAdded:
+		u.Added(ev.Text)
 	case session.KindCall:
 		head, more := Summarize(ev.Tool, ev.Args)
 		u.CallStart(ev.Ref, ev.Tool, head, more)

@@ -3,6 +3,7 @@ package compact
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,9 +27,9 @@ func newKeeper(t *testing.T, turns int) (*Keeper, *session.Log) {
 		t.Fatal(err)
 	}
 	log, _ := st.OpenLog(rec)
-	big := strings.Repeat("output line\n", 2500)
 	ref := 0
 	for i := 0; i < turns; i++ {
+		big := strings.Repeat(fmt.Sprintf("output line %d\n", i), 2500) // each turn its own: a repeated output goes out once
 		ref++
 		log.BeginTurn()
 		log.Add(session.Event{Kind: session.KindUser, Text: "step"})
@@ -39,6 +40,26 @@ func newKeeper(t *testing.T, turns int) (*Keeper, *session.Log) {
 		log.Add(session.Event{Kind: session.KindAnswer, Text: "done", OK: session.Bool(true)})
 	}
 	return &Keeper{Store: st, Rec: rec, Window: 131072, At: 45}, log
+}
+
+// the trigger is At percent of the window, but leaves room above the request
+// for the reply (20K) and a buffer (4K) — unless the window is too small
+func TestTriggerLeavesRoomForTheReply(t *testing.T) {
+	k := &Keeper{Window: 131072, At: 69, RoundOutput: 60000}
+	if got := k.trigger(); got != 131072*69/100 { // 90439 — room 106496 is plenty
+		t.Errorf("trigger = %d", got)
+	}
+	k.At = 95
+	if got, want := k.trigger(), 131072-24576; got != want {
+		t.Errorf("capped trigger = %d, want %d", got, want)
+	}
+	k = &Keeper{Window: 32768, At: 90, RoundOutput: 60000} // room < half the window: the share stays
+	if got := k.trigger(); got != 32768*90/100 {
+		t.Errorf("small window trigger = %d", got)
+	}
+	if (&Keeper{Window: 131072}).trigger() != 0 || (*Keeper)(nil).trigger() != 0 {
+		t.Error("no share or no keeper: no trigger")
+	}
 }
 
 func TestMeterMeasuresASingleCallRun(t *testing.T) {
@@ -170,6 +191,23 @@ func TestCompactAutoKeepsTheLatestRounds(t *testing.T) {
 	}
 	if ev.Collapse != 3 {
 		t.Errorf("tight: collapse = %d, want 3 (never the latest turn)", ev.Collapse)
+	}
+	if k.ElidedNow != "#4" {
+		t.Errorf("tight: the latest turn's output elided now = %q, want #4", k.ElidedNow)
+	}
+}
+
+// an automatic compaction that would save less than minReclaim is skipped:
+// it would only cost the server's prompt cache
+func TestCompactAutoSkipsWhenItSavesTooLittle(t *testing.T) {
+	k, _ := newKeeper(t, 4)
+	k.Window, k.At = 400000, 45
+	k.Rec.Context = 1 // the prompt is already as small as compaction would make it
+	if _, err := k.Compact(Auto); !errors.Is(err, ErrNothing) {
+		t.Errorf("err = %v, want ErrNothing", err)
+	}
+	if _, err := k.Compact(Now); err != nil { // asked for: no gate
+		t.Errorf("now: %v", err)
 	}
 }
 

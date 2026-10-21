@@ -1,5 +1,11 @@
 package session
 
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+)
+
 // Log records an open session: every event of a turn is stamped with the
 // turn and appended to events.jsonl, a result's output goes to out/<ref>.txt.
 // Rendering is not its job — ui.Show draws an event, live and on replay.
@@ -30,6 +36,9 @@ func (l *Log) Add(ev Event) Event {
 	if ev.Kind == KindResult {
 		ev.Bytes = len(ev.Out)
 		ev.Lines = countLines(ev.Out)
+		if ev.Bytes >= ElideMin {
+			ev.Hash = OutputHash(ev.Out)
+		}
 		if err := l.store.SaveOutput(l.Rec, ev.Ref, ev.Out); err != nil {
 			l.store.warnf("events: output #%d: %v", ev.Ref, err)
 		}
@@ -38,6 +47,20 @@ func (l *Log) Add(ev Event) Event {
 		l.store.warnf("events: %v", err)
 	}
 	return ev
+}
+
+// OutputHash identifies an output: two results with the same hash carried
+// the same bytes.
+func OutputHash(out string) string {
+	sum := sha256.Sum256([]byte(out))
+	return hex.EncodeToString(sum[:8])
+}
+
+// SameOutput stands in for an output Hermes has verbatim already, earlier in
+// the conversation: seen live, a long turn read the same file sections again
+// and again, each time in full.
+func SameOutput(ref int) string {
+	return fmt.Sprintf(`[same output as #%d — above; local_output {"ref":%d} reads it again]`, ref, ref)
 }
 
 func countLines(s string) int {

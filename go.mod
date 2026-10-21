@@ -1,6 +1,6 @@
 module hermes-hands
 
-go 1.26.9
+go 1.26.10
 
 require github.com/peterh/liner v1.2.2
 

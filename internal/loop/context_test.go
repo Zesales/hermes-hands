@@ -66,6 +66,10 @@ func TestRunCompactsBeforeARequestThatWouldNotFit(t *testing.T) {
 	}
 	log.BeginTurn()
 	log.Add(session.Event{Kind: session.KindUser, Text: "read it"})
+	// not the session's first run: the 55k measured are mostly the chat
+	// hermes-agent holds, not a fixed part no compaction could shrink (the
+	// minReclaim gate would skip that one, rightly)
+	k.Rec.Turns = 1
 	out := l.Run(context.Background(), "read it", k.Rec, func(string, string, int) {})
 	if !out.OK || out.Answer != "done" {
 		t.Fatalf("out = %+v", out)
@@ -185,5 +189,31 @@ func TestRunFitsTheRoundOutputBudget(t *testing.T) {
 	}
 	if !noted {
 		t.Error("no operator note about the cut")
+	}
+}
+
+// a file read again in a later round goes out as a reference to the first
+// read — Hermes has it verbatim above
+func TestRunSendsARepeatedOutputAsAReference(t *testing.T) {
+	ha := &historyAsker{scriptAsker: scriptAsker{replies: []api.AskResult{
+		{Text: `{"calls":[{"id":"c1","tool":"local_read","args":{"path":"big.txt"}}],"final":null}`, Threaded: true},
+		{Text: `{"calls":[{"id":"c1","tool":"local_read","args":{"path":"big.txt"}}],"final":null}`, Threaded: true},
+		{Text: `{"calls":[],"final":"done"}`, Threaded: true},
+	}}}
+	l, k, log := keeperLoop(t, ha)
+	big := strings.Repeat("a line of the file\n", 50)
+	if err := os.WriteFile(filepath.Join(l.Dispatch.RepoRoot, "big.txt"), []byte(big), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log.BeginTurn()
+	log.Add(session.Event{Kind: session.KindUser, Text: "read it twice"})
+	if out := l.Run(context.Background(), "read it twice", k.Rec, func(string, string, int) {}); !out.OK {
+		t.Fatalf("out = %+v", out)
+	}
+	if !strings.Contains(ha.msgs[1], "a line of the file") {
+		t.Errorf("the first read goes out whole: %q", ha.msgs[1])
+	}
+	if strings.Contains(ha.msgs[2], "a line of the file") || !strings.Contains(ha.msgs[2], "[same output as #1 — above") {
+		t.Errorf("the second read must be a reference to #1: %q", ha.msgs[2])
 	}
 }

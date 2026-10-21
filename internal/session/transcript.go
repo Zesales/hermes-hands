@@ -35,6 +35,10 @@ type TranscriptOpts struct {
 	RoundOutput int
 }
 
+// AddedMark opens what the operator wrote while the turn ran, in the request
+// that carries it and in the transcript alike.
+const AddedMark = "[the operator adds, while you worked]\n"
+
 // LastCompact is the compaction in effect: the last KindCompact event of evs.
 // ok is false while hermes-agent holds the transcript (none yet).
 func LastCompact(evs []Event) (Event, bool) {
@@ -79,6 +83,7 @@ func Transcript(evs []Event, o TranscriptOpts) []Msg {
 
 type transcript struct {
 	msgs []Msg
+	seen map[string]int // output hash -> the #ref that went out verbatim with it first
 }
 
 func (t *transcript) add(role, content string) {
@@ -105,6 +110,8 @@ func (t *transcript) collapsed(turn []Event) {
 		switch e.Kind {
 		case KindUser:
 			t.add("user", "[operator] "+e.Text)
+		case KindAdded:
+			t.add("user", "[the operator added] "+e.Text)
 		case KindCall:
 			refs = append(refs, e.Ref)
 			tools[e.Tool]++
@@ -180,20 +187,14 @@ func (t *transcript) turn(turn []Event, o TranscriptOpts) {
 	var (
 		calls   []Event           // the batch in flight: its calls …
 		results = map[int]Event{} // … and their results, by #ref
-		server  []string          // Hermes' own server tools before the next reply
 		replied bool              // this turn's log has Hermes' replies (older logs do not)
 		final   bool              // the last reply asked for nothing more: it was the answer
 	)
-	// withServer puts the server tools Hermes ran in this round in front of
-	// what it said next.
-	withServer := func(text string) string {
-		if len(server) == 0 {
-			return text
-		}
-		text = strings.Join(server, "\n") + "\n" + text
-		server = nil
-		return text
-	}
+	// Hermes' own tool attempts (KindHermesTool) are not in the transcript:
+	// seen live, a long session's history carried dozens of "[your server
+	// tool tool_call: Local Shell — steered]" — examples, in the model's own
+	// past, of the very mistake — and the reflex grew with the session. The
+	// terminal and the log keep them; what a web search found is in the reply.
 	flush := func() {
 		if len(calls) == 0 {
 			return
@@ -201,7 +202,7 @@ func (t *transcript) turn(turn []Event, o TranscriptOpts) {
 		if n := len(t.msgs); n == 0 || t.msgs[n-1].Role != "assistant" {
 			// a log without replies: the envelope is rebuilt from the
 			// calls it asked for
-			t.add("assistant", withServer(envelope(calls, calls[0].Seq <= o.Upto)))
+			t.add("assistant", envelope(calls, calls[0].Seq <= o.Upto))
 		}
 		t.add("user", t.results(calls, results, o))
 		calls, results = nil, map[int]Event{}
@@ -211,15 +212,16 @@ func (t *transcript) turn(turn []Event, o TranscriptOpts) {
 		case KindUser:
 			flush()
 			t.add("user", "[operator] "+e.Text)
-		case KindHermesTool:
-			server = append(server, fmt.Sprintf("[your server tool %s: %s — %s]", e.Tool, clip(e.Text, 160), firstOr(e.Action, "ran")))
+		case KindAdded: // sent after the round's results, as in the request
+			flush()
+			t.add("user", AddedMark+e.Text)
 		case KindReply:
 			flush()
 			text := e.Text
 			if e.Seq <= o.Upto {
 				text = elideReply(text)
 			}
-			t.add("assistant", withServer(text))
+			t.add("assistant", text)
 			replied, final = true, true
 		case KindCall:
 			calls = append(calls, e)
@@ -232,13 +234,23 @@ func (t *transcript) turn(turn []Event, o TranscriptOpts) {
 			case e.OK != nil && !*e.OK, replied && !final:
 				// BLOCKED, or the turn ended while Hermes still asked
 				// for calls: hermes-hands said this, not the model
-				t.add("user", "[hermes-hands: the turn stopped — "+e.Text+"]")
+				t.add("user", "[hermes-hands: the turn stopped — "+stoppedWhy(e.Text)+"]")
 			case !replied:
-				t.add("assistant", withServer(e.Text)) // an older log: the answer is the only reply kept
+				t.add("assistant", e.Text) // an older log: the answer is the only reply kept
 			}
 		}
 	}
 	flush()
+}
+
+// stoppedWhy is a stopped turn's reason as the transcript keeps it: a stop
+// for Hermes' own tools names none of them — no example of the mistake in its
+// history — a budget's stop stays as it was.
+func stoppedWhy(answer string) string {
+	if strings.Contains(answer, "its own tools") {
+		return "hermes-hands stopped it before an answer"
+	}
+	return answer
 }
 
 // results renders one batch's results the way the hands sent them: verbatim
@@ -268,10 +280,18 @@ func (t *transcript) results(calls []Event, results map[int]Event, o TranscriptO
 			e.ExitCode = intOr(r.Exit, 0)
 			e.Args = elideArgs(c.Args)
 			e.Output = fmt.Sprintf(`[elided by hermes-hands: %d lines, %d bytes — local_output {"ref":%d} reads it]`, r.Lines, r.Bytes, c.Ref)
+		case r.Hash != "" && t.seen[r.Hash] != 0 && t.seen[r.Hash] < c.Ref:
+			e.ExitCode, e.Output = intOr(r.Exit, 0), SameOutput(t.seen[r.Hash])
 		default:
 			e.ExitCode = intOr(r.Exit, 0)
 			if o.Output != nil {
 				e.Output = o.Output(c.Ref)
+			}
+			if r.Hash != "" {
+				if t.seen == nil {
+					t.seen = map[string]int{}
+				}
+				t.seen[r.Hash] = c.Ref
 			}
 			verbatim = append(verbatim, len(elems))
 			outs, refs = append(outs, e.Output), append(refs, c.Ref)
@@ -290,13 +310,6 @@ func intOr(p *int, d int) int {
 		return d
 	}
 	return *p
-}
-
-func firstOr(s, d string) string {
-	if s == "" {
-		return d
-	}
-	return s
 }
 
 func marshalNoEscape(v any) ([]byte, error) {

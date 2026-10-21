@@ -420,7 +420,7 @@ func TestRunResultsSayTheReplyIsTheEnvelope(t *testing.T) {
 	if out, _, _ := run(t, sa, realDisp(t, prompt.AutoApprover{}), 8); !out.OK {
 		t.Fatalf("out = %+v", out)
 	}
-	if !strings.Contains(sa.msgs[1], "your reply text, the envelope, and it ends this run: no tool of yours reaches the hands") {
+	if !strings.Contains(sa.msgs[1], "your reply text, the envelope; no tool of yours reaches the worker") {
 		t.Errorf("results message = %q", trunc(sa.msgs[1], 600))
 	}
 }
@@ -649,21 +649,23 @@ func TestRunFramesFirstMessage(t *testing.T) {
 	}
 	got := sa.msgs[0]
 	for _, want := range []string{
-		"you are the brain", "hermes-hands is your hands",
+		"you are the operator's assistant", "hermes-hands is your execution\nworker (the hands)",
 		"persistent bash shell",
-		"PROBLEM — operator's working directory: cwd /home/me/proj (git branch: main)",
-		"was hälst du von der readme ?", // the message, verbatim, as the problem body
-		"think it through first, not in the reply — then ONE instruction",
+		"MESSAGE from the operator — working directory: cwd /home/me/proj (git branch: main)",
+		"was hälst du von der readme ?", // the message, verbatim, as the body
+		"answer it in final, as in a chat — look\nfirst only when the answer needs facts from their machine",
+		"your instruction is the envelope: `local_shell` (ls / git / rg) or\n`local_read` in its calls",
+		"think it through first, not in the reply — then\nONE JSON object",
 		`{"id":"c1","tool":"local_shell|local_read|local_write|local_edit|local_output"`,
 		`"final":null}`,
-		"not a description of yourself or your tools",
+		"Not a description of yourself or your tools unless asked",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("framed round-1 message missing %q\n---\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "operator: was hälst") {
-		t.Errorf("message should stand as the PROBLEM body, not be prefixed 'operator:':\n%s", got)
+		t.Errorf("message should stand as the body, not be prefixed 'operator:':\n%s", got)
 	}
 }
 
@@ -778,4 +780,73 @@ func TestRunCallMsLeavesOutApprovalWait(t *testing.T) {
 	if res.Ms >= 250 {
 		t.Errorf("call Ms = %d — the 300ms approval wait must not count as run time", res.Ms)
 	}
+}
+
+// the note on outputs of this turn a compaction just elided
+func TestElidedNote(t *testing.T) {
+	if elidedNote("") != "" {
+		t.Error("nothing elided: no note")
+	}
+	if n := elidedNote("#6–#8"); !strings.Contains(n, "outputs #6–#8 of this turn are one line each now") || !strings.Contains(n, "do not") {
+		t.Errorf("note = %q", n)
+	}
+}
+
+// what the operator writes while a turn runs goes out with the next round,
+// after the results, marked as theirs — and is logged as "added"
+func TestRunTakesWhatTheOperatorAdded(t *testing.T) {
+	inbox := &Inbox{}
+	sa := &scriptAsker{replies: []api.AskResult{
+		reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"calls":[],"final":"done"}`, true),
+	}}
+	var added []string
+	d := realDisp(t, prompt.AutoApprover{})
+	l := &Loop{API: sa, Dispatch: d, MaxRounds: 8, Inbox: inbox, Emit: func(ev session.Event) {
+		if ev.Kind == session.KindAdded {
+			added = append(added, ev.Text)
+		}
+	}}
+	l.OnResult = func(string, string, int) { inbox.Push("also check the tests") } // typed while the hands ran
+	out := l.Run(context.Background(), "read foo", rec(), func(string, string, int) {})
+	if !out.OK || out.Answer != "done" {
+		t.Fatalf("out = %+v", out)
+	}
+	if strings.Contains(sa.msgs[0], "also check the tests") {
+		t.Errorf("round 1 cannot carry it yet: %q", sa.msgs[0])
+	}
+	m := sa.msgs[1]
+	if i, j := strings.Index(m, `"results"`), strings.Index(m, session.AddedMark+"also check the tests"); i < 0 || j < i {
+		t.Errorf("round 2 must carry it after the results: %q", m)
+	}
+	if len(added) != 1 || added[0] != "also check the tests" || len(inbox.Take()) != 0 {
+		t.Errorf("added events = %q", added)
+	}
+}
+
+// what the turn did not take — it ended first — stays for the next turn
+func TestInboxKeepsWhatTheTurnDidNotTake(t *testing.T) {
+	inbox := &Inbox{}
+	sa := &scriptAsker{replies: []api.AskResult{reply(`{"calls":[],"final":"done"}`, true)}}
+	l := &Loop{API: sa, MaxRounds: 8, Inbox: inbox}
+	sa2 := &pushOnAsk{scriptAsker: sa, push: func() { inbox.Push("next idea") }}
+	l.API = sa2
+	if out := l.Run(context.Background(), "hello", rec(), func(string, string, int) {}); !out.OK {
+		t.Fatalf("out = %+v", out)
+	}
+	if got := inbox.Take(); len(got) != 1 || got[0] != "next idea" {
+		t.Errorf("inbox after the turn = %q, want the line for the next turn", got)
+	}
+}
+
+// pushOnAsk runs push while a request is out — the operator typing while
+// Hermes thinks.
+type pushOnAsk struct {
+	*scriptAsker
+	push func()
+}
+
+func (p *pushOnAsk) Ask(ctx context.Context, msg, sess, skey string) (api.AskResult, error) {
+	p.push()
+	return p.scriptAsker.Ask(ctx, msg, sess, skey)
 }

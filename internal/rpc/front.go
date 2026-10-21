@@ -30,6 +30,8 @@ func (f *front) Show(ev session.Event) {
 		f.emit(map[string]any{"type": "tool", "id": f.id, "ref": ev.Ref, "tool": ev.Tool, "preview": f.heads[ev.Ref], "exit": exit, "lines": ev.Lines})
 	case session.KindHermesTool:
 		f.emit(map[string]any{"type": "hermes_tool", "id": f.id, "tool": ev.Tool, "preview": ev.Text, "action": ev.Action})
+	case session.KindAdded:
+		f.emit(map[string]any{"type": "added", "id": f.id, "text": ev.Text})
 	case session.KindNote, session.KindCompact:
 		f.emit(map[string]any{"type": "note", "id": f.id, "text": ev.Text})
 	}

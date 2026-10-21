@@ -235,3 +235,51 @@ func TestTranscriptCollapsedTurnNamesFiles(t *testing.T) {
 		t.Errorf("long list = %q", got)
 	}
 }
+
+// Hermes' own tool attempts stay out of the transcript — they would be
+// examples of the mistake in its own history — and a stop for them names no
+// tool
+func TestTranscriptLeavesOutHermesToolAttempts(t *testing.T) {
+	no := false
+	evs := []Event{
+		{Seq: 1, Turn: 1, Kind: KindUser, Text: "fix it"},
+		{Seq: 2, Turn: 1, Kind: KindHermesTool, Tool: "tool_call", Text: "Local Shell", Action: "steered"},
+		{Seq: 3, Turn: 1, Kind: KindReply, Text: `{"calls":[{"id":"c1","tool":"local_shell","args":{"cmd":"make"}}],"final":null}`},
+		{Seq: 4, Turn: 1, Kind: KindAnswer, Text: "BLOCKED: Hermes kept calling its own tools for the hands' work (`tool_call` Local Shell) — …", OK: &no},
+		{Seq: 5, Turn: 2, Kind: KindUser, Text: "continue"},
+	}
+	for _, m := range Transcript(evs, TranscriptOpts{}) {
+		if strings.Contains(m.Content, "tool_call") || strings.Contains(m.Content, "Local Shell") || strings.Contains(m.Content, "server tool") {
+			t.Errorf("a tool attempt reached the transcript: %q", m.Content)
+		}
+	}
+	msgs := Transcript(evs, TranscriptOpts{})
+	if !strings.HasPrefix(msgs[2].Content, "[hermes-hands: the turn stopped — hermes-hands stopped it before an answer]") {
+		t.Errorf("stopped turn = %q", msgs[2].Content)
+	}
+}
+
+// an output Hermes has verbatim already goes out once: a repeat of it is a
+// reference; a short one is not worth it
+func TestTranscriptSendsARepeatedOutputOnce(t *testing.T) {
+	big := strings.Repeat("same line\n", 100)
+	h := OutputHash(big)
+	evs := []Event{
+		{Seq: 1, Turn: 1, Kind: KindUser, Text: "read it twice"},
+		{Seq: 2, Turn: 1, Kind: KindReply, Text: `{"calls":[{"id":"c1","tool":"local_read","args":{"path":"a"}}],"final":null}`},
+		{Seq: 3, Turn: 1, Kind: KindCall, Ref: 1, ID: "c1", Tool: "local_read", Args: json.RawMessage(`{"path":"a"}`)},
+		{Seq: 4, Turn: 1, Kind: KindResult, Ref: 1, Tool: "local_read", Bytes: len(big), Hash: h},
+		{Seq: 5, Turn: 1, Kind: KindReply, Text: `{"calls":[{"id":"c1","tool":"local_read","args":{"path":"a"}}],"final":null}`},
+		{Seq: 6, Turn: 1, Kind: KindCall, Ref: 2, ID: "c1", Tool: "local_read", Args: json.RawMessage(`{"path":"a"}`)},
+		{Seq: 7, Turn: 1, Kind: KindResult, Ref: 2, Tool: "local_read", Bytes: len(big), Hash: h},
+		{Seq: 8, Turn: 1, Kind: KindReply, Text: `{"calls":[],"final":"done"}`},
+	}
+	msgs := Transcript(evs, TranscriptOpts{Output: func(int) string { return big }})
+	all := ""
+	for _, m := range msgs {
+		all += m.Content
+	}
+	if strings.Count(all, "same line") != 100 || !strings.Contains(all, "[same output as #1 — above") {
+		t.Errorf("the output went out %d/100 lines; transcript:\n%s", strings.Count(all, "same line"), all)
+	}
+}

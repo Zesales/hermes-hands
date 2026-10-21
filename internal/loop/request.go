@@ -15,6 +15,7 @@ import (
 // transcript it goes along. Hermes' reply is recorded (KindReply): the
 // transcript of a compacted session is built from those.
 func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *session.Record) (api.AskResult, error) {
+	l.takeAdded(t)
 	history := l.Ctx.History()
 	msg := t.send
 	if t.recap && history == nil { // hermes-hands' own transcript carries the turn already
@@ -24,7 +25,7 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 	if l.Ctx.Due(predicted) {
 		if ev, err := l.Ctx.Compact(compact.Auto); err == nil {
 			l.emit(ev)
-			history, msg = l.Ctx.History(), t.send
+			history, msg = l.Ctx.History(), t.send+elidedNote(l.Ctx.ElidedNow)
 			predicted = l.Ctx.Predict(msg, history)
 		} else if !errors.Is(err, compact.ErrNothing) {
 			l.warnf("compaction failed: %v", err)
@@ -33,7 +34,7 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 	l.ctxNow = predicted
 	l.progress()
 
-	res, err := l.ask(ctx, msg, rec, history)
+	res, err := l.ask(ctx, msg, rec, history, t.images)
 	for try := 0; err != nil && l.Ctx != nil && compact.IsOverflow(err.Error()); try++ {
 		// refused for its size: handled here, locally — the same request
 		// again, smaller — before the turn gives up
@@ -44,7 +45,10 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 		history, msg = l.Ctx.History(), t.send
 		l.ctxNow = l.Ctx.Predict(msg, history)
 		l.progress()
-		res, err = l.ask(ctx, msg, rec, history)
+		res, err = l.ask(ctx, msg, rec, history, t.images)
+	}
+	if err == nil {
+		t.images = nil // sent with this run; hermes-agent keeps only "[screenshot]" of them
 	}
 	if err != nil || res.Stopped != "" { // a stopped run has no reply to observe or record
 		return res, err
@@ -55,8 +59,12 @@ func (l *Loop) request(ctx context.Context, round int, t *turnState, rec *sessio
 	return res, nil
 }
 
-// ask sends one request: with the transcript when hermes-hands holds it.
-func (l *Loop) ask(ctx context.Context, msg string, rec *session.Record, history []api.Message) (api.AskResult, error) {
+// ask sends one request: with the images the turn still has to send, with
+// the transcript when hermes-hands holds it.
+func (l *Loop) ask(ctx context.Context, msg string, rec *session.Record, history []api.Message, images []api.Image) (api.AskResult, error) {
+	if ia, ok := l.API.(ImageAsker); ok && len(images) > 0 {
+		return ia.AskImages(ctx, msg, rec.HermesSessionID, rec.HermesSessionKey, history, images)
+	}
 	if ha, ok := l.API.(HistoryAsker); ok && history != nil {
 		return ha.AskWith(ctx, msg, rec.HermesSessionID, rec.HermesSessionKey, history)
 	}
@@ -124,3 +132,15 @@ func (e overflowError) Error() string {
 }
 
 func (e overflowError) Unwrap() error { return e.err }
+
+// elidedNote tells Hermes that outputs it read moments ago — this turn's —
+// are lines now: seen live, a task bigger than the window made it read the
+// same files again and again, each read elided by the next compaction.
+func elidedNote(refs string) string {
+	if refs == "" {
+		return ""
+	}
+	return "\n[hermes-hands: to fit the window, outputs " + refs + " of this turn are one line each now — do not" +
+		" read them again in full. Work with what you already know, read only what is still missing (narrow it, or" +
+		" local_output with an offset), or answer with what you have so far.]"
+}

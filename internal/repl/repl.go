@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/peterh/liner"
@@ -39,6 +40,9 @@ type repl struct {
 	debugOn    bool // /debug: the redacted wire trace into the session's debug.jsonl
 	configured bool
 	quit       bool // set by /exit
+
+	ta      *typeahead // reads what the operator types while a turn runs; nil between turns
+	prefill string     // what the next prompt starts with: typed during a turn, not sent
 }
 
 // Run is the REPL in session smode ("" or "new" = a fresh one, else an id).
@@ -94,7 +98,7 @@ func Run(smode string, d Deps) int {
 	r.wireApp()
 
 	for !r.quit {
-		input, err := r.ln.Prompt(r.a.UI.SessionPrompt(r.rec.ID))
+		input, err := r.prompt()
 		if err == liner.ErrPromptAborted { // Ctrl-C clears the line, never quits
 			fmt.Fprintln(os.Stderr, "  (use /exit to quit)")
 			continue
@@ -134,8 +138,44 @@ func (r *repl) handle(input string) {
 	}
 	r.ln.AppendHistory(input)
 	// Everything a turn prints goes through the session's event log
-	// (stored, scrubbed) — so reopening the session replays it 1:1.
-	r.runner.Run(input, &front{ui: r.a.UI})
+	// (stored, scrubbed) — so reopening the session replays it 1:1. While it
+	// runs, what the operator types goes to the turn's next round.
+	r.ta = startTypeahead(r.a.UI, r.a.Loop.Inbox)
+	res := r.runner.Run(input, &front{ui: r.a.UI})
+	typed, cmds := r.ta.finish()
+	r.ta = nil
+	r.afterTurn(res, typed, cmds)
+}
+
+// afterTurn handles what the operator typed while the turn ran and the turn
+// did not take: the /commands typed meanwhile run now; what was queued but
+// not sent becomes the next turn — unless the turn was cancelled or timed
+// out: then it waits in the prompt, with the line still being typed, to
+// send or change.
+func (r *repl) afterTurn(res turn.Result, typed string, cmds []string) {
+	for _, c := range cmds {
+		if !r.quit {
+			r.handle(c)
+		}
+	}
+	left := r.a.Loop.Inbox.Take()
+	if len(left) > 0 && res.End.Outcome == "" && !r.quit {
+		r.prefill = strings.TrimSpace(r.prefill + " " + typed)
+		r.handle(strings.Join(left, "\n\n"))
+		return
+	}
+	r.prefill = strings.TrimSpace(strings.Join(append(left, r.prefill, typed), " "))
+}
+
+// prompt reads the next line — starting with what was typed during the
+// last turn and not sent, if anything.
+func (r *repl) prompt() (string, error) {
+	p := r.a.UI.SessionPrompt(r.rec.ID)
+	if text := r.prefill; text != "" {
+		r.prefill = ""
+		return r.ln.PromptWithSuggestion(p, text, -1)
+	}
+	return r.ln.Prompt(p)
 }
 
 // wireApp is the per-app wiring, redone when /setup swaps the app: the
@@ -146,7 +186,10 @@ func (r *repl) wireApp() {
 	if ta, ok := r.a.Disp.Approver.(*prompt.TTYApprover); ok {
 		ta.Out = os.Stderr
 		ta.AskLine = func(q string) (string, error) { return r.ln.Prompt(q) }
-		ta.Pause = r.a.UI.Hold
+		ta.Pause = func() (resume func()) { // the prompt owns the line and the keys
+			resumeUI, resumeTA := r.a.UI.Hold(), r.ta.hold()
+			return func() { resumeTA(); resumeUI() }
+		}
 		ta.OnAnswer = func(summary, detail, answer string, waited time.Duration) {
 			r.runner.Record(session.Event{Kind: session.KindApproval, Text: redact.Scrub(summary),
 				Detail: clipLines(redact.Scrub(detail), maxApprovalDetail), Action: answer, Ms: waited.Milliseconds()})

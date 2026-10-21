@@ -3,9 +3,9 @@ hermes-hands 0.0.0-dev  ·  <TMP>
 hermes-agent · session (pending — confirmed on the first turn)
 /help  /new  /sessions  /check  /exit
 
-hermes-hands - session <SESSION> >   Type a message to your Hermes brain. It works this directory through
-  you — local_shell, local_read, local_write, local_edit in <TMP>,
-  each with your approval.
+hermes-hands - session <SESSION> >   Type a message to Hermes, your assistant: it answers, and works this directory
+  through you — local_shell, local_read, local_write, local_edit in <TMP>,
+  each with your approval. @path attaches a file — an image, or a text file's content.
     /new          start a fresh session in this directory
     /session      show this session's detail (turns, tokens, splits)
     /session <id> switch to another session  (ids from /sessions)
@@ -148,7 +148,7 @@ hermes-hands - session <SESSION> >   home         : <TMP>/hermes-hands
     HERMES_HANDS_MAX_OUTPUT           20000                    (default)
     HERMES_HANDS_MAX_ROUND_OUTPUT     60000                    (default)
     HERMES_HANDS_CONTEXT_WINDOW       131072 tokens            (default)
-    HERMES_HANDS_COMPACT_AT           45%                      (default)
+    HERMES_HANDS_COMPACT_AT           69%                      (default)
     HERMES_HANDS_DENY                 (none)                   (default)
 
 hermes-hands - session <SESSION> >   nothing to compact yet — no call output or turn to elide
