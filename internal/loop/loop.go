@@ -153,7 +153,7 @@ func (l *Loop) frame(userMsg string) string {
 		"`local_read` in its calls — the hands run it.\n" +
 		"Your reply: think it through first, not in the reply — then\n" +
 		"ONE JSON object and nothing else — {\"calls\":[],\"final\":\"...\"} (the answer)\n" +
-		"or {\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
+		"or {\"say\":\"<what you do now, a few words>\",\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +
 		"output to call). Not a description of yourself or your tools unless asked.\n" +
 		"Your reply ends this run; the hands run its calls and their results are your\n" +
@@ -231,11 +231,12 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 // turnState is what one turn carries from round to round.
 type turnState struct {
 	userMsg string
-	send    string // the next message to Hermes
-	turnlog string // the turn so far, for a gateway that does not thread it (recap)
+	added   []string // what the operator added to the message while the turn ran
+	send    string   // the next message to Hermes
+	turnlog string   // the turn so far, for a gateway that does not thread it (recap)
 	recap   bool
 
-	fixups, rejects int // recovery nudges spent: a botched / empty envelope, one over the budget
+	fixups int // recovery nudges spent: a botched / empty envelope
 
 	images []api.Image // the operator's @path images: sent with the turn's first run only
 
@@ -283,8 +284,8 @@ func (l *Loop) stopped(what string, round int, t *turnState) (Outcome, bool) {
 }
 
 // handle acts on Hermes' reply of round: a final or prose ends the turn
-// (done); an envelope's calls run and their results become the next message;
-// a botched, empty or over-budget envelope gets a nudge instead.
+// (done); an envelope's calls run — its say shown first — and their results
+// become the next message; a botched or empty envelope gets a nudge instead.
 func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 	env := parseEnvelope(reply)
 	switch {
@@ -298,7 +299,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 			// was shown) just apologizes for the formatting and asks what
 			// to do. Restate the question so fixing the envelope doesn't
 			// also mean abandoning the task.
-			t.send, t.pending = fixupMsg+"\n"+questionNote(t.userMsg), nil
+			t.send, t.pending = fixupMsg+"\n"+t.asked(), nil
 			t.turnlog += fmt.Sprintf("[round %d] (invalid envelope, requested resend)\n", round)
 			return Outcome{}, false
 		}
@@ -310,7 +311,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 		}
 		if t.fixups < maxFixups {
 			t.fixups++
-			t.send, t.pending = emptyMsg+"\n"+questionNote(t.userMsg), nil // same reasoning as the fixupMsg case above
+			t.send, t.pending = emptyMsg+"\n"+t.asked(), nil // same reasoning as the fixupMsg case above
 			return Outcome{}, false
 		}
 		return Outcome{Answer: "BLOCKED: Hermes returned an empty envelope repeatedly.", OK: false}, true
@@ -318,44 +319,26 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 	if o, stop := l.capped(round); stop {
 		return o, true
 	}
-	if why, note := l.oversize(len(env.calls)); why != "" {
-		// All or nothing: an envelope over the budget runs not at all, so
-		// no half-run batch (file A edited, the dependent B not) remains.
-		if t.rejects >= maxFixups {
-			return Outcome{Answer: "BLOCKED: Hermes kept sending envelopes over the call budget.", OK: false}, true
-		}
-		t.rejects++
-		l.noteOperator(note)
-		t.send, t.pending = why+"\n"+questionNote(t.userMsg)+l.roundBudgetNote(round+1), nil
-		t.turnlog += fmt.Sprintf("[round %d] (envelope of %d calls over the budget, nothing run)\n", round, len(env.calls))
-		return Outcome{}, false
+	if env.say != "" {
+		l.emit(session.Event{Kind: session.KindSay, Text: l.scrub(env.say), Round: round})
 	}
-
+	// Over the budget the first calls run and the rest come back not run;
+	// the results say which, so a half-run batch (file A edited, the
+	// dependent B not) is never a surprise.
+	keep, why, note := l.runnable(len(env.calls))
+	if note != "" {
+		l.noteOperator(note)
+	}
 	l.vlogf("round %d: %d call(s)", round, len(env.calls))
-	elems, stopped := l.runCalls(env.calls, round, &t.turnlog)
+	elems, stopped := l.runCalls(env.calls, keep, why, env.stopOnError, round, &t.turnlog)
 	if stopped != nil {
 		return *stopped, true
 	}
 	elems = l.dedupe(elems)
 	t.pending, t.pendingRound = elems, round
-	t.send = l.resultsMsg(l.fitRound(elems, l.MaxRoundOutput), t.userMsg, round)
+	t.send = l.resultsMsg(l.fitRound(elems, l.MaxRoundOutput), t.asked(), round)
 	l.announce(round + 1)
 	return Outcome{}, false
-}
-
-// resultsMsg is the message that hands a round's results back.
-func (l *Loop) resultsMsg(elems []resultElem, userMsg string, round int) string {
-	payload, _ := marshalNoHTML(resultsPayload{Results: elems})
-	// The operator's message is restated on every round, not just round 1.
-	// A gateway can accept our session_id (Threaded=true) without actually
-	// replaying the transcript to the model - in that case this is the ONLY
-	// place downstream of round 1 where the model still sees what was asked.
-	// Cheap even when the server does thread it correctly: one restated
-	// sentence, no meaningful token cost.
-	return "[hands results] The worker ran your job on the operator's machine" + l.locNote() +
-		" — real output, not your sandbox; empty output or a non-zero exit means: try another" +
-		" command." + questionNote(userMsg) + " Reply with the next job or your final — your reply" +
-		" text, the envelope; no tool of yours reaches the worker.\n" + string(payload) + l.roundBudgetNote(round+1)
 }
 
 func (l *Loop) emit(ev session.Event) {
@@ -422,10 +405,6 @@ func oneLine(s string) string {
 // nudges, which otherwise carry no task context at all, so fixing the
 // envelope format also means the model has no idea what it was doing and
 // answers "what can I do for you?" instead of finishing the task.
-func questionNote(userMsg string) string {
-	return " The operator's message this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\"."
-}
-
 func compactJSON(raw json.RawMessage) json.RawMessage {
 	var buf bytes.Buffer
 	if json.Compact(&buf, raw) != nil {

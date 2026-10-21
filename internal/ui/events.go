@@ -19,6 +19,8 @@ func (u *UI) Show(ev session.Event, out string) {
 		u.You(ev.Text)
 	case session.KindAdded:
 		u.Added(ev.Text)
+	case session.KindSay:
+		u.Say(ev.Text)
 	case session.KindCall:
 		head, more := Summarize(ev.Tool, ev.Args)
 		u.CallStart(ev.Ref, ev.Tool, head, more)

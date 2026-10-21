@@ -133,6 +133,17 @@ func (u *UI) Approval(summary, detail, answer string) {
 	})
 }
 
+// Say is Hermes' progress line beside a round's calls — what it does now:
+// the operator sees where the work is going while it runs. A line, not an
+// answer: a longer one is cut (the reply keeps it whole).
+const maxSay = 200
+
+func (u *UI) Say(text string) {
+	u.sync(func() {
+		fmt.Fprintf(u.w, " %shermes ›%s %s\n", u.cHermes, u.cR, clipWidth(strings.Join(strings.Fields(text), " "), maxSay))
+	})
+}
+
 // Note is one dim line inside a turn (a capped round budget, a cancel, …).
 func (u *UI) Note(msg string) {
 	u.sync(func() { fmt.Fprintf(u.w, " %s%s%s\n", u.cDim, msg, u.cR) })

@@ -44,6 +44,8 @@ type App struct {
 func New(cfg *config.Config, builtin string) (*App, error) {
 	repoRoot := PhysicalCwd()
 	u := ui.New(os.Stderr)
+	lines = u.Print
+	config.Warnf = Warnf // its later warnings land above the dock too
 	known, knownPath := probeKnown(cfg, repoRoot)
 
 	var vlogf func(string, ...any)

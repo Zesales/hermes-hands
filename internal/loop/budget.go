@@ -148,18 +148,24 @@ func (l *Loop) capped(round int) (Outcome, bool) {
 	return Outcome{}, false
 }
 
-// oversize says why an envelope of n calls may not run (why, for Hermes; note,
-// for the operator) — both empty when it may. It runs whole or not at all.
-func (l *Loop) oversize(n int) (why, note string) {
-	if l.MaxCallsPerRound > 0 && n > l.MaxCallsPerRound {
-		return fmt.Sprintf(`{"error":"call budget: this envelope has %d calls; the operator allows at most %d per envelope. NOTHING was run. Split it: resend at most %d calls (the first steps), the rest after their results."}`, n, l.MaxCallsPerRound, l.MaxCallsPerRound),
-			fmt.Sprintf("budget: envelope of %d calls not run — at most %d per envelope; Hermes was asked to split it", n, l.MaxCallsPerRound)
+// runnable is how many of an envelope's n calls the budget lets run now —
+// the first ones; why says what holds the rest back (for Hermes), note is
+// what the operator sees ("" = all run). The rest comes back not run, to be
+// sent again: no round is lost to an envelope that ran not at all.
+func (l *Loop) runnable(n int) (keep int, why, note string) {
+	keep = n
+	if l.MaxCallsPerRound > 0 && keep > l.MaxCallsPerRound {
+		keep = l.MaxCallsPerRound
+		why = fmt.Sprintf("over the budget: the operator allows %d calls per envelope", l.MaxCallsPerRound)
 	}
-	if left := l.MaxCalls - l.calls; l.MaxCalls > 0 && n > left {
-		return fmt.Sprintf(`{"error":"call budget: this envelope has %d calls, but the operator limited this turn to %d hands calls and only %d remain. NOTHING was run. Resend at most %d calls — the ones that matter most — or a final that says what is done, what is open and what a continuation must do."}`, n, l.MaxCalls, left, left),
-			fmt.Sprintf("budget: envelope of %d calls not run — only %d of %d calls left; Hermes was asked to resend at most %d", n, left, l.MaxCalls, left)
+	if left := l.MaxCalls - l.calls; l.MaxCalls > 0 && keep > left {
+		keep = left
+		why = fmt.Sprintf("over the budget: %d of the turn's %d hands calls were left", left, l.MaxCalls)
 	}
-	return "", ""
+	if keep < n {
+		note = fmt.Sprintf("budget: envelope of %d calls — the first %d run, %d sent back to Hermes (%s)", n, keep, n-keep, why)
+	}
+	return keep, why, note
 }
 
 // announce tells the operator — once per tier and turn — which countdown

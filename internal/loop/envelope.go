@@ -17,12 +17,16 @@ type callSpec struct {
 
 func (c callSpec) id() string { return firstNonEmpty(c.ID, c.CallID) }
 
-// envelope is a reply read as {"calls":[…],"final":…}; parsed is false when
-// it holds no valid JSON object.
+// envelope is a reply read as {"say":…,"calls":[…],"final":…}; parsed is
+// false when it holds no valid JSON object. say is Hermes' one sentence to
+// the operator beside its calls; stopOnError ("stop_on_error": true) stops
+// the calls after the first that fails.
 type envelope struct {
-	calls  []callSpec
-	final  string
-	parsed bool
+	say         string
+	calls       []callSpec
+	final       string
+	stopOnError bool
+	parsed      bool
 }
 
 // parseEnvelope reads reply as an envelope (extractObj finds the object).
@@ -42,6 +46,15 @@ func parseEnvelope(reply string) envelope {
 		if json.Unmarshal(raw, &s) == nil {
 			env.final = s
 		}
+	}
+	if raw, ok := top["say"]; ok {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			env.say = strings.TrimSpace(s)
+		}
+	}
+	if raw, ok := top["stop_on_error"]; ok {
+		_ = json.Unmarshal(raw, &env.stopOnError)
 	}
 	return env
 }

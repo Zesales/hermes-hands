@@ -59,8 +59,12 @@ isn't merged. The alternatives are worse: an inbound MCP listener on your laptop
 or the desktop app (which doesn't split execution at all).
 
 `hermes-hands` is the **outbound bridge** until split-runtime lands. It uses only
-the merged Runs API. Hermes replies with a small JSON envelope of tool calls;
-the CLI runs them and feeds structured results back. The envelope shape is the
+the merged Runs API. Hermes replies with a small JSON envelope of tool calls —
+`{"say":"…","calls":[…],"final":null}`, `say` a progress line — what it does
+now, a few words, never the answer — shown as `hermes › …` over the calls; the
+CLI runs them one
+after another, in order, in one persistent shell, and feeds structured
+results back. The envelope shape is the
 same one split-runtime expects, so when it merges the CLI switches to native tool
 calls and this convention becomes the fallback — **the local tool dispatcher does
 not change.**
@@ -184,14 +188,38 @@ and the REPL starts even when unconfigured. When the gateway supports SSE the
 answer text previews live as it generates (`HERMES_HANDS_STREAM` =
 `auto`|`on`|`off`); the final answer renders through `glow`/`bat` if installed.
 
-**Type while Hermes works**, as in Claude Code: what you type stands on the
-working line (`you› …`), Enter queues it — `queued for the next round: …` —
-and it goes out with the turn's next round, after the results, as `you
-(added)`. What the turn did not take — it ended first — becomes the next
-turn; after Ctrl-C or a timeout it waits in the prompt instead, with the line
-you were still typing, to send or change. A `/command` typed meanwhile runs
-when the turn is done. Backspace, Ctrl-W, Ctrl-U edit; an approval prompt
-takes the keys while it is up; Ctrl-C still cancels the turn.
+**The box**, as in Claude Code: from the start, your input is a box under
+the conversation — a rule, the input line (`you› …`), a rule and a footer
+with the approval mode and the session. Everything hermes-hands prints lands
+above it. Its keys are a shell's: ←/→, Alt-←/→ a word, Home/End, Backspace,
+Delete, Ctrl-W, Ctrl-U, Ctrl-K, ↑/↓ the lines you sent before, Tab completes
+a `/command`, Ctrl-L clears the screen. Enter sends; `\` before Enter,
+Ctrl-J or Alt-Enter is a new line, and a paste keeps its newlines. Ctrl-C
+cancels the running turn (between turns it clears the line), Ctrl-D on an
+empty line quits.
+
+**Type while Hermes works.** While a turn runs, the working line stands
+over the box. Enter queues what you typed for the turn's next round: it is
+listed in the box as `1`, `2`, … until it goes out, after the results — then
+it moves up into the conversation as `you (added · 1)`. It is an addition to
+your message, not a new one: the job of the turn now includes it, every later
+round restates it with your message, and the answer at the end covers it too —
+a question in it included. A correction changes the job; "stop" ends the turn
+there. `/approve`, `/yolo`,
+`/help`, `/config` and `/exit` act at once; a `/command` that changes the
+session (`/new`, `/compact`, …) runs when the turn is done. What the turn did
+not take — it ended first — becomes the next turn; after Ctrl-C or a
+timeout it waits in the box, to send or change.
+
+**Approvals are answered in the box**: the question takes the input line
+(`⚠ [y]es  [n]o  [a]ll  [q]uit turn >`), the working line says it waits for
+you. It never takes a line you are typing: it waits until you sent or
+cleared it and the keys rest — and a key that is none of its letters sends
+it back to wait, what you typed stays yours. Ctrl-C at the question quits
+the turn.
+
+Without a terminal on stdin (a pipe, a script) the REPL reads plain lines,
+one at a time, each turn to its end before the next.
 
 **Attach a file with `@path`**, as in Claude Code: `@shot.png`,
 `@"path with spaces"`, `@~/notes.txt` in a message — or an image dropped into
@@ -504,8 +532,10 @@ One request object per line on **stdin**; one response object per line on
 
 // responses
 {"type":"ready","session":"hh_…","cwd":"/repo","version":"X.Y.Z","approvals":"off","hermes_agent":"0.22.2"}
+{"type":"say","id":1,"text":"Running the tests to see what fails."}       // Hermes' sentence beside the round's calls
 {"type":"call","id":1,"ref":14,"tool":"local_shell","preview":"npm test"}
 {"type":"tool","id":1,"ref":14,"tool":"local_shell","preview":"npm test","exit":0,"lines":12}
+{"type":"not_run","id":1,"call_id":"c6","tool":"local_shell","why":"over the budget: …"}  // a call of the envelope the hands did not run
 {"type":"progress","id":1,"round":3,"max_rounds":25,"calls":12,"max_calls":100}  // the turn's budget (max 0 = no limit); + "context","window" once known
 {"type":"note","id":1,"text":"budget: 10 of 25 rounds · 29 of 100 calls left — …"}
 {"type":"queued","id":9,"text":"also the lint job"}                         // append taken; sent with the next round as:
@@ -554,8 +584,11 @@ requests to Hermes, `HERMES_HANDS_MAX_CALLS` hands calls, at most
 `HERMES_HANDS_MAX_CALLS_PER_ROUND` calls per envelope (`0` = no limit).
 Hermes is told the budget in the task frame and gets a countdown in its
 results once the end gets close (rounds: the last 40 %, then "finish" over the
-last 20 %; calls: from 75 % and 90 % used). An envelope over the budget is not
-run at all — no half-run batch — and Hermes is asked to resend a smaller one.
+last 20 %; calls: from 75 % and 90 % used). Of an envelope over the budget the
+first calls run and the rest come back to Hermes `not_run`, to send again —
+no round is lost; the terminal says so in a dim note. An envelope with
+`"stop_on_error": true` — dependent steps: an edit, the build, the tests —
+stops after the first call that fails: the rest come back `not_run` too.
 The terminal shows `round 3/25 · calls 12/100` on the working line, a dim note
 when a countdown starts, and `· 12 rounds · 47 calls` in the turn footer. A
 turn stopped at its budget is unfinished work: the next turn is told where it
@@ -590,7 +623,7 @@ which store is actually in effect. See [`docs/secrets.md`](docs/secrets.md).
 | `HERMES_HANDS_DENY` | — | extra denied `local_shell` commands, `\|`-separated shell globs |
 | `HERMES_HANDS_MAX_ROUNDS` | `25` | requests to Hermes per turn (`0` = no limit) |
 | `HERMES_HANDS_MAX_CALLS` | `100` | hands calls per turn (`0` = no limit) |
-| `HERMES_HANDS_MAX_CALLS_PER_ROUND` | `20` | calls per envelope; a bigger envelope is not run (`0` = no limit) |
+| `HERMES_HANDS_MAX_CALLS_PER_ROUND` | `20` | calls per envelope; of a bigger one the first run, the rest go back to Hermes `not_run` (`0` = no limit) |
 | `HERMES_HANDS_RUN_TIMEOUT` | `120` | per-command seconds |
 | `HERMES_HANDS_MAX_OUTPUT` | `20000` | bytes kept per tool result (`local_shell` keeps 2×) |
 | `HERMES_HANDS_MAX_ROUND_OUTPUT` | `60000` | bytes of one round's results together; a bigger round is cut, the full output stays local (`0` = no limit) |
@@ -716,8 +749,8 @@ prompts for a separate one. The prompt is read straight from
 incrementally on every `make dev`). `make clean` wipes `./.dev/`, including the
 toolchain cache.
 
-Go 1.26.10, `CGO_ENABLED=0`. Dependencies (`github.com/peterh/liner` +
-`github.com/mattn/go-runewidth` + `golang.org/x/sys`) are **vendored** — builds
+Go 1.26.10, `CGO_ENABLED=0`. The one dependency, `golang.org/x/sys`, is
+**vendored** — builds
 never fetch modules (the one download is the pinned Go image). Layout: `main.go`
 (the build-time version, then `internal/cli`) +
 `internal/{api,app,cli,compat,config,debuglog,dispatch,guard,knowsystem,loop,prompt,redact,repl,rpc,session,setup,shell,ttyio,turn,ui}` +

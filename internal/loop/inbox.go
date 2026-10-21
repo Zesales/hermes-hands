@@ -36,11 +36,14 @@ func (b *Inbox) Take() []string {
 
 // takeAdded moves what the operator wrote while the turn ran into this
 // round's request — after the results, marked as theirs, @path attachments
-// and all — so Hermes reads it with what it asked for. The round's log
-// shows it as "you (added)"; a retry or a stopped run's re-ask sends it again.
+// and all — so Hermes reads it with what it asked for. It is an addition to
+// the turn's message: every later round restates it with the message. The
+// round's log shows it as "you (added)"; a retry or a stopped run's re-ask
+// sends it again.
 func (l *Loop) takeAdded(t *turnState) {
 	for _, text := range l.Inbox.Take() {
 		withFiles, images := l.attach(text)
+		t.added = append(t.added, text)
 		t.send += "\n\n" + session.AddedMark + withFiles
 		t.images = append(t.images, images...)
 		t.turnlog += "[operator, added] " + text + "\n"

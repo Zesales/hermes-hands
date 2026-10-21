@@ -21,7 +21,7 @@ var configDefaults = []struct{ key, val, note string }{
 	{"HERMES_HANDS_SANDBOX", "steer", "Hermes' own server terminal/file tools: steer (back to the hands) | smart | show"},
 	{"HERMES_HANDS_MAX_ROUNDS", strconv.Itoa(config.DefaultMaxRounds), "requests to Hermes per turn (0 = no limit)"},
 	{"HERMES_HANDS_MAX_CALLS", strconv.Itoa(config.DefaultMaxCalls), "hands calls per turn (0 = no limit)"},
-	{"HERMES_HANDS_MAX_CALLS_PER_ROUND", strconv.Itoa(config.DefaultMaxCallsPerRound), "calls per envelope — a bigger one is not run (0 = no limit)"},
+	{"HERMES_HANDS_MAX_CALLS_PER_ROUND", strconv.Itoa(config.DefaultMaxCallsPerRound), "calls per envelope — of a bigger one the first run, the rest go back to Hermes (0 = no limit)"},
 	{"HERMES_HANDS_RESPONSE_TIMEOUT", "600", "seconds hermes-agent may go silent in a turn before it is cancelled (0 = no limit)"},
 	{"HERMES_HANDS_WATCHDOG_INTERVAL", "200", "seconds between server-side 'still working?' checks that push that limit back"},
 	{"HERMES_HANDS_RUN_TIMEOUT", "120", "seconds per local command"},

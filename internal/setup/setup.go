@@ -7,9 +7,8 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
-
-	"github.com/peterh/liner"
 
 	"hermes-hands/internal/config"
 	"hermes-hands/internal/ttyio"
@@ -110,13 +109,18 @@ func promptLine(in *bufio.Reader, msg string) string {
 // setup tests can force the plain-read path.
 var stdinTTY = func() bool { return ttyio.IsTerminal(os.Stdin) }
 
+// promptSecret reads the key unseen: the echo off for the line, Ctrl-C
+// ignored meanwhile — it would leave the terminal without its echo.
 func promptSecret(in *bufio.Reader, msg string) string {
 	if stdinTTY() {
-		ln := liner.NewLiner()
-		defer ln.Close()
-		if s, err := ln.PasswordPrompt(msg); err == nil {
+		if restore, err := ttyio.NoEcho(int(os.Stdin.Fd())); err == nil {
+			sig := make(chan os.Signal, 1)
+			signal.Notify(sig, os.Interrupt)
+			line := promptLine(in, msg)
+			signal.Stop(sig)
+			restore()
 			fmt.Fprintln(os.Stderr)
-			return strings.Trim(s, " \t\r\n")
+			return line
 		}
 	}
 	return promptLine(in, msg)

@@ -66,7 +66,7 @@ func (f *front) quiet() {
 // auto / never) it is a deny — a server command nobody looked at never runs.
 func askServerApproval(ap prompt.Approver, tool, what string) string {
 	ta, ok := ap.(*prompt.TTYApprover)
-	if !ok || ta.Mode != "ask" || ta.AskLine == nil {
+	if !ok || ta.ModeNow() != "ask" || ta.AskLine == nil {
 		return "deny"
 	}
 	if ta.Pause != nil {

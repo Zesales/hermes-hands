@@ -4,7 +4,76 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.15.0 — (unreleased, `bump:minor`) an assistant that answers; `@path`; type while it works; compaction later and deeper
+## 0.16.0 — (unreleased, `bump:minor`) the box: one input under the conversation, as in Claude Code
+
+- **The box, from the start.** The REPL's input is a box under the
+  conversation — a rule, the input line, a rule, a footer with the approval
+  mode and the session (`⏵ approvals ask  ·  session …`) — a turn running or
+  not. Everything hermes-hands prints lands above it. It is a line editor
+  of its own (`internal/repl/box.go`, `keys.go`, `edit.go`): ←/→, Alt-←/→,
+  Home/End, Backspace, Delete, Ctrl-W, Ctrl-U, Ctrl-K, ↑/↓ through the lines
+  sent, Tab completes a `/command`, Ctrl-L clears the screen; Enter sends,
+  `\` before Enter, Ctrl-J or Alt-Enter is a new line, a paste keeps its
+  newlines (bracketed paste). The input line scrolls with the cursor; a
+  newline in it shows as `↵`. Every box line is cut to the terminal's real
+  width (wide characters counted double) and the box is drawn again when the
+  terminal changes its size.
+- **While a turn runs** the working line stands over the box, and what is
+  queued for the turn's next round is listed, numbered `1`, `2`, …, until it
+  goes out — then it moves up into the conversation as `you (added · 1)`.
+  `/approve`, `/yolo`, `/help`, `/config` and `/exit` act at once — the turn
+  runs in the background now; a `/command` that changes the session waits
+  for the turn's end. A streamed answer goes above the box a whole line at a
+  time; the line not complete yet stands in the box.
+- **Approvals are answered in the box**, the hands' and Hermes' own server
+  ones: the question takes the input line, the working line says
+  `waiting for your answer` (the wait stays out of the turn's time). It never
+  takes a line being typed: it waits until the line is sent or cleared and
+  the keys rest (0.7 s) — and a key that is none of its letters sends it
+  back to wait, what was typed staying the operator's. Ctrl-C at the
+  question quits the turn; Ctrl-C while one still waits cancels the turn
+  with it.
+- **Ctrl-C is a key now** (the terminal's signals are off while the box
+  reads): it cancels the running turn, between turns it clears the line;
+  Ctrl-D on an empty line between turns quits.
+- **`say`: Hermes shows where the work is going, while it works.** The
+  envelope has an optional `say` — a progress line beside a round's calls,
+  what Hermes does now in a few words — shown as `hermes › …` over the calls
+  (cut at 200 characters; `say` over `--rpc`). It is never the answer: no
+  results, no explanation, no reply to a question — that is the `final`.
+  Seen live: work went its own way for minutes with nothing but call lines
+  on screen.
+- **A message added during a turn is an addition to the turn's message,
+  and no longer ends it.** Seen live: the operator asked "what was your
+  last tool_call?" in the middle of a "continue your work" — Hermes took it
+  as a new request, answered it in a `final`, which ended the turn, and
+  asked for another "continue". Now the added message says it is part of
+  this turn's message: the job includes it, the `final` at the end answers
+  all of it, a correction changes the job, "stop" ends the turn. Every later
+  round restates it with the message (`… was: "…" + added: "…"`). The
+  instructions say the same, with an example.
+- **The budget cuts an envelope instead of refusing it.** Of an envelope
+  over `HERMES_HANDS_MAX_CALLS_PER_ROUND` (or the turn's calls left) the
+  first calls run and the rest come back `not_run`, to send again — before,
+  nothing ran and the round was lost.
+- **`"stop_on_error": true`** in an envelope: after the first call that
+  fails (a non-zero exit, a declined approval) the rest of it comes back
+  `not_run` instead of running on a broken state — for dependent steps: an
+  edit, the build, the tests. The instructions use it for such chains.
+- A call not run is in the results as `{"id":…,"exit_code":-1,"output":"",
+  "not_run":"<why> — send it again if it is still needed"}` — and so in a
+  rebuilt transcript (event `not_run`). The calls still run one after
+  another, in order, in the one shell.
+- **`github.com/peterh/liner` is gone**, and `github.com/mattn/go-runewidth`
+  with it — `golang.org/x/sys` is the one dependency. The setup wizard reads
+  the key with the echo off (`ttyio.NoEcho`), Ctrl-C ignored meanwhile.
+- hermes-hands' own warnings (`config`'s too) go through the UI, above the
+  box — written straight to stderr they landed in it.
+- With no terminal on stdin the REPL reads plain lines, one at a time, as
+  before — the golden tests drive it so, byte for byte as before but for
+  `/help`, which names the keys now.
+
+## 0.15.0 — 2026-10-21 — an assistant that answers; `@path`; type while it works; compaction later and deeper
 
 ### Security
 

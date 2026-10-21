@@ -13,11 +13,12 @@ import (
 
 type resultElem struct {
 	ID       string          `json:"id"`
-	Ref      int             `json:"ref"` // the session-wide #ref the operator sees
+	Ref      int             `json:"ref,omitempty"` // the session-wide #ref the operator sees; none for a call not run
 	Tool     string          `json:"tool"`
 	Args     json.RawMessage `json:"args"`
 	ExitCode int             `json:"exit_code"`
 	Output   string          `json:"output"`
+	NotRun   string          `json:"not_run,omitempty"` // why the hands did not run it
 	Context  *string         `json:"context,omitempty"`
 }
 
@@ -25,23 +26,49 @@ type resultsPayload struct {
 	Results []resultElem `json:"results"`
 }
 
-// runCalls runs one envelope's calls in order and returns their results. A
-// non-nil Outcome means the operator stopped the turn at an approval: nothing
-// after that call ran, and the turn ends with that outcome.
-func (l *Loop) runCalls(calls []callSpec, round int, turnlog *string) ([]resultElem, *Outcome) {
+// runCalls runs one envelope's calls in order — the first n of them: the
+// rest come back not run, with why (the round's budget). With stopOnError
+// the calls after the first that fails come back not run too. A non-nil
+// Outcome means the operator stopped the turn at an approval: nothing after
+// that call ran, and the turn ends with that outcome.
+func (l *Loop) runCalls(calls []callSpec, n int, why string, stopOnError bool, round int, turnlog *string) ([]resultElem, *Outcome) {
 	ids := newIDs(len(calls))
 	elems := make([]resultElem, 0, len(calls))
 	l.Dispatch.NextRound() // rules handed out before now were seen when this batch was written
 	for i, c := range calls {
-		e, stopped := l.runCall(c, ids(i, c.id()), round)
+		id := ids(i, c.id())
+		if i >= n {
+			e := l.notRun(c, id, why, round)
+			elems = append(elems, e)
+			*turnlog += fmt.Sprintf("[round %d]   %s [%s] -> not run: %s\n", round, e.Tool, e.ID, why)
+			continue
+		}
+		e, stopped := l.runCall(c, id, round)
 		if stopped != nil {
 			return nil, stopped
 		}
 		elems = append(elems, e)
 		*turnlog += fmt.Sprintf("[round %d]   %s [%s](%s) -> exit %d: %s\n",
 			round, e.Tool, e.ID, trunc(string(e.Args), 120), e.ExitCode, trunc(oneLine(e.Output), 160))
+		if stopOnError && e.ExitCode != 0 && i+1 < len(calls) {
+			n, why = i+1, fmt.Sprintf("stop_on_error: %s (#%d) failed with exit %d", e.ID, e.Ref, e.ExitCode)
+			l.noteOperator(fmt.Sprintf("stop_on_error: #%d failed — the %d calls after it not run", e.Ref, len(calls)-i-1))
+		}
 	}
 	return elems, nil
+}
+
+// notRun is a call the hands did not run, for the results and the log: why
+// says what held it back; Hermes sends it again if it still needs it.
+func (l *Loop) notRun(c callSpec, id, why string, round int) resultElem {
+	tool := firstNonEmpty(c.Tool, c.Name)
+	if canon := dispatch.Canonical(tool); canon != "" {
+		tool = canon
+	}
+	args := callArgs(c)
+	why += " — send it again if it is still needed"
+	l.emit(session.Event{Kind: session.KindNotRun, ID: id, Tool: tool, Args: args, Text: why, Round: round})
+	return resultElem{ID: id, Tool: tool, Args: args, ExitCode: -1, NotRun: why}
 }
 
 // runCall runs one call of request round: shown before it runs (KindCall)

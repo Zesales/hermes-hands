@@ -6,6 +6,8 @@ hermes-agent · session (pending — confirmed on the first turn)
 hermes-hands - session <SESSION> >   Type a message to Hermes, your assistant: it answers, and works this directory
   through you — local_shell, local_read, local_write, local_edit in <TMP>,
   each with your approval. @path attaches a file — an image, or a text file's content.
+  Enter sends — while Hermes works it queues for its next round. ↑↓ history, Tab completes a
+  /command, \ before Enter or Ctrl-J a new line, Ctrl-L clears the screen.
     /new          start a fresh session in this directory
     /session      show this session's detail (turns, tokens, splits)
     /session <id> switch to another session  (ids from /sessions)
@@ -23,7 +25,7 @@ hermes-hands - session <SESSION> >   Type a message to Hermes, your assistant: i
     /config       config file path + effective settings (read-only; edit by hand)
     /check        re-test the gateway connection
     /help         show this
-    /exit         quit  (Ctrl-D too; Ctrl-C cancels the running turn)
+    /exit         quit  (Ctrl-D on an empty line too; Ctrl-C cancels the running turn)
 
 hermes-hands - session <SESSION> >   approvals: plan — Hermes looks and answers with a plan: reads run, shell asks, nothing is written (this session only)
 
@@ -53,6 +55,7 @@ hermes-hands: WARNING: HERMES_API_URL is plain http on loopback (tests only)
   ⚠  hermes wants to run terminal on its SERVER sandbox (not your machine):
       rm -rf /tmp/scratch
   [o]nce  [s]ession  [n]o >  ✓ hermes-sandbox approval granted  rm -rf /tmp/scratch
+ hermes › Reading the README, then a shell check.
  #1 local_read  README.md
  #1 ✓ exit 0 · 1 line
  #2 local_shell  printf 'one\ntwo\n'
@@ -87,6 +90,7 @@ you
       rm -rf /tmp/scratch
   [o]nce  [s]ession  [n]o > o
  ✓ hermes-sandbox approval granted  rm -rf /tmp/scratch
+ hermes › Reading the README, then a shell check.
  #1 local_read  README.md
  #1 ✓ exit 0 · 1 line
  #2 local_shell  printf 'one\ntwo\n'

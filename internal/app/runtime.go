@@ -32,7 +32,7 @@ func (a *App) rememberStartup() {
 // process. Back at the start-up value it is no runtime switch any more.
 func (a *App) SetApprovals(mode string) {
 	if ta, ok := a.approver(); ok {
-		ta.Mode = mode
+		ta.SetMode(mode)
 	}
 	a.Cfg.Approve = mode
 	if a.start != nil && mode == a.start.approve {
@@ -45,7 +45,7 @@ func (a *App) SetApprovals(mode string) {
 // Approvals is the approvals mode in effect: ask | plan | auto | never.
 func (a *App) Approvals() string {
 	if ta, ok := a.approver(); ok {
-		return ta.Mode
+		return ta.ModeNow()
 	}
 	return a.Cfg.Approve
 }

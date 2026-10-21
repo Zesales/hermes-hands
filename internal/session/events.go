@@ -21,7 +21,9 @@ const EventsVersion = 1
 const (
 	KindUser       = "user"        // the operator's message (Text)
 	KindAdded      = "added"       // what the operator wrote while the turn ran, sent with the next round (Text)
+	KindSay        = "say"         // Hermes' one sentence to the operator beside a round's calls (Text, Round)
 	KindCall       = "call"        // a hands call, written BEFORE it runs (Ref, ID, Tool, Args)
+	KindNotRun     = "not_run"     // a call of an envelope the hands did not run (ID, Tool, Args, Text = why, Round)
 	KindResult     = "result"      // its outcome (Ref, Tool, Exit, Ms, Lines, Bytes; output in out/<Ref>.txt)
 	KindHermesTool = "hermes_tool" // Hermes used one of its OWN server tools (Tool, Text = preview, Action)
 	KindApproval   = "approval"    // an approval prompt the operator answered (Text = summary, Detail, Action = answer, Ms = wait)

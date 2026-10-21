@@ -134,7 +134,7 @@ func (s *server) output(input string, seenResults, gotFixup bool) string {
 		return `{"calls": [], "final": "recovered and answered."}`
 	case "golden":
 		if !seenResults {
-			return `{"calls": [{"id": "c1", "tool": "local_read", "args": {"path": "README.md"}}, {"id": "c2", "tool": "local_shell", "args": {"cmd": "printf 'one\\ntwo\\n'"}}], "final": null}`
+			return `{"say": "Reading the README, then a shell check.", "calls": [{"id": "c1", "tool": "local_read", "args": {"path": "README.md"}}, {"id": "c2", "tool": "local_shell", "args": {"cmd": "printf 'one\\ntwo\\n'"}}], "final": null}`
 		}
 		return `{"calls": [], "final": "Read the README (\"demo readme\") and ran the shell.\nTwo lines — ä ✓."}`
 	case "delegate":
