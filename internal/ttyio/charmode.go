@@ -27,3 +27,12 @@ func Readable(fd, ms int) bool {
 	n, err := unix.Poll(fds, ms)
 	return err == nil && n > 0 && fds[0].Revents&unix.POLLIN != 0
 }
+
+// Width is the width in columns of the terminal on fd, 0 when unknown.
+func Width(fd int) int {
+	ws, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
+	if err != nil {
+		return 0
+	}
+	return int(ws.Col)
+}
