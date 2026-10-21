@@ -107,7 +107,7 @@ func (l *Loop) recover(t *turnState, try int) bool {
 	if limit <= 0 {
 		limit = refitFrom
 	}
-	t.send = l.resultsMsg(l.fitRound(t.pending, max(limit/4, refitMin)), t.userMsg, t.pendingRound)
+	t.send = l.resultsMsg(l.fitRound(t.pending, max(limit/4, refitMin)), t.asked(), t.pendingRound)
 	t.pending = nil
 	l.noteOperator("the request was refused for its size — this round's results fitted tighter, sending it again")
 	return true
@@ -144,3 +144,31 @@ func elidedNote(refs string) string {
 		" read them again in full. Work with what you already know, read only what is still missing (narrow it, or" +
 		" local_output with an offset), or answer with what you have so far.]"
 }
+
+// resultsMsg is the message that hands a round's results back.
+func (l *Loop) resultsMsg(elems []resultElem, asked string, round int) string {
+	payload, _ := marshalNoHTML(resultsPayload{Results: elems})
+	// The operator's message is restated on every round, not just round 1.
+	// A gateway can accept our session_id (Threaded=true) without actually
+	// replaying the transcript to the model - in that case this is the ONLY
+	// place downstream of round 1 where the model still sees what was asked.
+	// Cheap even when the server does thread it correctly: one restated
+	// sentence, no meaningful token cost.
+	return "[hands results] The worker ran your job on the operator's machine" + l.locNote() +
+		" — real output, not your sandbox; empty output or a non-zero exit means: try another" +
+		" command." + asked + " Reply with the next job — its say, a few words: what you do now —" +
+		" or your final: your reply text, the envelope; no tool of yours reaches the worker.\n" + string(payload) + l.roundBudgetNote(round+1)
+}
+
+// questionNote restates the operator's message of the turn, verbatim — and
+// what they added to it since, which is part of it.
+func questionNote(userMsg string, added ...string) string {
+	s := " The operator's message this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\""
+	for _, a := range added {
+		s += " + added: \"" + trunc(oneLine(a), 300) + "\""
+	}
+	return s + "."
+}
+
+// asked is questionNote for this turn: the message and what was added.
+func (t *turnState) asked() string { return questionNote(t.userMsg, t.added...) }

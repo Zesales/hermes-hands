@@ -37,8 +37,9 @@ type TranscriptOpts struct {
 
 // AddedMark opens what the operator wrote while the turn ran, in the request
 // that carries it and in the transcript alike.
-const AddedMark = "[the operator adds, while you work — the job of this turn goes on: a question you answer in say, " +
-	"beside your next calls; a correction you follow, and say so; final only when the job is done, or they ask you to stop]\n"
+const AddedMark = "[the operator adds to their message, while you work — it is part of this turn's message, " +
+	"the job now includes it: your final answers all of it, this too; a correction changes the job; " +
+	"\"stop\" or \"wait\" — your final now, saying where the work stands]\n"
 
 // LastCompact is the compaction in effect: the last KindCompact event of evs.
 // ok is false while hermes-agent holds the transcript (none yet).

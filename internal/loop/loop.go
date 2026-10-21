@@ -153,7 +153,7 @@ func (l *Loop) frame(userMsg string) string {
 		"`local_read` in its calls — the hands run it.\n" +
 		"Your reply: think it through first, not in the reply — then\n" +
 		"ONE JSON object and nothing else — {\"calls\":[],\"final\":\"...\"} (the answer)\n" +
-		"or {\"say\":\"<what you do now and why, one sentence>\",\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
+		"or {\"say\":\"<what you do now, a few words>\",\"calls\":[{\"id\":\"c1\",\"tool\":\"local_shell|local_read|local_write|local_edit|local_output\",\"args\":{...}}],\"final\":null}\n" +
 		"(give each call a short id; the hands echo it in results so you can map\n" +
 		"output to call). Not a description of yourself or your tools unless asked.\n" +
 		"Your reply ends this run; the hands run its calls and their results are your\n" +
@@ -231,8 +231,9 @@ func (l *Loop) Run(ctx context.Context, userMsg string, rec *session.Record, per
 // turnState is what one turn carries from round to round.
 type turnState struct {
 	userMsg string
-	send    string // the next message to Hermes
-	turnlog string // the turn so far, for a gateway that does not thread it (recap)
+	added   []string // what the operator added to the message while the turn ran
+	send    string   // the next message to Hermes
+	turnlog string   // the turn so far, for a gateway that does not thread it (recap)
 	recap   bool
 
 	fixups int // recovery nudges spent: a botched / empty envelope
@@ -298,7 +299,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 			// was shown) just apologizes for the formatting and asks what
 			// to do. Restate the question so fixing the envelope doesn't
 			// also mean abandoning the task.
-			t.send, t.pending = fixupMsg+"\n"+questionNote(t.userMsg), nil
+			t.send, t.pending = fixupMsg+"\n"+t.asked(), nil
 			t.turnlog += fmt.Sprintf("[round %d] (invalid envelope, requested resend)\n", round)
 			return Outcome{}, false
 		}
@@ -310,7 +311,7 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 		}
 		if t.fixups < maxFixups {
 			t.fixups++
-			t.send, t.pending = emptyMsg+"\n"+questionNote(t.userMsg), nil // same reasoning as the fixupMsg case above
+			t.send, t.pending = emptyMsg+"\n"+t.asked(), nil // same reasoning as the fixupMsg case above
 			return Outcome{}, false
 		}
 		return Outcome{Answer: "BLOCKED: Hermes returned an empty envelope repeatedly.", OK: false}, true
@@ -335,24 +336,9 @@ func (l *Loop) handle(reply string, round int, t *turnState) (Outcome, bool) {
 	}
 	elems = l.dedupe(elems)
 	t.pending, t.pendingRound = elems, round
-	t.send = l.resultsMsg(l.fitRound(elems, l.MaxRoundOutput), t.userMsg, round)
+	t.send = l.resultsMsg(l.fitRound(elems, l.MaxRoundOutput), t.asked(), round)
 	l.announce(round + 1)
 	return Outcome{}, false
-}
-
-// resultsMsg is the message that hands a round's results back.
-func (l *Loop) resultsMsg(elems []resultElem, userMsg string, round int) string {
-	payload, _ := marshalNoHTML(resultsPayload{Results: elems})
-	// The operator's message is restated on every round, not just round 1.
-	// A gateway can accept our session_id (Threaded=true) without actually
-	// replaying the transcript to the model - in that case this is the ONLY
-	// place downstream of round 1 where the model still sees what was asked.
-	// Cheap even when the server does thread it correctly: one restated
-	// sentence, no meaningful token cost.
-	return "[hands results] The worker ran your job on the operator's machine" + l.locNote() +
-		" — real output, not your sandbox; empty output or a non-zero exit means: try another" +
-		" command." + questionNote(userMsg) + " Reply with the next job — its say, one sentence: what you do" +
-		" now — or your final: your reply text, the envelope; no tool of yours reaches the worker.\n" + string(payload) + l.roundBudgetNote(round+1)
 }
 
 func (l *Loop) emit(ev session.Event) {
@@ -419,10 +405,6 @@ func oneLine(s string) string {
 // nudges, which otherwise carry no task context at all, so fixing the
 // envelope format also means the model has no idea what it was doing and
 // answers "what can I do for you?" instead of finishing the task.
-func questionNote(userMsg string) string {
-	return " The operator's message this turn, verbatim, was: \"" + trunc(oneLine(userMsg), 500) + "\"."
-}
-
 func compactJSON(raw json.RawMessage) json.RawMessage {
 	var buf bytes.Buffer
 	if json.Compact(&buf, raw) != nil {

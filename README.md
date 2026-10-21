@@ -60,8 +60,9 @@ or the desktop app (which doesn't split execution at all).
 
 `hermes-hands` is the **outbound bridge** until split-runtime lands. It uses only
 the merged Runs API. Hermes replies with a small JSON envelope of tool calls —
-`{"say":"…","calls":[…],"final":null}`, `say` one sentence to you on what it
-does now and why, shown as `hermes › …` over the calls; the CLI runs them one
+`{"say":"…","calls":[…],"final":null}`, `say` a progress line — what it does
+now, a few words, never the answer — shown as `hermes › …` over the calls; the
+CLI runs them one
 after another, in order, in one persistent shell, and feeds structured
 results back. The envelope shape is the
 same one split-runtime expects, so when it merges the CLI switches to native tool
@@ -200,10 +201,11 @@ empty line quits.
 **Type while Hermes works.** While a turn runs, the working line stands
 over the box. Enter queues what you typed for the turn's next round: it is
 listed in the box as `1`, `2`, … until it goes out, after the results — then
-it moves up into the conversation as `you (added · 1)`. Hermes takes it as
-part of the turn: a question it answers in its `say` and works on, a
-correction it follows; it ends the turn only when the job is done, or you
-tell it to stop. `/approve`, `/yolo`,
+it moves up into the conversation as `you (added · 1)`. It is an addition to
+your message, not a new one: the job of the turn now includes it, every later
+round restates it with your message, and the answer at the end covers it too —
+a question in it included. A correction changes the job; "stop" ends the turn
+there. `/approve`, `/yolo`,
 `/help`, `/config` and `/exit` act at once; a `/command` that changes the
 session (`/new`, `/compact`, …) runs when the turn is done. What the turn did
 not take — it ended first — becomes the next turn; after Ctrl-C or a

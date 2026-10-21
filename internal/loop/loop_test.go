@@ -855,11 +855,13 @@ func TestElidedNote(t *testing.T) {
 }
 
 // what the operator writes while a turn runs goes out with the next round,
-// after the results, marked as theirs — and is logged as "added"
+// after the results, marked as theirs — and is logged as "added"; it is
+// part of the turn's message from then on: every later round restates it
 func TestRunTakesWhatTheOperatorAdded(t *testing.T) {
 	inbox := &Inbox{}
 	sa := &scriptAsker{replies: []api.AskResult{
 		reply(`{"calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
+		reply(`{"say":"Reading foo again.","calls":[{"tool":"read_file","args":{"path":"foo.txt"}}],"final":null}`, true),
 		reply(`{"calls":[],"final":"done"}`, true),
 	}}
 	var added []string
@@ -869,7 +871,13 @@ func TestRunTakesWhatTheOperatorAdded(t *testing.T) {
 			added = append(added, ev.Text)
 		}
 	}}
-	l.OnResult = func(string, string, int) { inbox.Push("also check the tests") } // typed while the hands ran
+	typed := false
+	l.OnResult = func(string, string, int) { // typed while the hands ran, once
+		if !typed {
+			typed = true
+			inbox.Push("also check the tests")
+		}
+	}
 	out := l.Run(context.Background(), "read foo", rec(), func(string, string, int) {})
 	if !out.OK || out.Answer != "done" {
 		t.Fatalf("out = %+v", out)
@@ -883,6 +891,9 @@ func TestRunTakesWhatTheOperatorAdded(t *testing.T) {
 	}
 	if len(added) != 1 || added[0] != "also check the tests" || len(inbox.Take()) != 0 {
 		t.Errorf("added events = %q", added)
+	}
+	if !strings.Contains(sa.msgs[2], `was: "read foo" + added: "also check the tests".`) {
+		t.Errorf("round 3 must restate the message with what was added: %q", trunc(sa.msgs[2], 600))
 	}
 }
 

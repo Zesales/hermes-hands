@@ -36,18 +36,22 @@ gateway runs.
 - **Ctrl-C is a key now** (the terminal's signals are off while the box
   reads): it cancels the running turn, between turns it clears the line;
   Ctrl-D on an empty line between turns quits.
-- **`say`: Hermes tells the operator what it does, while it works.** The
-  envelope has an optional `say` — one sentence beside a round's calls,
-  what Hermes does now and why — shown as `hermes › …` over the calls (and
-  as `say` over `--rpc`). Seen live: work went its own way for minutes with
-  nothing but call lines on screen.
-- **A message added during a turn no longer ends it.** Seen live: the
-  operator asked "what was your last tool_call?" in the middle of a
-  "continue your work" — Hermes could only answer in a `final`, which ended
-  the turn, and asked for another "continue". The added message now comes
-  with the rule — a question is answered in `say` beside the next calls, a
-  correction is followed, `final` only when the job is done or the operator
-  says stop — and the instructions say the same, with an example.
+- **`say`: Hermes shows where the work is going, while it works.** The
+  envelope has an optional `say` — a progress line beside a round's calls,
+  what Hermes does now in a few words — shown as `hermes › …` over the calls
+  (cut at 200 characters; `say` over `--rpc`). It is never the answer: no
+  results, no explanation, no reply to a question — that is the `final`.
+  Seen live: work went its own way for minutes with nothing but call lines
+  on screen.
+- **A message added during a turn is an addition to the turn's message,
+  and no longer ends it.** Seen live: the operator asked "what was your
+  last tool_call?" in the middle of a "continue your work" — Hermes took it
+  as a new request, answered it in a `final`, which ended the turn, and
+  asked for another "continue". Now the added message says it is part of
+  this turn's message: the job includes it, the `final` at the end answers
+  all of it, a correction changes the job, "stop" ends the turn. Every later
+  round restates it with the message (`… was: "…" + added: "…"`). The
+  instructions say the same, with an example.
 - **The budget cuts an envelope instead of refusing it.** Of an envelope
   over `HERMES_HANDS_MAX_CALLS_PER_ROUND` (or the turn's calls left) the
   first calls run and the rest come back `not_run`, to send again — before,

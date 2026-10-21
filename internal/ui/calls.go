@@ -133,11 +133,14 @@ func (u *UI) Approval(summary, detail, answer string) {
 	})
 }
 
-// Say is Hermes' one sentence beside a round's calls — what it does now and
-// why: the operator sees where the work is going while it runs.
+// Say is Hermes' progress line beside a round's calls — what it does now:
+// the operator sees where the work is going while it runs. A line, not an
+// answer: a longer one is cut (the reply keeps it whole).
+const maxSay = 200
+
 func (u *UI) Say(text string) {
 	u.sync(func() {
-		fmt.Fprintf(u.w, " %shermes ›%s %s\n", u.cHermes, u.cR, strings.Join(strings.Fields(text), " "))
+		fmt.Fprintf(u.w, " %shermes ›%s %s\n", u.cHermes, u.cR, clipWidth(strings.Join(strings.Fields(text), " "), maxSay))
 	})
 }
 
