@@ -184,14 +184,19 @@ and the REPL starts even when unconfigured. When the gateway supports SSE the
 answer text previews live as it generates (`HERMES_HANDS_STREAM` =
 `auto`|`on`|`off`); the final answer renders through `glow`/`bat` if installed.
 
-**Type while Hermes works**, as in Claude Code: what you type stands on the
-working line (`you› …`), Enter queues it — `queued for the next round: …` —
-and it goes out with the turn's next round, after the results, as `you
-(added)`. What the turn did not take — it ended first — becomes the next
-turn; after Ctrl-C or a timeout it waits in the prompt instead, with the line
-you were still typing, to send or change. A `/command` typed meanwhile runs
-when the turn is done. Backspace, Ctrl-W, Ctrl-U edit; an approval prompt
-takes the keys while it is up; Ctrl-C still cancels the turn.
+**Type while Hermes works**, as in Claude Code: while a turn runs, a box sits
+under the conversation — the working line, a rule, then what you queued,
+numbered, your input line (`you› type to add a message to the run`) and a
+footer with the turn's approval mode (`⏵ approvals auto`).
+Enter queues the line: it is listed in the box as `1`, `2`, … until it goes
+out with the turn's next round, after the results — then it moves up into
+the conversation as `you (added · 1)`. Everything the turn prints lands
+above the box. What the turn did not take — it ended first — becomes the
+next turn; after Ctrl-C or a timeout it waits in the prompt instead, with the
+line you were still typing, to send or change. A `/command` typed meanwhile
+runs when the turn is done. Backspace, Ctrl-W, Ctrl-U edit; an approval
+prompt takes the keys (and the box steps aside) while it is up; Ctrl-C still
+cancels the turn.
 
 **Attach a file with `@path`**, as in Claude Code: `@shot.png`,
 `@"path with spaces"`, `@~/notes.txt` in a message — or an image dropped into

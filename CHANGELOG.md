@@ -4,7 +4,23 @@ hermes-hands keeps its own version line. Each release names the hermes-agent
 range it is built and tested for; `hermes-hands check` prints the version your
 gateway runs.
 
-## 0.15.0 — (unreleased, `bump:minor`) an assistant that answers; `@path`; type while it works; compaction later and deeper
+## 0.15.1 — (unreleased, `bump:patch`) type while it works: a box under the conversation
+
+- **A box under the conversation while a turn runs**, as in Claude Code:
+  the working line, a rule against the conversation above, the messages
+  queued so far — numbered `1`, `2`, … — the input line, `you› type to add
+  a message to the run`, a closing rule, and a footer with the turn's
+  approval mode (`⏵ approvals auto`). A queued message stays in the box
+  until the turn's next round takes it, then moves up into the
+  conversation as `you (added · 1)`. Before, what was typed stood at the
+  end of the working line and Enter printed a `queued for the next round`
+  note. Everything a turn prints — calls, results, notes, hermes-hands'
+  own warnings — lands above the box; an approval prompt takes it off
+  while it is up. Every box line is cut to the terminal's real width (wide
+  characters counted double), so a narrow window does not break it; the
+  typing shows at once, not with the next spinner tick.
+
+## 0.15.0 — 2026-10-21 — an assistant that answers; `@path`; type while it works; compaction later and deeper
 
 ### Security
 
